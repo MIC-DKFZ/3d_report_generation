@@ -88,56 +88,24 @@ def format_data(sample):
 dataset_id = "HuggingFaceM4/ChartQA"
 train_dataset, eval_dataset, test_dataset = load_dataset(dataset_id, split=['train[:10%]', 'val[:10%]', 'test[:10%]'])
 
-"""Let’s take a look at the structure of the dataset. It includes an image, a query, a label (which is the answer), and a fourth feature that we’ll be discarding."""
-
-print("train_dataset", train_dataset)
-
-"""Now, let’s format the data using the chatbot structure. This will allow us to set up the interactions appropriately for our model."""
-
 train_dataset = [format_data(sample) for sample in train_dataset]
 eval_dataset = [format_data(sample) for sample in eval_dataset]
 test_dataset = [format_data(sample) for sample in test_dataset]
-
-print("Formatted train_dataset[0]", train_dataset[0])
-print("Formatted eval_dataset[0]", eval_dataset[0])
-print("Formatted test_dataset[0]", test_dataset[0])
 
 """## 3. Load Model and Check Performance! 🤔"""
 
 
 model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
-"""Next, we’ll load the model and the tokenizer to prepare for inference."""
+from Qwen3D import Qwen2VLForConditionalGeneration3D
 
-model = Qwen2VLForConditionalGeneration.from_pretrained(
+model = Qwen2VLForConditionalGeneration3D.from_pretrained(
     model_id,
     device_map="auto",
-    torch_dtype=torch.bfloat16,
+    torch_dtype=torch.bfloat16
 )
 
 processor = Qwen2VLProcessor.from_pretrained(model_id)
-
-"""To evaluate the model's performance, we’ll use a sample from the dataset. First, let’s take a look at the internal structure of this sample.
-
-"""
-
-print("Sample from train_dataset", train_dataset[0])
-
-"""We’ll use the sample without the system message to assess the VLM's raw understanding. Here’s the input we will use:"""
-
-print("Sample input for model", train_dataset[0][1:2])
-
-"""Now, let’s take a look at the chart corresponding to the sample. Can you answer the query based on the visual information?
-
-"""
-
-print("Chart image from sample", train_dataset[0][1]['content'][0]['image'])
-
-"""Let’s create a method that takes the model, processor, and sample as inputs to generate the model's answer. This will allow us to streamline the inference process and easily evaluate the VLM's performance.
-
-"""
-
-
 
 def generate_text_from_sample(model, processor, sample, max_new_tokens=1024, device="cuda"):
     # Prepare the text input by applying the chat template
@@ -257,8 +225,8 @@ training_args = SFTConfig(
     max_grad_norm=0.3,  # Maximum norm for gradient clipping
     warmup_ratio=0.03,  # Ratio of total steps for warmup
     # Hub and reporting
-    push_to_hub=True,  # Whether to push model to Hugging Face Hub
-    report_to="wandb",  # Reporting tool for tracking metrics
+    #push_to_hub=True,  # Whether to push model to Hugging Face Hub
+    #report_to="wandb",  # Reporting tool for tracking metrics
     # Gradient checkpointing settings
     gradient_checkpointing_kwargs={"use_reentrant": False},  # Options for gradient checkpointing
     # Dataset configuration
