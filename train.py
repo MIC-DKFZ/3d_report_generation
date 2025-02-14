@@ -1,10 +1,38 @@
+from transformers import BitsAndBytesConfig
+import torch
+from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+from datasets import load_dataset
+from qwen_vl_utils import process_vision_info
+from trl import SFTConfig, SFTTrainer
+from peft import LoraConfig, get_peft_model
 
-"""## 2. Load Dataset 📁
+import gc
+import time
 
-In this section, we’ll load the [HuggingFaceM4/ChartQA](https://huggingface.co/datasets/HuggingFaceM4/ChartQA) dataset. This dataset contains chart images paired with related questions and answers, making it ideal for training on visual question answering tasks.
+def clear_memory():
+    # Delete variables if they exist in the current global scope
+    if 'inputs' in globals(): del globals()['inputs']
+    if 'model' in globals(): del globals()['model']
+    if 'processor' in globals(): del globals()['processor']
+    if 'trainer' in globals(): del globals()['trainer']
+    if 'peft_model' in globals(): del globals()['peft_model']
+    if 'bnb_config' in globals(): del globals()['bnb_config']
+    time.sleep(2)
 
-Next, we’ll generate a system message for the VLM. In this case, we want to create a system that acts as an expert in analyzing chart images and providing concise answers to questions based on them.
-"""
+    # Garbage collection and clearing CUDA memory
+    gc.collect()
+    time.sleep(2)
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    time.sleep(2)
+    gc.collect()
+    time.sleep(2)
+
+    print(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+    print(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+
+
+"""## 2. Load Dataset 📁"""
 
 system_message = """You are a Vision Language Model specialized in interpreting visual data from chart images.
 Your task is to analyze the provided chart image and respond to queries with concise answers, usually a single word, number, or short phrase.
@@ -55,20 +83,16 @@ def format_data(sample):
 
 """
 
-from datasets import load_dataset
+
 
 dataset_id = "HuggingFaceM4/ChartQA"
 train_dataset, eval_dataset, test_dataset = load_dataset(dataset_id, split=['train[:10%]', 'val[:10%]', 'test[:10%]'])
 
-"""Let’s take a look at the structure of the dataset. It includes an image, a query, a label (which is the answer), and a fourth feature that we’ll be discarding.
-
-"""
+"""Let’s take a look at the structure of the dataset. It includes an image, a query, a label (which is the answer), and a fourth feature that we’ll be discarding."""
 
 print("train_dataset", train_dataset)
 
-"""Now, let’s format the data using the chatbot structure. This will allow us to set up the interactions appropriately for our model.
-
-"""
+"""Now, let’s format the data using the chatbot structure. This will allow us to set up the interactions appropriately for our model."""
 
 train_dataset = [format_data(sample) for sample in train_dataset]
 eval_dataset = [format_data(sample) for sample in eval_dataset]
@@ -78,12 +102,8 @@ print("Formatted train_dataset[0]", train_dataset[0])
 print("Formatted eval_dataset[0]", eval_dataset[0])
 print("Formatted test_dataset[0]", test_dataset[0])
 
-"""## 3. Load Model and Check Performance! 🤔
+"""## 3. Load Model and Check Performance! 🤔"""
 
-"""
-
-import torch
-from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
 
 model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
@@ -117,7 +137,7 @@ print("Chart image from sample", train_dataset[0][1]['content'][0]['image'])
 
 """
 
-from qwen_vl_utils import process_vision_info
+
 
 def generate_text_from_sample(model, processor, sample, max_new_tokens=1024, device="cuda"):
     # Prepare the text input by applying the chat template
@@ -158,48 +178,13 @@ def generate_text_from_sample(model, processor, sample, max_new_tokens=1024, dev
 output = generate_text_from_sample(model, processor, train_dataset[0])
 print(output)
 
-"""While the model successfully retrieves the correct visual information, it struggles to answer the question accurately. This indicates that fine-tuning might be the key to enhancing its performance. Let’s proceed with the fine-tuning process!
 
-**Remove Model and Clean GPU**
-
-Before we proceed with training the model in the next section, let's clear the current variables and clean the GPU to free up resources.
-"""
-
-import gc
-import time
-
-def clear_memory():
-    # Delete variables if they exist in the current global scope
-    if 'inputs' in globals(): del globals()['inputs']
-    if 'model' in globals(): del globals()['model']
-    if 'processor' in globals(): del globals()['processor']
-    if 'trainer' in globals(): del globals()['trainer']
-    if 'peft_model' in globals(): del globals()['peft_model']
-    if 'bnb_config' in globals(): del globals()['bnb_config']
-    time.sleep(2)
-
-    # Garbage collection and clearing CUDA memory
-    gc.collect()
-    time.sleep(2)
-    torch.cuda.empty_cache()
-    torch.cuda.synchronize()
-    time.sleep(2)
-    gc.collect()
-    time.sleep(2)
-
-    print(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
-    print(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
 
 clear_memory()
 
 """## 4. Fine-Tune the Model using TRL
+### 4.1 Load the Quantized Model for Training ⚙️ """
 
-### 4.1 Load the Quantized Model for Training ⚙️
-
-Next, we’ll load the quantized model using [bitsandbytes](https://huggingface.co/docs/bitsandbytes/main/en/index). If you want to learn more about quantization, check out [this blog post](https://huggingface.co/blog/merve/quantization) or [this one](https://www.maartengrootendorst.com/blog/quantization/).
-"""
-
-from transformers import BitsAndBytesConfig
 
 # BitsAndBytesConfig int-4 config
 bnb_config = BitsAndBytesConfig(
@@ -216,17 +201,17 @@ model = Qwen2VLForConditionalGeneration.from_pretrained(
     torch_dtype=torch.bfloat16,
     quantization_config=bnb_config
 )
+
+# Print model details
+print("Model Configuration:", model.config)
+print("Model Parameters:", model.num_parameters())
+print("Model Architecture:", model)
+
 processor = Qwen2VLProcessor.from_pretrained(model_id)
 
 """### 4.2 Set Up QLoRA and SFTConfig 🚀
-
-Next, we will configure [QLoRA](https://github.com/artidoro/qlora) for our training setup. QLoRA enables efficient fine-tuning of large language models while significantly reducing the memory footprint compared to traditional methods. Unlike standard LoRA, which reduces memory usage by applying a low-rank approximation, QLoRA takes it a step further by quantizing the weights of the LoRA adapters. This leads to even lower memory requirements and improved training efficiency, making it an excellent choice for optimizing our model's performance without sacrificing quality.
-
-
-
 """
 
-from peft import LoraConfig, get_peft_model
 
 # Configure LoRA
 peft_config = LoraConfig(
@@ -244,15 +229,6 @@ peft_model = get_peft_model(model, peft_config)
 # Print trainable parameters
 peft_model.print_trainable_parameters()
 
-"""We will use Supervised Fine-Tuning (SFT) to refine our model’s performance on the task at hand. To do this, we'll define the training arguments using the [SFTConfig](https://huggingface.co/docs/trl/sft_trainer) class from the [TRL library](https://huggingface.co/docs/trl/index). SFT allows us to provide labeled data, helping the model learn to generate more accurate responses based on the input it receives. This approach ensures that the model is tailored to our specific use case, leading to better performance in understanding and responding to visual queries.
-
-
-
-
-
-"""
-
-from trl import SFTConfig
 
 # Configure training arguments
 training_args = SFTConfig(
@@ -322,7 +298,7 @@ def collate_fn(examples):
     # Tokenize the texts and process the images
     batch = processor(text=texts, images=image_inputs, return_tensors="pt", padding=True)  # Encode texts and images into tensors
 
-    print("BATCH", batch)
+    #print("BATCH", batch)
 
     # The labels are the input_ids, and we mask the padding tokens in the loss computation
     labels = batch["input_ids"].clone()  # Clone input IDs for labels
@@ -342,13 +318,6 @@ def collate_fn(examples):
 
     return batch  # Return the prepared batch
 
-"""Now, we will define the [SFTTrainer](https://huggingface.co/docs/trl/sft_trainer), which is a wrapper around the [transformers.Trainer](https://huggingface.co/docs/transformers/main_classes/trainer) class and inherits its attributes and methods. This class simplifies the fine-tuning process by properly initializing the [PeftModel](https://huggingface.co/docs/peft/v0.6.0/package_reference/peft_model) when a [PeftConfig](https://huggingface.co/docs/peft/v0.6.0/en/package_reference/config#peft.PeftConfig) object is provided. By using `SFTTrainer`, we can efficiently manage the training workflow and ensure a smooth fine-tuning experience for our Vision Language Model.
-
-
-"""
-
-from trl import SFTTrainer
-
 trainer = SFTTrainer(
     model=model,
     args=training_args,
@@ -359,11 +328,7 @@ trainer = SFTTrainer(
     tokenizer=processor.tokenizer,
 )
 
-"""Time to Train the Model! 🎉"""
-
 trainer.train()
-
-"""Let's save the results 💾"""
 
 trainer.save_model(training_args.output_dir)
 
