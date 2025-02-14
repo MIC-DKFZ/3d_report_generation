@@ -1,12 +1,25 @@
 from transformers import BitsAndBytesConfig
 import torch
-from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+from transformers import Qwen2VLForConditionalGeneration
+from processing_3d import Qwen2VLProcessor3D
 from datasets import load_dataset
 from qwen_vl_utils import process_vision_info
 from Qwen3D import Qwen2VLForConditionalGeneration3D
 
+
+from transformers import Qwen2VLProcessor
 import gc
 import time
+
+
+import os
+from pathlib import Path
+
+# Get the base path from environment variable
+ROCKET_VLM_VISION_EMBEDDINGS = os.environ.get('ROCKET_VLM_VISION_EMBEDDINGS')
+if ROCKET_VLM_VISION_EMBEDDINGS is None:
+    raise ValueError("Environment variable ROCKET_VLM_VISION_EMBEDDINGS is not set")
+
 
 system_message = """You are a Vision Language Model specialized in interpreting visual data from chart images.
 Your task is to analyze the provided chart image and respond to queries with concise answers, usually a single word, number, or short phrase.
@@ -83,13 +96,17 @@ def generate_text_from_sample(model, processor, sample, max_new_tokens=1024, dev
     # Process the visual input from the sample
     image_inputs, _ = process_vision_info(sample)
 
+    # load example embedding here use DrivesDKFZ/E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings/192_reshaped/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/2024_MICCAI24_AMOS-MM/imagesTr/
+    vision_embedding_paths = [Path(ROCKET_VLM_VISION_EMBEDDINGS) / "amos_7385_0000_embedding.npz"]
     # Prepare the inputs for the model
     model_inputs = processor(
         text=[text_input],
-        #images=image_inputs,
+        vision_embedding_paths=vision_embedding_paths,  # give the file path to the processor, it will load and return the volume
         return_tensors="pt",
-        #video_grid_thw=[24, 24, 24]
     ).to(device)  # Move inputs to the specified device
+
+    for key, value in model_inputs.items():
+        print(f"{key}: shape={value.shape}, value={value}")
 
     # Generate text with the model
     generated_ids = model.generate(**model_inputs, max_new_tokens=max_new_tokens)
@@ -124,9 +141,8 @@ def inference():
         device_map="auto",
         torch_dtype=torch.bfloat16
     )
-    print(model)
 
-    processor = Qwen2VLProcessor.from_pretrained(model_id)
+    processor = Qwen2VLProcessor3D.from_pretrained(model_id)
     # Example of how to call the method with sample:
     output = generate_text_from_sample(model, processor, train_dataset[0])
     print(output)
