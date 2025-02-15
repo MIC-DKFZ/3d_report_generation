@@ -11,13 +11,14 @@ import gc
 import time
 
 class VLMTrainer:
-    def __init__(self, model_id="Qwen/Qwen2-VL-2B-Instruct", output_dir="qwen2-2b-amos-mm"):
+    def __init__(self, model_id="Qwen/Qwen2-VL-2B-Instruct", output_dir="qwen2-2b-amos-mm", train_only_vision_adapter=False):
         self.model_id = model_id
         self.output_dir = output_dir
         self.processor = None
         self.model = None
         self.peft_model = None
         self.trainer = None
+        self.train_only_vision_adapter = train_only_vision_adapter
         
         # Get the base path from environment variable
         self.embeddings_path = os.environ.get('ROCKET_VLM_VISION_EMBEDDINGS')
@@ -199,36 +200,59 @@ class VLMTrainer:
         # Initialize processor
         self.processor = Qwen2VLProcessor3D.from_pretrained(self.model_id)
         
-        # Setup quantization config
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16
-        )
+        if self.train_only_vision_adapter:
+            # For adapter-only training, don't use 4-bit quantization for the adapter
+            self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
+                self.model_id,
+                device_map="auto",
+                torch_dtype=torch.bfloat16
+            )
+            
+            # Freeze all parameters
+            for name, param in self.model.named_parameters():
+                if "vision_adapter" not in name:  # Freeze everything except vision adapter
+                    param.requires_grad = False
+                else:
+                    param.requires_grad = True
+                    print(f"Unfreezing: {name}")
+            
+            # Print trainable parameters
+            total_params = sum(p.numel() for p in self.model.parameters())
+            trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            print(f"Total parameters: {total_params:,}")
+            print(f"Trainable parameters: {trainable_params:,}")
+            print(f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%")
+            
+            return None
+        else:
+            # 4-bit quantization for full model training (maybe not needed for 24gb vram workstation)
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16
+            )
 
-        # Initialize model
-        self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
-            self.model_id,
-            device_map="auto",
-            torch_dtype=torch.bfloat16,
-            quantization_config=bnb_config
-        )
+            self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
+                self.model_id,
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+                quantization_config=bnb_config
+            )
 
-        # Setup LoRA configuration
-        peft_config = LoraConfig(
-            lora_alpha=16,
-            lora_dropout=0.05,
-            r=8,
-            bias="none",
-            target_modules=["q_proj", "v_proj"],
-            task_type="CAUSAL_LM",
-        )
+            peft_config = LoraConfig(
+                lora_alpha=16,
+                lora_dropout=0.05,
+                r=8,
+                bias="none",
+                target_modules=["q_proj", "v_proj"],
+                task_type="CAUSAL_LM",
+            )
 
-        self.peft_model = get_peft_model(self.model, peft_config)
-        self.peft_model.print_trainable_parameters()
-        
-        return peft_config
+            self.peft_model = get_peft_model(self.model, peft_config)
+            self.peft_model.print_trainable_parameters()
+            
+            return peft_config
 
     def get_training_args(self):
         """Configure training arguments"""
@@ -278,7 +302,7 @@ class VLMTrainer:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=self.collate_fn,
-            peft_config=peft_config,
+            peft_config=None if self.train_only_vision_adapter else peft_config,
             tokenizer=self.processor.tokenizer,
         )
 
@@ -314,7 +338,7 @@ if __name__ == "__main__":
     dataset_path = "/home/m340g/DrivesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/dataset.json"
     
     # Initialize trainer
-    trainer = VLMTrainer()
+    trainer = VLMTrainer(train_only_vision_adapter=True)
     
     # Test dataset loading
     trainer.test_dataset(dataset_path)
