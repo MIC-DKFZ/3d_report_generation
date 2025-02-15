@@ -97,9 +97,7 @@ test_dataset = [format_data(sample) for sample in test_dataset]
 
 model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
-from Qwen3D import Qwen2VLForConditionalGeneration3D
-
-model = Qwen2VLForConditionalGeneration3D.from_pretrained(
+model = Qwen2VLForConditionalGeneration.from_pretrained(
     model_id,
     device_map="auto",
     torch_dtype=torch.bfloat16

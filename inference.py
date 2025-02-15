@@ -97,7 +97,7 @@ def generate_text_from_sample(model, processor, sample, max_new_tokens=1024, dev
     image_inputs, _ = process_vision_info(sample)
 
     # load example embedding here use DrivesDKFZ/E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings/192_reshaped/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/2024_MICCAI24_AMOS-MM/imagesTr/
-    vision_embedding_paths = [Path(ROCKET_VLM_VISION_EMBEDDINGS) / "amos_7385_0000_embedding.npz"]
+    vision_embedding_paths = [Path(ROCKET_VLM_VISION_EMBEDDINGS) / "imagesTr/amos_7385_0000_embedding.npz"]
     # Prepare the inputs for the model
     model_inputs = processor(
         text=[text_input],

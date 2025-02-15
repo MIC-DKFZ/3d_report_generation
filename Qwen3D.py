@@ -12,21 +12,39 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from torch import nn
 
+from transformers.activations import QuickGELUActivation
+
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLCausalLMOutputWithPast, QWEN2_VL_INPUTS_DOCSTRING, _CONFIG_FOR_DOC
 
+
+from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionMlp
+from transformers.models.qwen2_vl.modeling_qwen2_vl import ACT2FN
+
+
+
+'''
+
+    def __init__(self, embedding_dim: int, embed_dim: int):
+        super().__init__()
+        self.adapter = VisionMlp(
+            dim=embedding_dim,  # 864
+            hidden_dim=embed_dim,  # 1536 
+            hidden_act="quick_gelu"
+        )
+'''
 
 class VisionAdapter(nn.Module):
     def __init__(self, embedding_dim: int, embed_dim: int):
         super().__init__()
         self.adapter = nn.Sequential(
             nn.Linear(embedding_dim, embed_dim),  # 864 -> 1536
-            nn.GELU(),
+            #nn.GELU(),  #TODO get some non-linearity in that Qwen can train with. GELU does not work here.
             nn.Linear(embed_dim, embed_dim),  # 1536 -> 1536
         )
         
     def forward(self, x):
-        # x shape: (batch_size, 864, sequence_length)
-        # Need to output: (sequence_length, embed_dim)
+        # Convert input to float first
+        x = x.float()
         
         # Transpose to get sequence_length as first dimension
         x = x.transpose(1, 2)  # -> (batch_size, sequence_length, 864)
@@ -140,8 +158,11 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
                 inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
             if pixel_values_videos is not None:
-                pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
-                video_embeds = self.vision_adapter(pixel_values_videos) # The only line that has changed so far (and the added adapter above)
+                #pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
+                #video_embeds = self.vision_adapter(pixel_values_videos) # The only line that has changed so far (and the added adapter above)
+                pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
+                video_embeds = self.vision_adapter(pixel_values_videos)
+                
                 n_video_tokens = (input_ids == self.config.video_token_id).sum().item()
                 n_video_features = video_embeds.shape[0]
                 if n_video_tokens != n_video_features:
