@@ -139,6 +139,10 @@ class VLMTrainer:
         for sample in samples:
             embedding_path = self.get_embedding_path(sample['image'])
             
+            # Skip if embedding file doesn't exist
+            if not os.path.exists(embedding_path):
+                continue
+            
             if 'labels' in sample and 'report' in sample['labels']:
                 # Add region-specific questions
                 for region in ['chest', 'abdomen', 'pelvis']:
