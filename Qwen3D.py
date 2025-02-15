@@ -61,6 +61,39 @@ class VisionAdapter(nn.Module):
         
         return x
     
+class VisionAdapterReduceBlocks(nn.Module):
+    def __init__(self, embedding_dim: int, embed_dim: int):
+        super().__init__()
+        self.adapter = nn.Sequential(
+            nn.Linear(embedding_dim * 4, embed_dim),  # 864*4 -> 1536 (4 comes from 2x2x1)
+            nn.Linear(embed_dim, embed_dim),  # 1536 -> 1536
+        )
+        
+    def forward(self, x):
+        # Convert input to float first
+        x = x.float()
+        
+        # Input shape is (batch_size, embedding_dim, sequence_length)
+        batch_size, embedding_dim, seq_length = x.shape
+        
+        # For 13824 video tokens, reshape to 24x24x24
+        cube_size = 24
+        x = x.reshape(batch_size, embedding_dim, cube_size, cube_size, cube_size)
+        # Use unfold to create 2x2x1 blocks
+        x = x.unfold(2, 2, 2)
+        x = x.unfold(3, 2, 2)
+        x = x.unfold(4, 1, 1)
+        # Reshape to combine all 2x2x1 blocks
+        x = x.permute(0, 2, 3, 4, 1, 5, 6, 7)  # Move embedding_dim after spatial dims
+        # Combine the 2x2x1 blocks with the embedding dim
+        # New spatial dimensions will be 12x12x24 = 3456 tokens
+        x = x.reshape(batch_size, 12 * 12 * 24, embedding_dim * 4)  # 4 from 2x2x1
+        # Process through adapter
+        x = x.reshape(-1, embedding_dim * 4)
+        x = self.adapter(x)
+        return x
+
+    
 from torch.nn import CrossEntropyLoss
 from transformers.utils import add_start_docstrings_to_model_forward, replace_return_docstrings
 
@@ -68,7 +101,7 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
     def __init__(self, config):
             super().__init__(config)
 
-            self.vision_adapter = VisionAdapter(embedding_dim=864, embed_dim=1536)
+            self.vision_adapter = VisionAdapterReduceBlocks(embedding_dim=864, embed_dim=1536)
 
     @add_start_docstrings_to_model_forward(QWEN2_VL_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=Qwen2VLCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)

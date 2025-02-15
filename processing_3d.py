@@ -148,7 +148,7 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
             merge_length = self.image_processor.merge_size**2
             merge_length = 1  # TODO find out if we should use this parameter. Right now only merge_length = 1 is possible. If larger, then we also need to merge the input tokens. If we Use the line above, we get ValueError: Video features and video tokens do not match: tokens: 3456, features 13824
             # 3456 x 4 = 13824
-            
+            merge_length = self.image_processor.merge_size**2
             index = 0
             for i in range(len(text)):
                 while self.video_token in text[i]:
