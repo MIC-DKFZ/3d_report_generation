@@ -67,8 +67,9 @@ class VisionAdapterReduceBlocks(nn.Module):
         super().__init__()
         self.reduce_block = reduce_block
         self.adapter = nn.Sequential(
-            nn.Linear(embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2], embed_dim),
-            nn.Linear(embed_dim, embed_dim),
+            nn.Linear(embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2], 5120),
+            QuickGELUActivation(),
+            nn.Linear(5120, embed_dim),
         )
         
     def forward(self, x):        
