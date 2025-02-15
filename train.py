@@ -45,7 +45,7 @@ class VLMTrainer:
     def get_embedding_path(self, image_path):
         """Convert image path to embedding path"""
         base_name = image_path.replace('.nii.gz', '')
-        return str(Path(self.embeddings_path) / f"{base_name}_0000_embedding.npz")
+        return str(Path(self.embeddings_path) / f"{base_name}_embedding.npz")
 
     def format_qa_data(self, embedding_path, qa_pair):
         """Format QA pair for training"""
@@ -259,7 +259,7 @@ class VLMTrainer:
         """Main training function"""
         # Load datasets
         train_dataset = self.load_amos_dataset(dataset_path, split='train')
-        val_dataset = self.load_amos_dataset(dataset_path, split='val')
+        val_dataset = self.load_amos_dataset(dataset_path, split='val')[:50]
         print(f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples")
 
         # Setup model and get configurations

@@ -93,11 +93,9 @@ def generate_text_from_sample(model, processor, sample, max_new_tokens=1024, dev
         add_generation_prompt=True
     )
 
-    # Process the visual input from the sample
-    image_inputs, _ = process_vision_info(sample)
 
     # load example embedding here use DrivesDKFZ/E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings/192_reshaped/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/2024_MICCAI24_AMOS-MM/imagesTr/
-    vision_embedding_paths = [Path(ROCKET_VLM_VISION_EMBEDDINGS) / "imagesTr/amos_7385_0000_embedding.npz"]
+    vision_embedding_paths = [str(Path(ROCKET_VLM_VISION_EMBEDDINGS) / "imagesTr/amos_7385_embedding.npz")]
     # Prepare the inputs for the model
     model_inputs = processor(
         text=[text_input],
@@ -136,12 +134,20 @@ def inference():
 
     model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16
+    )
+
     model = Qwen2VLForConditionalGeneration3D.from_pretrained(
         model_id,
         device_map="auto",
-        torch_dtype=torch.bfloat16
+        torch_dtype=torch.bfloat16,
+        quantization_config=bnb_config  # Add this
     )
-
+    
     processor = Qwen2VLProcessor3D.from_pretrained(model_id)
     # Example of how to call the method with sample:
     output = generate_text_from_sample(model, processor, train_dataset[0])

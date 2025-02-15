@@ -38,13 +38,13 @@ class VisionAdapter(nn.Module):
         super().__init__()
         self.adapter = nn.Sequential(
             nn.Linear(embedding_dim, embed_dim),  # 864 -> 1536
-            #nn.GELU(),  #TODO get some non-linearity in that Qwen can train with. GELU does not work here.
+            nn.GELU(),
             nn.Linear(embed_dim, embed_dim),  # 1536 -> 1536
         )
         
     def forward(self, x):
-        # Convert input to float first
-        x = x.float()
+        # x shape: (batch_size, 864, sequence_length)
+        # Need to output: (sequence_length, embed_dim)
         
         # Transpose to get sequence_length as first dimension
         x = x.transpose(1, 2)  # -> (batch_size, sequence_length, 864)
@@ -60,8 +60,9 @@ class VisionAdapter(nn.Module):
         x = x.reshape(batch_size * seq_len, -1)  # -> (batch_size * sequence_length, 1536)
         
         return x
+
     
-class VisionAdapterReduceBlocks(nn.Module):
+class VisionAdapterReduceBlocks221(nn.Module):
     def __init__(self, embedding_dim: int, embed_dim: int):
         super().__init__()
         self.adapter = nn.Sequential(
@@ -71,7 +72,7 @@ class VisionAdapterReduceBlocks(nn.Module):
         
     def forward(self, x):
         # Convert input to float first
-        x = x.float()
+        x = x.to(torch.bfloat16)        # This hurts. TODO understand datatype mess and fix it.
         
         # Input shape is (batch_size, embedding_dim, sequence_length)
         batch_size, embedding_dim, seq_length = x.shape
@@ -101,7 +102,7 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
     def __init__(self, config):
             super().__init__(config)
 
-            self.vision_adapter = VisionAdapterReduceBlocks(embedding_dim=864, embed_dim=1536)
+            self.vision_adapter = VisionAdapterReduceBlocks221(embedding_dim=864, embed_dim=1536)
 
     @add_start_docstrings_to_model_forward(QWEN2_VL_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=Qwen2VLCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
