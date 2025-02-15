@@ -1,16 +1,24 @@
 from transformers import BitsAndBytesConfig
 import torch
-from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
-from datasets import load_dataset
-from qwen_vl_utils import process_vision_info
+from transformers import Qwen2VLForConditionalGeneration
+from processing_3d import Qwen2VLProcessor3D
+from Qwen3D import Qwen2VLForConditionalGeneration3D
 from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig, get_peft_model
-
+import os
+from pathlib import Path
+import json
 import gc
 import time
+import random
+
+# Get the base path from environment variable
+ROCKET_VLM_VISION_EMBEDDINGS = os.environ.get('ROCKET_VLM_VISION_EMBEDDINGS')
+if ROCKET_VLM_VISION_EMBEDDINGS is None:
+    raise ValueError("Environment variable ROCKET_VLM_VISION_EMBEDDINGS is not set")
 
 def clear_memory():
-    # Delete variables if they exist in the current global scope
+    # Memory cleanup implementation remains the same
     if 'inputs' in globals(): del globals()['inputs']
     if 'model' in globals(): del globals()['model']
     if 'processor' in globals(): del globals()['processor']
@@ -18,8 +26,6 @@ def clear_memory():
     if 'peft_model' in globals(): del globals()['peft_model']
     if 'bnb_config' in globals(): del globals()['bnb_config']
     time.sleep(2)
-
-    # Garbage collection and clearing CUDA memory
     gc.collect()
     time.sleep(2)
     torch.cuda.empty_cache()
@@ -27,31 +33,33 @@ def clear_memory():
     time.sleep(2)
     gc.collect()
     time.sleep(2)
-
     print(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
     print(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
 
+def get_embedding_path(image_path):
+    """Convert image path to embedding path"""
+    # Extract the base name without extension
+    base_name = Path(image_path).stem.replace('.nii', '')
+    return str(Path(ROCKET_VLM_VISION_EMBEDDINGS) / f"{base_name}_0000_embedding.npz")
 
-"""## 2. Load Dataset 📁"""
+def format_qa_data(embedding_path, qa_pair):
+    """Format QA pair for training"""
+    # Format options as a string
+    options_text = "\n".join([f"{key}. {value}" for key, value in qa_pair["options"].items()])
+    
+    # Get the correct answer's text
+    correct_answer_text = qa_pair["options"][qa_pair["answer"]]
+    
+    if "reasoning" not in qa_pair:
+        qa_pair["reasoning"] = ""
 
-system_message = """You are a Vision Language Model specialized in interpreting visual data from chart images.
-Your task is to analyze the provided chart image and respond to queries with concise answers, usually a single word, number, or short phrase.
-The charts include a variety of types (e.g., line charts, bar charts) and contain colors, labels, and text.
-Focus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary."""
-
-"""We’ll format the dataset into a chatbot structure for interaction. Each interaction will consist of a system message, followed by the image and the user's query, and finally, the answer to the query.
-
-💡For more usage tips specific to this model, check out the [Model Card](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct#more-usage-tips).
-"""
-
-def format_data(sample):
     return [
         {
             "role": "system",
             "content": [
                 {
                     "type": "text",
-                    "text": system_message
+                    "text": "You are a medical imaging AI trained to answer questions about CT scans."
                 }
             ],
         },
@@ -60,11 +68,11 @@ def format_data(sample):
             "content": [
                 {
                     "type": "image",
-                    "image": sample["image"],
+                    "embedding_path": embedding_path,
                 },
                 {
                     "type": "text",
-                    "text": sample['query'],
+                    "text": f"{qa_pair['question']}\n\n{options_text}"
                 }
             ],
         },
@@ -73,349 +81,278 @@ def format_data(sample):
             "content": [
                 {
                     "type": "text",
-                    "text": sample["label"][0]
+                    "text": f"The answer is {qa_pair['answer']}. {correct_answer_text}. {qa_pair['reasoning']}"
                 }
             ],
         },
     ]
 
-"""For educational purposes, we’ll load only 10% of each split in the dataset. However, in a real-world use case, you would typically load the entire set of samples.
+def format_report_data(embedding_path, report_data):
+    """Format report data for training"""
+    # Combine findings from different sections
+    findings = []
+    for section in ['chest', 'abdomen', 'pelvis']:
+        if report_data['findings'][section]:
+            findings.append(f"{section.capitalize()}: {report_data['findings'][section]}")
+    full_report = " ".join(findings)
 
-"""
-
-
-
-dataset_id = "HuggingFaceM4/ChartQA"
-train_dataset, eval_dataset, test_dataset = load_dataset(dataset_id, split=['train[:10%]', 'val[:10%]', 'test[:10%]'])
-
-train_dataset = [format_data(sample) for sample in train_dataset]
-eval_dataset = [format_data(sample) for sample in eval_dataset]
-test_dataset = [format_data(sample) for sample in test_dataset]
-
-"""## 3. Load Model and Check Performance! 🤔"""
-
-
-model_id = "Qwen/Qwen2-VL-2B-Instruct"
-
-from Qwen3D import Qwen2VLForConditionalGeneration3D
-
-model = Qwen2VLForConditionalGeneration3D.from_pretrained(
-    model_id,
-    device_map="auto",
-    torch_dtype=torch.bfloat16
-)
-
-processor = Qwen2VLProcessor.from_pretrained(model_id)
-
-def generate_text_from_sample(model, processor, sample, max_new_tokens=1024, device="cuda"):
-    # Prepare the text input by applying the chat template
-    text_input = processor.apply_chat_template(
-        sample[1:2],  # Use the sample without the system message
-        tokenize=False,
-        add_generation_prompt=True
-    )
-
-    # Process the visual input from the sample
-    image_inputs, _ = process_vision_info(sample)
-
-    # Prepare the inputs for the model
-    model_inputs = processor(
-        text=[text_input],
-        images=image_inputs,
-        return_tensors="pt",
-    ).to(device)  # Move inputs to the specified device
-
-    # Generate text with the model
-    generated_ids = model.generate(**model_inputs, max_new_tokens=max_new_tokens)
-
-    # Trim the generated ids to remove the input ids
-    trimmed_generated_ids = [
-        out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a medical imaging AI trained to generate reports from CT scans."
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "embedding_path": embedding_path,
+                },
+                {
+                    "type": "text",
+                    "text": "Generate a detailed report for this CT scan."
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": full_report
+                }
+            ],
+        },
     ]
 
-    # Decode the output text
-    output_text = processor.batch_decode(
-        trimmed_generated_ids,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False
+
+def format_region_question(embedding_path, region, findings):
+    """Create a simple question about a specific region"""
+    if not findings:  # Skip if no findings for this region
+        return None
+        
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a medical imaging AI trained to analyze CT scans."
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "embedding_path": embedding_path,
+                },
+                {
+                    "type": "text",
+                    "text": f"What do you see in the {region} region of this CT scan?"
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": findings
+                }
+            ],
+        },
+    ]
+
+
+
+def load_amos_dataset(dataset_path, split='train'):
+    """Load AMOS-MM dataset with simple region-based questions"""
+    with open(dataset_path) as f:
+        data = json.load(f)
+    
+    if split == 'train':
+        samples = data['training']
+    else:  # validation
+        samples = data['validation']
+    
+    formatted_data = []
+    for sample in samples:
+        embedding_path = get_embedding_path(sample['image'])
+        
+        if 'labels' in sample and 'report' in sample['labels']:
+            # Add region-specific questions
+            for region in ['chest', 'abdomen', 'pelvis']:
+                region_qa = format_region_question(
+                    embedding_path,
+                    region,
+                    sample['labels']['report']['findings'][region]
+                )
+                if region_qa:
+                    formatted_data.append(region_qa)
+            
+            # Format QA pairs using the format_qa_data function
+            if 'qa' in sample['labels']:
+                for qa_pair in sample['labels']['qa']:
+                    formatted_qa = format_qa_data(embedding_path, qa_pair)
+                    formatted_data.append(formatted_qa)
+    
+    return formatted_data
+
+def collate_fn_3d(examples):
+    """Collate function implementation remains the same"""
+    processor = examples[0]["processor"]
+    texts = [processor.apply_chat_template(example, tokenize=False) for example in examples]
+    embedding_paths = [example[1]["content"][0]["embedding_path"] for example in examples]
+    
+    batch = processor(
+        text=texts,
+        vision_embedding_paths=embedding_paths,
+        return_tensors="pt",
+        padding=True
+    )
+    
+    labels = batch["input_ids"].clone()
+    labels[labels == processor.tokenizer.pad_token_id] = -100
+    
+    if isinstance(processor, Qwen2VLProcessor3D):
+        image_tokens = [151652, 151653, 151655]
+    else:
+        image_tokens = [processor.tokenizer.convert_tokens_to_ids(processor.image_token)]
+        
+    for image_token_id in image_tokens:
+        labels[labels == image_token_id] = -100
+        
+    batch["labels"] = labels
+    return batch
+
+def train_3d_model(dataset_path):
+    """Main training function"""
+    model_id = "Qwen/Qwen2-VL-2B-Instruct"
+    
+    # Load datasets
+    train_dataset = load_amos_dataset(dataset_path, split='train')
+    val_dataset = load_amos_dataset(dataset_path, split='val')
+    
+    print(f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples")
+    
+    # Example of data format
+    #print("\nExample training sample:")
+    #print(json.dumps(train_dataset[0], indent=2))
+    
+    # Load model and processor
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16
     )
 
-    return output_text[0]  # Return the first decoded output text
-
-# Example of how to call the method with sample:
-output = generate_text_from_sample(model, processor, train_dataset[0])
-print(output)
-
-
-
-clear_memory()
-
-"""## 4. Fine-Tune the Model using TRL
-### 4.1 Load the Quantized Model for Training ⚙️ """
-
-
-# BitsAndBytesConfig int-4 config
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16
-)
-
-# Load model and tokenizer
-model = Qwen2VLForConditionalGeneration.from_pretrained(
-    model_id,
-    device_map="auto",
-    torch_dtype=torch.bfloat16,
-    quantization_config=bnb_config
-)
-
-# Print model details
-print("Model Configuration:", model.config)
-print("Model Parameters:", model.num_parameters())
-print("Model Architecture:", model)
-
-processor = Qwen2VLProcessor.from_pretrained(model_id)
-
-"""### 4.2 Set Up QLoRA and SFTConfig 🚀
-"""
-
-
-# Configure LoRA
-peft_config = LoraConfig(
-    lora_alpha=16,
-    lora_dropout=0.05,
-    r=8,
-    bias="none",
-    target_modules=["q_proj", "v_proj"],
-    task_type="CAUSAL_LM",
-)
-
-# Apply PEFT model adaptation
-peft_model = get_peft_model(model, peft_config)
-
-# Print trainable parameters
-peft_model.print_trainable_parameters()
-
-
-# Configure training arguments
-training_args = SFTConfig(
-    output_dir="qwen2-2b-instruct-trl-sft-ChartQA",  # Directory to save the model
-    num_train_epochs=3,  # Number of training epochs
-    per_device_train_batch_size=1,  # Batch size for training
-    per_device_eval_batch_size=1,  # Batch size for evaluation
-    gradient_accumulation_steps=8,  # Steps to accumulate gradients
-    gradient_checkpointing=True,  # Enable gradient checkpointing for memory efficiency
-    # Optimizer and scheduler settings
-    optim="adamw_torch_fused",  # Optimizer type
-    learning_rate=2e-4,  # Learning rate for training
-    lr_scheduler_type="constant",  # Type of learning rate scheduler
-    # Logging and evaluation
-    logging_steps=10,  # Steps interval for logging
-    eval_steps=10,  # Steps interval for evaluation
-    eval_strategy="steps",  # Strategy for evaluation
-    save_strategy="steps",  # Strategy for saving the model
-    save_steps=20,  # Steps interval for saving
-    metric_for_best_model="eval_loss",  # Metric to evaluate the best model
-    greater_is_better=False,  # Whether higher metric values are better
-    load_best_model_at_end=True,  # Load the best model after training
-    # Mixed precision and gradient settings
-    bf16=True,  # Use bfloat16 precision
-    tf32=True,  # Use TensorFloat-32 precision
-    max_grad_norm=0.3,  # Maximum norm for gradient clipping
-    warmup_ratio=0.03,  # Ratio of total steps for warmup
-    # Hub and reporting
-    #push_to_hub=True,  # Whether to push model to Hugging Face Hub
-    #report_to="wandb",  # Reporting tool for tracking metrics
-    # Gradient checkpointing settings
-    gradient_checkpointing_kwargs={"use_reentrant": False},  # Options for gradient checkpointing
-    # Dataset configuration
-    dataset_text_field="",  # Text field in dataset
-    dataset_kwargs={"skip_prepare_dataset": True},  # Additional dataset options
-    #max_seq_length=1024  # Maximum sequence length for input
-)
-
-training_args.remove_unused_columns = False  # Keep unused columns in dataset
-
-"""### 4.3 Training the Model 🏃
-
-We will log our training progress using [Weights & Biases (W&B)](https://wandb.ai/). Let’s connect our notebook to W&B to capture essential information during training.
-"""
-
-import wandb
-
-wandb.init(
-    project="qwen2-2-instruct-trl-sft-ChartQA",  # change this
-    name="qwen2-2b-instruct-trl-sft-ChartQA",  # change this
-    config=training_args,
-)
-
-"""We need a collator function to properly retrieve and batch the data during the training procedure. This function will handle the formatting of our dataset inputs, ensuring they are correctly structured for the model. Let's define the collator function below.
-
-👉 Check out the TRL official example [scripts]( https://github.com/huggingface/trl/blob/main/examples/scripts/sft_vlm.py#L87) for more details.
-
-"""
-
-# Create a data collator to encode text and image pairs
-def collate_fn(examples):
-    # Get the texts and images, and apply the chat template
-    texts = [processor.apply_chat_template(example, tokenize=False) for example in examples]  # Prepare texts for processing
-    image_inputs = [process_vision_info(example)[0] for example in examples]  # Process the images to extract inputs
-
-
-    # Tokenize the texts and process the images
-    batch = processor(text=texts, images=image_inputs, return_tensors="pt", padding=True)  # Encode texts and images into tensors
-
-    #print("BATCH", batch)
-
-    # The labels are the input_ids, and we mask the padding tokens in the loss computation
-    labels = batch["input_ids"].clone()  # Clone input IDs for labels
-    labels[labels == processor.tokenizer.pad_token_id] = -100  # Mask padding tokens in labels
-
-    # Ignore the image token index in the loss computation (model specific)
-    if isinstance(processor, Qwen2VLProcessor):  # Check if the processor is Qwen2VLProcessor
-        image_tokens = [151652, 151653, 151655]  # Specific image token IDs for Qwen2VLProcessor
-    else:
-        image_tokens = [processor.tokenizer.convert_tokens_to_ids(processor.image_token)]  # Convert image token to ID
-
-    # Mask image token IDs in the labels
-    for image_token_id in image_tokens:
-        labels[labels == image_token_id] = -100  # Mask image token IDs in labels
-
-    batch["labels"] = labels  # Add labels to the batch
-
-    return batch  # Return the prepared batch
-
-trainer = SFTTrainer(
-    model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
-    data_collator=collate_fn,
-    peft_config=peft_config,
-    tokenizer=processor.tokenizer,
-)
-
-trainer.train()
-
-trainer.save_model(training_args.output_dir)
-
-
-'''
-"""## 5. Testing the Fine-Tuned Model 🔍
-
-Now that we've successfully fine-tuned our Vision Language Model (VLM), it's time to evaluate its performance! In this section, we will test the model using examples from the ChartQA dataset to see how well it answers questions based on chart images. Let's dive in and explore the results! 🚀
-
-Let's clean up the GPU memory to ensure optimal performance 🧹
-"""
-
-clear_memory()
-
-"""We will reload the base model using the same pipeline as before."""
-
-model = Qwen2VLForConditionalGeneration.from_pretrained(
-    model_id,
-    device_map="auto",
-    torch_dtype=torch.bfloat16,
-)
-
-processor = Qwen2VLProcessor.from_pretrained(model_id)
-
-"""We will attach the trained adapter to the pretrained model. This adapter contains the fine-tuning adjustments we made during training, allowing the base model to leverage the new knowledge without altering its core parameters. By integrating the adapter, we can enhance the model's capabilities while maintaining its original structure.
-
-"""
-
-adapter_path = "sergiopaniego/qwen2-2b-instruct-trl-sft-ChartQA"
-model.load_adapter(adapter_path)
-
-"""We will utilize the previous sample from the dataset that the model initially struggled to answer correctly."""
-
-train_dataset[0][:2]
-
-train_dataset[0][1]['content'][0]['image']
-
-output = generate_text_from_sample(model, processor, train_dataset[0])
-output
-
-"""Since this sample is drawn from the training set, the model has encountered it during training, which may be seen as a form of cheating. To gain a more comprehensive understanding of the model's performance, we will also evaluate it using an unseen sample.
-
-"""
-
-test_dataset[10][:2]
-
-test_dataset[10][1]['content'][0]['image']
-
-output = generate_text_from_sample(model, processor, test_dataset[10])
-output
-
-"""The model has successfully learned to respond to the queries as specified in the dataset. We've achieved our goal! 🎉✨
-
-💻 I’ve developed an example application to test the model, which you can find [here](https://huggingface.co/spaces/sergiopaniego/Qwen2-VL-7B-trl-sft-ChartQA). You can easily compare it with another Space featuring the pre-trained model, available [here](https://huggingface.co/spaces/GanymedeNil/Qwen2-VL-7B).
-"""
-
-from IPython.display import IFrame
-
-IFrame(src="https://sergiopaniego-qwen2-vl-7b-trl-sft-chartqa.hf.space", width=1000, height=800)
-
-"""## 6. Compare Fine-Tuned Model vs. Base Model + Prompting 📊
-
-We have explored how fine-tuning the VLM can be a valuable option for adapting it to our specific needs. Another approach to consider is directly using prompting or implementing a RAG system, which is covered in another [recipe](https://huggingface.co/learn/cookbook/multimodal_rag_using_document_retrieval_and_vlms).
-
-Fine-tuning a VLM requires significant amounts of data and computational resources, which can incur costs. In contrast, we can experiment with prompting to see if we can achieve similar results without the overhead of fine-tuning.
-
-Let's again clean up the GPU memory to ensure optimal performance 🧹
-"""
-
-clear_memory()
-
-"""🏗️ First, we will load the baseline model following the same pipeline as before.
-
-"""
-
-model = Qwen2VLForConditionalGeneration.from_pretrained(
-    model_id,
-    device_map="auto",
-    torch_dtype=torch.bfloat16,
-)
-
-processor = Qwen2VLProcessor.from_pretrained(model_id)
-
-"""📜 In this case, we will again use the previous sample, but this time we will include the system message as follows. This addition helps to contextualize the input for the model, potentially improving its response accuracy.
-
-
-
-"""
-
-train_dataset[0][:2]
-
-"""Let's see how it performs!"""
-
-text = processor.apply_chat_template(
-    train_dataset[0][:2], tokenize=False, add_generation_prompt=True
-)
-
-image_inputs, _ = process_vision_info(train_dataset[0])
-
-inputs = processor(
-    text=[text],
-    images=image_inputs,
-    return_tensors="pt",
-)
-
-inputs = inputs.to("cuda")
-
-generated_ids = model.generate(**inputs, max_new_tokens=1024)
-generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
-
-output_text = processor.batch_decode(
-    generated_ids_trimmed,
-    skip_special_tokens=True,
-    clean_up_tokenization_spaces=False
-)
-
-output_text[0]
-
-"""💡 As we can see, the model generates the correct answer using the pretrained model along with the additional system message, without any training. This approach may serve as a viable alternative to fine-tuning, depending on the specific use case.
-"""
-
-'''
+    model = Qwen2VLForConditionalGeneration3D.from_pretrained(
+        model_id,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+        quantization_config=bnb_config
+    )
+
+    processor = Qwen2VLProcessor3D.from_pretrained(model_id)
+
+    # LoRA configuration
+    peft_config = LoraConfig(
+        lora_alpha=16,
+        lora_dropout=0.05,
+        r=8,
+        bias="none",
+        target_modules=["q_proj", "v_proj"],
+        task_type="CAUSAL_LM",
+    )
+
+    peft_model = get_peft_model(model, peft_config)
+    peft_model.print_trainable_parameters()
+
+    # Training configuration
+    training_args = SFTConfig(
+        output_dir="qwen2-2b-amos-mm",
+        num_train_epochs=3,
+        per_device_train_batch_size=1,
+        per_device_eval_batch_size=1,
+        gradient_accumulation_steps=8,
+        gradient_checkpointing=True,
+        optim="adamw_torch_fused",
+        learning_rate=2e-4,
+        lr_scheduler_type="constant",
+        logging_steps=10,
+        eval_steps=10,
+        eval_strategy="steps",
+        save_strategy="steps",
+        save_steps=20,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        load_best_model_at_end=True,
+        bf16=True,
+        tf32=True,
+        max_grad_norm=0.3,
+        warmup_ratio=0.03,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        dataset_kwargs={"skip_prepare_dataset": True},
+        remove_unused_columns=False
+    )
+
+    # Add processor to datasets for collate_fn
+    for item in train_dataset + val_dataset:
+        item["processor"] = processor
+
+    # Initialize trainer
+    trainer = SFTTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
+        data_collator=collate_fn_3d,
+        peft_config=peft_config,
+        tokenizer=processor.tokenizer,
+    )
+
+    # Train and save
+    trainer.train()
+    trainer.save_model(training_args.output_dir)
+    clear_memory()
+
+
+
+def test_dataset(dataset_path):
+    """Test function to verify dataset loading"""
+    print("Loading dataset...")
+    train_dataset = load_amos_dataset(dataset_path, split='train')
+    
+    print(f"\nTotal number of samples: {len(train_dataset)}")
+    
+    # Print example of region-specific question
+    print("\nExample of region question:")
+    for sample in train_dataset:
+        if "do you see" in sample[1]['content'][1]['text']:
+            print(sample)
+            print(f"Question: {sample[1]['content'][1]['text']}")
+            print(f"Answer: {sample[2]['content'][0]['text']}...")
+            break
+    
+    # Print example of original QA
+    print("\nExample of original QA:")
+    for sample in train_dataset:
+        if "The answer is" in sample[2]['content'][0]['text']:
+            print(sample)
+            print(f"Question: {sample[1]['content'][1]['text']}")
+            print(f"Answer: {sample[2]['content'][0]['text']}")
+            break
+if __name__ == "__main__":
+    dataset_path = "/home/m340g/DrivesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/dataset.json"
+
+    test_dataset(dataset_path)
+
+    train_3d_model(dataset_path)
