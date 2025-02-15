@@ -62,47 +62,49 @@ class VisionAdapter(nn.Module):
         return x
 
     
-class VisionAdapterReduceBlocks221(nn.Module):
-    def __init__(self, embedding_dim: int, embed_dim: int):
+class VisionAdapterReduceBlocks(nn.Module):
+    def __init__(self, embedding_dim: int, embed_dim: int, reduce_block: Tuple[int, int, int] = [2, 2, 2]):
         super().__init__()
+        self.reduce_block = reduce_block
         self.adapter = nn.Sequential(
-            nn.Linear(embedding_dim * 4, embed_dim),  # 864*4 -> 1536 (4 comes from 2x2x1)
-            nn.Linear(embed_dim, embed_dim),  # 1536 -> 1536
+            nn.Linear(embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2], embed_dim),
+            nn.Linear(embed_dim, embed_dim),
         )
         
-    def forward(self, x):
+    def forward(self, x):        
         # Convert input to float first
-        x = x.to(torch.bfloat16)        # This hurts. TODO understand datatype mess and fix it.
+        x = x.to(torch.bfloat16)
         
         # Input shape is (batch_size, embedding_dim, sequence_length)
         batch_size, embedding_dim, seq_length = x.shape
         
-        # For 13824 video tokens, reshape to 24x24x24
-        cube_size = 24
+        # E.g for 13824 video tokens, reshape to 24x24x24
+        cube_size = int(seq_length ** (1/3)) + 1
         x = x.reshape(batch_size, embedding_dim, cube_size, cube_size, cube_size)
-        # Use unfold to create 2x2x1 blocks
-        x = x.unfold(2, 2, 2)
-        x = x.unfold(3, 2, 2)
-        x = x.unfold(4, 1, 1)
-        # Reshape to combine all 2x2x1 blocks
+        
+        # Use unfold to create reduce_block
+        x = x.unfold(2, self.reduce_block[0], self.reduce_block[0])
+        x = x.unfold(3, self.reduce_block[1], self.reduce_block[1])
+        x = x.unfold(4, self.reduce_block[2], self.reduce_block[2])
+       
+        # Reshape to combine all reduce_block
         x = x.permute(0, 2, 3, 4, 1, 5, 6, 7)  # Move embedding_dim after spatial dims
-        # Combine the 2x2x1 blocks with the embedding dim
-        # New spatial dimensions will be 12x12x24 = 3456 tokens
-        x = x.reshape(batch_size, 12 * 12 * 24, embedding_dim * 4)  # 4 from 2x2x1
+        x = x.reshape(batch_size, -1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
+       
         # Process through adapter
-        x = x.reshape(-1, embedding_dim * 4)
-        x = self.adapter(x)
+        x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
+        x = self.adapter(x)    
+
         return x
 
-    
 from torch.nn import CrossEntropyLoss
 from transformers.utils import add_start_docstrings_to_model_forward, replace_return_docstrings
 
 class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
-    def __init__(self, config):
+    def __init__(self, config, reduce_block = [2, 2, 2]):
             super().__init__(config)
-
-            self.vision_adapter = VisionAdapterReduceBlocks221(embedding_dim=864, embed_dim=1536)
+            
+            self.vision_adapter = VisionAdapterReduceBlocks(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
 
     @add_start_docstrings_to_model_forward(QWEN2_VL_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=Qwen2VLCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)

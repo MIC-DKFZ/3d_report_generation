@@ -37,12 +37,12 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
     image_processor_class = "AutoImageProcessor"
     tokenizer_class = ("Qwen2Tokenizer", "Qwen2TokenizerFast")
 
-    def __init__(self, image_processor=None, tokenizer=None, chat_template=None, **kwargs):
+    def __init__(self, image_processor=None, tokenizer=None, chat_template=None, reduce_block = [2, 2, 2], **kwargs):
         self.image_token = "<|image_pad|>" if not hasattr(tokenizer, "image_token") else tokenizer.image_token
         self.video_token = "<|video_pad|>" if not hasattr(tokenizer, "video_token") else tokenizer.video_token
         super().__init__(image_processor, tokenizer, chat_template=chat_template)
 
-
+        self.reduce_block = reduce_block # this is fixed and parameter that will be changed during training
 
     def __call__(
         self,
@@ -117,8 +117,9 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
 
             videos_input_embeddings = videos_input_embeddings.view(videos_input_embeddings.size(0), videos_input_embeddings.size(1), -1)
             
-            videos_inputs = { "pixel_values_videos": videos_input_embeddings,
-                            "video_grid_thw": video_grid_thw
+            videos_inputs = {
+                "pixel_values_videos": videos_input_embeddings,
+                "video_grid_thw": torch.tensor((video_grid_thw // torch.tensor(self.reduce_block)).tolist())
             }
 
         else:
@@ -145,10 +146,7 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
                 text[i] = text[i].replace("<|placeholder|>", self.image_token)
 
         if video_grid_thw is not None:
-            merge_length = self.image_processor.merge_size**2
-            merge_length = 1  # TODO find out if we should use this parameter. Right now only merge_length = 1 is possible. If larger, then we also need to merge the input tokens. If we Use the line above, we get ValueError: Video features and video tokens do not match: tokens: 3456, features 13824
-            # 3456 x 4 = 13824
-            merge_length = self.image_processor.merge_size**2
+            merge_length = np.prod(self.reduce_block)
             index = 0
             for i in range(len(text)):
                 while self.video_token in text[i]:
