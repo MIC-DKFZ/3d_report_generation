@@ -214,6 +214,7 @@ training_args = SFTConfig(
     eval_strategy="steps",  # Strategy for evaluation
     save_strategy="steps",  # Strategy for saving the model
     save_steps=20,  # Steps interval for saving
+    save_total_limit=2,  # Add this - keeps only the last 2 checkpoints
     metric_for_best_model="eval_loss",  # Metric to evaluate the best model
     greater_is_better=False,  # Whether higher metric values are better
     load_best_model_at_end=True,  # Load the best model after training
@@ -281,6 +282,8 @@ def collate_fn(examples):
         labels[labels == image_token_id] = -100  # Mask image token IDs in labels
 
     batch["labels"] = labels  # Add labels to the batch
+
+    print("batch", batch)
 
     return batch  # Return the prepared batch
 

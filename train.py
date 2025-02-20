@@ -267,10 +267,11 @@ class VLMTrainer:
             learning_rate=2e-4,
             lr_scheduler_type="constant",
             logging_steps=10,
-            eval_steps=10,
+            eval_steps=50,
             eval_strategy="steps",
             save_strategy="steps",
-            save_steps=20,
+            save_steps=50,
+            save_total_limit=2,  # Only keep 2 checkpoints
             metric_for_best_model="eval_loss",
             greater_is_better=False,
             load_best_model_at_end=True,
