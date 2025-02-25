@@ -29,9 +29,11 @@ class VLMTrainer:
             raise ValueError("Environment variable ROCKET_VLM_VISION_EMBEDDINGS is not set")
 
         self.train_dataset = AMOSMMDataset(dataset_json_path=dataset_path,
+                                           model_name="qwen",
                                            split='train',
                                            embeddings_path=self.embeddings_path)
         self.val_dataset = AMOSMMDataset(dataset_json_path=dataset_path,
+                                         model_name="qwen",
                                          split='val',
                                          embeddings_path=self.embeddings_path)[:50]
         self.train_dataset.verify()

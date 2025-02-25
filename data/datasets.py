@@ -3,100 +3,31 @@ import os
 from pathlib import Path
 
 from torch.utils.data import Dataset
+from data.formatters import get_formatter
 
 
 class AMOSMMDataset(Dataset):
+    """
+    AMOS-MM dataset class
+    Args:
+        dataset_json_path (str): Path to the dataset JSON file
+        model_name (str): Name of the vlm the dataset is used for. Used to infere the formatter for the questions
+        split (str): Split name ('train' or 'val')
+        embeddings_path (str): Path to the vision embeddings directory
+    """
     def __init__(self,
                  dataset_json_path,
+                 model_name,
                  split='train',
                  embeddings_path=Path(os.getenv("ROCKET_VLM_VISION_EMBEDDINGS"))):
         super(AMOSMMDataset).__init__()
+        self.format_region_question = get_formatter(f"{model_name}_amos_regions")
+        self.format_qa_data = get_formatter(f"{model_name}_amos_qa")
         with open(dataset_json_path, 'r') as f:
             self.data = json.load(f)
         self.split = split
         self.embeddings_path = embeddings_path
         self.samples = self.format_data()
-
-    def format_qa_data(self, embedding_path, qa_pair):
-        """Format QA pair for training"""
-        options_text = "\n".join([f"{key}. {value}" for key, value in qa_pair["options"].items()])
-        correct_answer_text = qa_pair["options"][qa_pair["answer"]]
-
-        if "reasoning" not in qa_pair:
-            qa_pair["reasoning"] = ""
-
-        return [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a medical imaging AI trained to answer questions about CT scans."
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "embedding_path": embedding_path,
-                    },
-                    {
-                        "type": "text",
-                        "text": f"{qa_pair['question']}\n\n{options_text}"
-                    }
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"The answer is {qa_pair['answer']}. {correct_answer_text}. {qa_pair['reasoning']}"
-                    }
-                ],
-            },
-        ]
-
-    def format_region_question(self, embedding_path, region, findings):
-        """Create a simple question about a specific region"""
-        if not findings:
-            return None
-
-        return [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a medical imaging AI trained to analyze CT scans."
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "embedding_path": embedding_path,
-                    },
-                    {
-                        "type": "text",
-                        "text": f"What do you see in the {region} region of this CT scan?"
-                    }
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": findings
-                    }
-                ],
-            },
-        ]
 
     def format_data(self):
         if self.split == 'train':
