@@ -1,4 +1,6 @@
 from transformers import BitsAndBytesConfig, Qwen2VLForConditionalGeneration
+
+from data.datasets import AMOSMMDataset
 from processing_3d import Qwen2VLProcessor3D
 from Qwen3D import Qwen2VLForConditionalGeneration3D
 from trl import SFTConfig, SFTTrainer
@@ -9,6 +11,7 @@ from pathlib import Path
 import json
 import gc
 import time
+
 
 class VLMTrainer:
     def __init__(self, model_id="Qwen/Qwen2-VL-2B-Instruct", output_dir="qwen2-2b-amos-mm", train_only_vision_adapter=False):
@@ -24,6 +27,15 @@ class VLMTrainer:
         self.embeddings_path = os.environ.get('ROCKET_VLM_VISION_EMBEDDINGS')
         if self.embeddings_path is None:
             raise ValueError("Environment variable ROCKET_VLM_VISION_EMBEDDINGS is not set")
+
+        self.train_dataset = AMOSMMDataset(dataset_json_path=dataset_path,
+                                           split='train',
+                                           embeddings_path=self.embeddings_path)
+        self.val_dataset = AMOSMMDataset(dataset_json_path=dataset_path,
+                                         split='val',
+                                         embeddings_path=self.embeddings_path)[:50]
+        self.train_dataset.verify()
+        print(f"Loaded {len(self.train_dataset)} training samples and {len(self.val_dataset)} validation samples")
 
     def clear_memory(self):
         """Clear GPU memory and cached objects"""
@@ -42,126 +54,6 @@ class VLMTrainer:
         time.sleep(2)
         print(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
         print(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
-
-    def get_embedding_path(self, image_path):
-        """Convert image path to embedding path"""
-        base_name = image_path.replace('.nii.gz', '')
-        return str(Path(self.embeddings_path) / f"{base_name}_embedding.npz")
-
-    def format_qa_data(self, embedding_path, qa_pair):
-        """Format QA pair for training"""
-        options_text = "\n".join([f"{key}. {value}" for key, value in qa_pair["options"].items()])
-        correct_answer_text = qa_pair["options"][qa_pair["answer"]]
-        
-        if "reasoning" not in qa_pair:
-            qa_pair["reasoning"] = ""
-
-        return [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a medical imaging AI trained to answer questions about CT scans."
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "embedding_path": embedding_path,
-                    },
-                    {
-                        "type": "text",
-                        "text": f"{qa_pair['question']}\n\n{options_text}"
-                    }
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"The answer is {qa_pair['answer']}. {correct_answer_text}. {qa_pair['reasoning']}"
-                    }
-                ],
-            },
-        ]
-
-    def format_region_question(self, embedding_path, region, findings):
-        """Create a simple question about a specific region"""
-        if not findings:
-            return None
-            
-        return [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a medical imaging AI trained to analyze CT scans."
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "embedding_path": embedding_path,
-                    },
-                    {
-                        "type": "text",
-                        "text": f"What do you see in the {region} region of this CT scan?"
-                    }
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": findings
-                    }
-                ],
-            },
-        ]
-
-    def load_amos_dataset(self, dataset_path, split='train'):
-        """Load AMOS-MM dataset with simple region-based questions"""
-        with open(dataset_path) as f:
-            data = json.load(f)
-        
-        samples = data['training'] if split == 'train' else data['validation']
-        
-        formatted_data = []
-        for sample in samples:
-            embedding_path = self.get_embedding_path(sample['image'])
-            
-            # Skip if embedding file doesn't exist
-            if not os.path.exists(embedding_path):
-                continue
-            
-            if 'labels' in sample and 'report' in sample['labels']:
-                # Add region-specific questions
-                for region in ['chest', 'abdomen', 'pelvis']:
-                    region_qa = self.format_region_question(
-                        embedding_path,
-                        region,
-                        sample['labels']['report']['findings'][region]
-                    )
-                    if region_qa:
-                        formatted_data.append(region_qa)
-                
-                # Format QA pairs
-                if 'qa' in sample['labels']:
-                    for qa_pair in sample['labels']['qa']:
-                        formatted_qa = self.format_qa_data(embedding_path, qa_pair)
-                        formatted_data.append(formatted_qa)
-        
-        return formatted_data
 
     def collate_fn(self, examples):
         # Get the texts and images, and apply the chat template
@@ -286,11 +178,6 @@ class VLMTrainer:
 
     def train(self, dataset_path):
         """Main training function"""
-        # Load datasets
-        train_dataset = self.load_amos_dataset(dataset_path, split='train')
-        val_dataset = self.load_amos_dataset(dataset_path, split='val')[:50]
-        print(f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples")
-
         # Setup model and get configurations
 
         peft_config = self.setup_model()
@@ -300,8 +187,8 @@ class VLMTrainer:
         self.trainer = SFTTrainer(
             model=self.model,
             args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=val_dataset,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.val_dataset,
             data_collator=self.collate_fn,
             peft_config=None if self.train_only_vision_adapter else peft_config,
             tokenizer=self.processor.tokenizer,
@@ -312,37 +199,12 @@ class VLMTrainer:
         #self.trainer.save_model(self.output_dir)
         self.clear_memory()
 
-    def test_dataset(self, dataset_path):
-        """Test function to verify dataset loading"""
-        print("Loading dataset...")
-        train_dataset = self.load_amos_dataset(dataset_path, split='train')
-        
-        print(f"\nTotal number of samples: {len(train_dataset)}")
-        
-        # Print example of region-specific question
-        print("\nExample of region question:")
-        for sample in train_dataset:
-            if "do you see" in sample[1]['content'][1]['text']:
-                print(f"Question: {sample[1]['content'][1]['text']}")
-                print(f"Answer: {sample[2]['content'][0]['text']}")
-                break
-        
-        # Print example of original QA
-        print("\nExample of original QA:")
-        for sample in train_dataset:
-            if "The answer is" in sample[2]['content'][0]['text']:
-                print(f"Question: {sample[1]['content'][1]['text']}")
-                print(f"Answer: {sample[2]['content'][0]['text']}")
-                break
 
 if __name__ == "__main__":
     dataset_path = "/home/m340g/DrivesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/dataset.json"
     
     # Initialize trainer
     trainer = VLMTrainer(train_only_vision_adapter=True)
-    
-    # Test dataset loading
-    trainer.test_dataset(dataset_path)
     
     # Run training
     trainer.train(dataset_path)
