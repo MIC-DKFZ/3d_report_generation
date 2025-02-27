@@ -6,10 +6,12 @@ import json
 import numpy as np
 from tqdm import tqdm
 import glob
+import time
 
 from Qwen3D import Qwen2VLForConditionalGeneration3D
 from processing_3d import Qwen2VLProcessor3D
 from data.datasets import AMOSMMDataset
+from data.formatters import get_formatter
 
 
 class VLMInference:
@@ -57,7 +59,23 @@ class VLMInference:
             traceback.print_exc()
             raise
     
+
+    # In the process_example method, add this near the beginning:
     def process_example(self, example):
+        """Process a single example"""
+        for msg in example:
+            if isinstance(msg, dict):
+                role = msg.get('role', 'unknown')
+                content = msg.get('content', [])
+                if isinstance(content, list):
+                    content_text = []
+                    for item in content:
+                        if isinstance(item, dict):
+                            if item.get('type') == 'text':
+                                content_text.append(item.get('text', ''))
+                            elif item.get('type') == 'image':
+                                content_text.append('[IMAGE]')
+                    content = ' '.join(content_text)
         """
         Process a single example from the dataset, similar to the collate_fn in training.
         
@@ -69,11 +87,10 @@ class VLMInference:
             user_query: The text query from the user
         """
         try:
-            # Extract text and embedding path according to the format in collate_fn
-            # Apply chat template to the first element of the example
-            text = self.processor.apply_chat_template(example[0], tokenize=False)
+            # Apply chat template to the example
+            text = self.processor.apply_chat_template(example, tokenize=False)
             
-            # Get embedding path from the second element
+            # Get embedding path - making sure it matches the dataset format
             embedding_path = example[1]["content"][0]["embedding_path"]
             
             # Process inputs
@@ -89,7 +106,7 @@ class VLMInference:
             
             # Extract user query for display
             user_query = None
-            for msg in example[0]:
+            for msg in example:
                 if isinstance(msg, dict) and msg.get("role") == "user":
                     content = msg.get("content")
                     if isinstance(content, list):
@@ -136,11 +153,29 @@ class VLMInference:
             # Decode output
             generated_text = self.processor.tokenizer.batch_decode(output, skip_special_tokens=True)[0]
             
-            # Extract the model's response
+            # Extract just the model's response
             if "ASSISTANT:" in generated_text:
                 response = generated_text.split("ASSISTANT:")[-1].strip()
             else:
                 response = generated_text
+            
+            # Properly clean the response by removing anything before "The answer is" for QA questions
+            if "The answer is" in response:
+                response = response[response.find("The answer is"):].strip()
+            elif "A." in response and "B." in response:
+                # Handle case where model repeats the options
+                lines = response.split("\n")
+                answer_start = -1
+                for i, line in enumerate(lines):
+                    if "A." in line and i < len(lines) - 1 and "B." in lines[i+1]:
+                        answer_start = i + 4  # Skip past the options (A, B, C, D)
+                        break
+                
+                if answer_start >= 0 and answer_start < len(lines):
+                    response = "\n".join(lines[answer_start:])
+            
+            # Clean up unwanted phrases and system/user/assistant text
+            response = self._clean_response_text(response)
             
             return response
             
@@ -149,8 +184,107 @@ class VLMInference:
             import traceback
             traceback.print_exc()
             return f"Error: {str(e)}"
+            
 
-    def run_inference_from_dataset(self, dataset_path, split="train", num_samples=5):
+    def run_test_mode(self, dataset_path, split="train", num_samples=5, question_types=None):
+        """
+        Run a true test without seeing any answers.
+        """
+        # Load dataset
+        dataset = AMOSMMDataset(
+            dataset_json_path=dataset_path,
+            model_name="qwen",
+            split=split,
+            embeddings_path=self.embeddings_path
+        )
+        
+        # Filter and select samples
+        samples = []
+        for i in range(len(dataset)):
+            example = dataset[i]
+            # Filter by question type if needed
+            if question_types:
+                is_qa = any("The answer is" in str(msg.get("content", [{}])[0].get("text", "")) 
+                        for msg in example if isinstance(msg, dict) and msg.get("role") == "assistant")
+                if ("qa" in question_types and is_qa) or ("region" in question_types and not is_qa):
+                    samples.append((i, example))
+            else:
+                samples.append((i, example))
+        
+        if len(samples) > num_samples:
+            samples = samples[:num_samples]
+        
+        # Process samples in true test mode
+        results = []
+        for idx, (orig_idx, example) in enumerate(samples):
+            # Create a clean example with ONLY system and user messages
+            clean_example = []
+            ground_truth = None
+            
+            for msg in example:
+                if isinstance(msg, dict):
+                    if msg.get("role") == "system":
+                        clean_example.append(msg)
+                    elif msg.get("role") == "user":
+                        clean_example.append(msg)
+                    elif msg.get("role") == "assistant":
+                        # Save ground truth but don't add to clean example
+                        content = msg.get("content")
+                        if isinstance(content, list) and len(content) > 0:
+                            ground_truth = content[0].get("text", None)
+            
+            # Process and generate
+            inputs, user_query, _ = self.process_example(clean_example)
+            response = self.generate(inputs)
+            
+            # Print and save results
+            print(f"Query: {user_query}")
+            print(f"Response: {response}")
+            print(f"Ground Truth: {ground_truth}")
+            
+            results.append({
+                "index": orig_idx,
+                "query": user_query,
+                "response": response,
+                "ground_truth": ground_truth
+            })
+
+            print("------------------------------------------------------------")
+        
+        return results
+    
+    def _clean_response_text(self, text):
+        """Clean up the response text by removing unwanted elements"""
+        # Remove common unwanted artifacts
+        unwanted_phrases = [
+            "We use it is not a problem.",
+            "We use it is not clear.",
+            "We have a new approach",
+            "a medical imaging AI trained to",
+        ]
+        
+        for phrase in unwanted_phrases:
+            text = text.replace(phrase, "").strip()
+        
+        # Remove system/user/assistant prefixes
+        role_prefixes = ["system\n", "user\n", "assistant\n"]
+        for prefix in role_prefixes:
+            text = text.replace(prefix, "")
+        
+        # Remove any repeated question text
+        if "What do you see in the" in text:
+            parts = text.split("What do you see in the")
+            if len(parts) > 1:
+                remainder = parts[1]
+                if "region of this CT scan?" in remainder:
+                    text = remainder.split("region of this CT scan?")[-1].strip()
+        
+        # Clean up any trailing or leading whitespace
+        text = text.strip()
+        
+        return text
+
+    def run_inference_from_dataset(self, dataset_path, split="train", num_samples=5, filter_type=None):
         """
         Run inference on samples from dataset.
         
@@ -158,9 +292,10 @@ class VLMInference:
             dataset_path: Path to the dataset JSON
             split: Dataset split to use
             num_samples: Number of samples to run inference on
+            filter_type: Optional filter for "qa" or "region" question types
         """
         try:
-            # Load dataset using the same approach as in the training script
+            # Load dataset using the AMOSMMDataset class
             dataset = AMOSMMDataset(
                 dataset_json_path=dataset_path,
                 model_name="qwen",
@@ -170,12 +305,24 @@ class VLMInference:
             
             print(f"Loaded {len(dataset)} samples from {split} split")
             
-            # Take a subset if needed
-            if len(dataset) > num_samples:
-                subset_indices = list(range(min(num_samples, len(dataset))))
-                subset = [dataset[i] for i in subset_indices]
+            # Filter by question type if requested
+            if filter_type:
+                subset = []
+                for i in range(len(dataset)):
+                    example = dataset[i]
+                    # Check if it's a QA question or region question based on format
+                    is_qa = any("The answer is" in msg.get("content", [{}])[0].get("text", "") 
+                               for msg in example if isinstance(msg, dict) and msg.get("role") == "assistant")
+                    if (filter_type == "qa" and is_qa) or (filter_type == "region" and not is_qa):
+                        subset.append(example)
+                
+                print(f"Filtered to {len(subset)} {filter_type} samples")
             else:
-                subset = dataset
+                subset = [dataset[i] for i in range(min(num_samples, len(dataset)))]
+            
+            # Limit to num_samples
+            if len(subset) > num_samples:
+                subset = subset[:num_samples]
             
             results = []
             for i, example in enumerate(tqdm(subset, desc=f"Running inference on {split} split")):
@@ -188,11 +335,11 @@ class VLMInference:
                     
                     # Get ground truth response if available
                     ground_truth = None
-                    for msg in example[0]:
+                    for msg in example:
                         if isinstance(msg, dict) and msg.get("role") == "assistant":
                             content = msg.get("content")
-                            if content:
-                                ground_truth = content
+                            if isinstance(content, list) and len(content) > 0:
+                                ground_truth = content[0].get("text", None)
                                 break
                     
                     # Store results
@@ -201,7 +348,8 @@ class VLMInference:
                         "query": user_query,
                         "response": response,
                         "ground_truth": ground_truth,
-                        "embedding_path": embedding_path
+                        "embedding_path": embedding_path,
+                        "example": example  # Store full example for reference
                     })
                     
                     # Print results
@@ -216,6 +364,13 @@ class VLMInference:
                     print(f"Error processing sample {i}: {e}")
                     continue
                 
+            # Save results to file
+            timestamp = int(time.time())
+            output_file = f"inference_results_{split}_{timestamp}.json"
+            with open(output_file, "w") as f:
+                json.dump(results, f, indent=2)
+            
+            print(f"Results saved to {output_file}")
             return results
             
         except Exception as e:
@@ -224,225 +379,160 @@ class VLMInference:
             traceback.print_exc()
             return []
 
-    def run_inference_on_embedding(self, embedding_path, user_query, system_prompt=None):
+            
+    def _modify_example_for_test_mode(self, example):
         """
-        Run inference on a specific embedding file.
+        Modify an example to hide answer for test mode.
         
         Args:
-            embedding_path: Path to the embedding file
-            user_query: Text query from user
-            system_prompt: Optional system prompt
+            example: The original formatted example
             
         Returns:
-            The model's response
+            Modified example with answer removed completely
         """
-        try:
-            # Create messages in the same format as the dataset
-            messages = []
+        import copy
+        modified = copy.deepcopy(example)
+        
+        # For true test mode, we need to completely remove the assistant's answer
+        # Rather than modifying it, we'll remove it entirely from the example 
+        # so the model has to generate the answer from scratch
+        
+        # Keep only the system and user messages
+        test_example = []
+        for msg in modified:
+            if isinstance(msg, dict) and msg.get("role") in ["system", "user"]:
+                test_example.append(msg)
+        
+        return test_example
             
-            # Add system prompt if provided
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
+    def create_custom_prompt_with_formatter(self, image_id, prompt_type, custom_text=None):
+        """
+        Create a custom prompt for a specific image using formatters.
+        
+        Args:
+            image_id: ID of the image (used to construct embedding path)
+            prompt_type: Type of prompt ('region' or 'qa')
+            custom_text: Custom text for prompt
             
-            # Add user message with image reference
-            messages.append({
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_query},
-                    {"type": "image", "content": [{"embedding_path": embedding_path}]}
-                ]
-            })
+        Returns:
+            Formatted prompt
+        """
+        # Construct embedding path
+        embedding_path = str(Path(self.embeddings_path) / f"{image_id}_embedding.npz")
+        
+        if not os.path.exists(embedding_path):
+            raise FileNotFoundError(f"Embedding not found: {embedding_path}")
+        
+        # Use the formatters from data.formatters
+        format_region_question = get_formatter("qwen_amos_regions")
+        format_qa_data = get_formatter("qwen_amos_qa")
+        
+        if prompt_type == "region":
+            region = "abdomen"  # Default region
+            if custom_text:
+                # Extract region from custom text
+                for r in ["chest", "abdomen", "pelvis"]:
+                    if r in custom_text.lower():
+                        region = r
+                        break
             
-            # Apply chat template
-            text = self.processor.apply_chat_template(messages, tokenize=False)
-            
-            # Process inputs
-            inputs = self.processor(
-                text=text,
-                vision_embedding_paths=[embedding_path],
-                return_tensors="pt",
-                padding=True
+            return format_region_question(
+                embedding_path,
+                region,
+                ""  # No findings provided since we're generating them
             )
-            
-            # Move to same device as model
-            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-            
-            # Generate response
-            response = self.generate(inputs)
-            
-            return response
-            
-        except Exception as e:
-            print(f"Error running inference on embedding: {e}")
-            import traceback
-            traceback.print_exc()
-            return f"Error: {str(e)}"
-    
-    def find_embedding_files(self, directory=None, extension=None):
-        """
-        Find all embedding files in a directory.
-        
-        Args:
-            directory: Directory to search, defaults to imagesVal in embeddings_path
-            extension: File extension to search for (.npy or .pt)
-            
-        Returns:
-            List of embedding file paths
-        """
-        if directory is None:
-            # Default to imagesVal directory
-            directory = os.path.join(self.embeddings_path, "imagesTr")
-            
-        
-        print(f"Searching for embedding files in: {directory}")
-        
-        # Find all embedding files
-        embedding_files = []
-        
-        # If extension is specified, search only for that extension
-        if extension:
-            pattern = os.path.join(directory, f"**/*{extension}")
-            embedding_files = glob.glob(pattern, recursive=True)
+        elif prompt_type == "qa":
+            # Create a dummy QA pair
+            qa_pair = {
+                "question": custom_text or "Describe what you see in this CT scan.",
+                "options": {"A": "Option A", "B": "Option B", "C": "Option C", "D": "Option D"},
+                "answer": "A"  # Dummy answer
+            }
+            return format_qa_data(embedding_path, qa_pair)
         else:
-            # Otherwise, search for both .npy and .pt files
-            npy_files = glob.glob(os.path.join(directory, "**/*.npy"), recursive=True)
-            pt_files = glob.glob(os.path.join(directory, "**/*.pt"), recursive=True)
-            embedding_files = npy_files + pt_files
-        
-        print(f"Found {len(embedding_files)} embedding files")
-        
-        # Print a few examples
-        if embedding_files:
-            print("Examples:")
-            for path in embedding_files[:3]:
-                print(f"  - {path}")
-        
-        return embedding_files
-
-    def run_inference_on_val_directory(self, val_dir=None, file_extension=None, num_samples=None, query=None, system_prompt=None):
-        """
-        Run inference on all embedding files in the validation directory.
-        
-        Args:
-            val_dir: Validation directory, defaults to imagesVal in embeddings_path
-            file_extension: File extension to search for (.npy or .pt)
-            num_samples: Number of samples to process, defaults to all
-            query: Text query to use
-            system_prompt: System prompt to use
-            
-        Returns:
-            List of results
-        """
-        # Find all embedding files
-        embedding_files = self.find_embedding_files(val_dir, file_extension)
-        
-        if not embedding_files:
-            print("No embedding files found in the validation directory")
-            return []
-        
-        # Limit to num_samples if specified
-        if num_samples and num_samples < len(embedding_files):
-            embedding_files = embedding_files[:num_samples]
-        
-        # Default query and system prompt
-        if not query:
-            query = "Describe what you can see in this medical image in detail."
-        
-        if not system_prompt:
-            system_prompt = "You are a helpful medical AI assistant that analyzes medical images."
-        
-        # Run inference on each file
-        results = []
-        for i, embedding_path in enumerate(tqdm(embedding_files, desc="Running inference on validation images")):
-            try:
-                # Generate response
-                response = self.run_inference_on_embedding(embedding_path, query, system_prompt)
-                
-                # Store results
-                results.append({
-                    "index": i,
-                    "embedding_path": embedding_path,
-                    "query": query,
-                    "response": response
-                })
-                
-                # Print results
-                print(f"\nSample {i+1}/{len(embedding_files)}")
-                print(f"Embedding: {embedding_path}")
-                print(f"Response: {response}")
-                print("-" * 80)
-                
-            except Exception as e:
-                print(f"Error processing embedding {embedding_path}: {e}")
-                continue
-        
-        # Save results to file
-        timestamp = torch.cuda.current_timestamp() if hasattr(torch.cuda, 'current_timestamp') else int(time.time())
-        output_file = f"inference_results_{timestamp}.json"
-        with open(output_file, "w") as f:
-            json.dump(results, f, indent=2)
-        
-        print(f"Results saved to {output_file}")
-        
-        return results
+            raise ValueError(f"Unknown prompt type: {prompt_type}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run inference with Qwen2-VL model")
+    parser = argparse.ArgumentParser(description="Run inference with Qwen2-VL model on AMOS dataset")
     parser.add_argument("--base_model", type=str, default="Qwen/Qwen2-VL-2B-Instruct",
                         help="Base model ID")
-    parser.add_argument("--dataset", type=str, default=None, 
+    parser.add_argument("--dataset", type=str, 
+                        default="/home/m340g/DrivesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/dataset.json", 
                         help="Path to the dataset JSON file")
-    parser.add_argument("--split", type=str, default="train", help="Dataset split to use (train, val, test)")
-    parser.add_argument("--num_samples", type=int, default=None, help="Number of samples to process")
-    parser.add_argument("--embedding_path", type=str, help="Path to a specific embedding file for single inference")
-    parser.add_argument("--val_dir", type=str, help="Directory containing validation embeddings")
-    parser.add_argument("--query", type=str, default="Describe what you see in this medical image.", 
-                        help="Query for inference")
-    parser.add_argument("--system_prompt", type=str, 
-                        default="You are a helpful medical AI assistant that analyses medical images.", 
-                        help="System prompt")
-    parser.add_argument("--file_extension", type=str, help="File extension to search for (.npy or .pt)")
+    parser.add_argument("--split", type=str, default="val", 
+                        help="Dataset split to use (train, val)")
+    parser.add_argument("--num_samples", type=int, default=5, 
+                        help="Number of samples to process")
+    parser.add_argument("--question_types", nargs="+", choices=["qa", "region"], default=None,
+                        help="Filter for specific question types (can specify multiple)")
+    parser.add_argument("--hide_answers", action="store_true", default=False,
+                        help="Hide answers in ground truth display (for evaluation)")
+    parser.add_argument("--test_mode", action="store_true", default=True,
+                        help="Run in test mode: hide answers in prompts to evaluate model performance")
+    parser.add_argument("--custom_prompt", type=str, default=None,
+                        help="Custom prompt text to use with --custom_image")
+    parser.add_argument("--custom_image", type=str, default=None,
+                        help="Image ID to run custom inference on (without file extension)")
+    parser.add_argument("--custom_type", type=str, choices=["qa", "region"], default="region",
+                        help="Type of prompt to create for custom image")
+    parser.add_argument("--output_dir", type=str, default=".", 
+                        help="Directory to save results")
     
     args = parser.parse_args()
     
-    # Initialize inference with just the base model (no checkpoint loading)
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Final part of main() function where we pass the hide_answers parameter
+    # Initialize inference
     inference = VLMInference(args.base_model)
     
-    # Run single inference if embedding_path provided
-    if args.embedding_path:
-        print(f"Running single inference on {args.embedding_path}...")
-        response = inference.run_inference_on_embedding(
-            args.embedding_path, 
-            args.query, 
-            args.system_prompt
-        )
-        print(f"\nQuery: {args.query}")
-        print(f"Response: {response}")
-    
-    # Run on dataset if dataset path provided
-    elif args.dataset:
+    if args.custom_image:
+        # Run custom inference on a specific image
+        try:
+            print(f"Running custom inference on image ID: {args.custom_image}")
+            example = inference.create_custom_prompt_with_formatter(
+                args.custom_image,
+                args.custom_type,
+                args.custom_prompt
+            )
+            
+            if example:
+                inputs, user_query, embedding_path = inference.process_example(example)
+                response = inference.generate(inputs)
+                
+                print(f"\nQuery: {user_query}")
+                print(f"Response: {response}")
+                
+                # Save result to file
+                timestamp = int(time.time())
+                output_file = os.path.join(args.output_dir, f"custom_inference_{timestamp}.json")
+                with open(output_file, "w") as f:
+                    json.dump({
+                        "image_id": args.custom_image,
+                        "query": user_query,
+                        "response": response,
+                        "prompt_type": args.custom_type
+                    }, f, indent=2)
+                
+                print(f"Result saved to {output_file}")
+            else:
+                print("Failed to create custom prompt")
+        except Exception as e:
+            print(f"Error in custom inference: {e}")
+    else:
+        # Run inference using dataset
         print(f"Running inference on dataset: {args.dataset}")
-        results = inference.run_inference_from_dataset(
-            args.dataset, 
-            split=args.split, 
-            num_samples=args.num_samples
+
+        results = inference.run_test_mode(
+            args.dataset,
+            split=args.split,
+            num_samples=args.num_samples,
+            question_types=args.question_types
         )
         print(f"Completed inference on {len(results)} samples")
-    
-    # Run on validation directory
-    else:
-        print(f"Running inference on validation directory")
-        results = inference.run_inference_on_val_directory(
-            val_dir=args.val_dir,
-            file_extension=args.file_extension,
-            num_samples=args.num_samples,
-            query=args.query,
-            system_prompt=args.system_prompt
-        )
-        print(f"Completed inference on {len(results)} validation samples")
 
 
 if __name__ == "__main__":
-    import time
     main()
