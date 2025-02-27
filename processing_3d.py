@@ -111,7 +111,7 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
 
 
         if vision_embedding_paths is not None:
-            videos_input_embeddings = torch.cat([torch.from_numpy(np.load(vision_embedding_path)["embeddings"]) for vision_embedding_path in vision_embedding_paths], dim=0)
+            videos_input_embeddings = torch.cat([torch.from_numpy(np.load(vision_embedding_path)) for vision_embedding_path in vision_embedding_paths], dim=0)
 
             video_grid_thw = torch.tensor([videos_input_embeddings.shape[-3:]]).int()
 
