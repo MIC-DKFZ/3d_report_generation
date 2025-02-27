@@ -15,14 +15,17 @@ from data.formatters import get_formatter
 
 
 class VLMInference:
-    def __init__(self, base_model_id="Qwen/Qwen2-VL-2B-Instruct"):
+    def __init__(self, checkpoint_path="/home/m340g/Projects/rocket-vlm/qwen2-2b-amos-mm/checkpoint-3050", 
+                base_processor_model="Qwen/Qwen2-VL-2B-Instruct"):
         """
         Initialize the VLM inference class.
         
         Args:
-            base_model_id: Base model ID to use
+            checkpoint_path: Path to fine-tuned checkpoint
+            base_processor_model: Base model ID to use for the processor
         """
-        self.base_model_id = base_model_id
+        self.checkpoint_path = checkpoint_path
+        self.base_processor_model = base_processor_model
         self.processor = None
         self.model = None
         
@@ -35,23 +38,23 @@ class VLMInference:
         self.setup_model()
     
     def setup_model(self):
-        """Load the base model (no checkpoint)"""
-        print(f"Loading base model from {self.base_model_id}...")
-        
+        """Load processor from base model and model from checkpoint"""
         try:
-            # Load processor from base model
-            self.processor = Qwen2VLProcessor3D.from_pretrained(self.base_model_id)
+            # Load processor from the base model (which has the preprocessor config)
+            print(f"Loading processor from base model: {self.base_processor_model}")
+            self.processor = Qwen2VLProcessor3D.from_pretrained(self.base_processor_model)
             
-            # Load base model
+            # Load model from the fine-tuned checkpoint
+            print(f"Loading model from checkpoint: {self.checkpoint_path}")
             self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
-                self.base_model_id,
+                self.checkpoint_path,
                 device_map="auto",
                 torch_dtype=torch.bfloat16
             )
             
             # Set model to evaluation mode
             self.model.eval()
-            print(f"Model loaded successfully")
+            print(f"Model and processor loaded successfully")
             
         except Exception as e:
             print(f"Error in setup_model: {e}")
@@ -455,8 +458,12 @@ class VLMInference:
 
 def main():
     parser = argparse.ArgumentParser(description="Run inference with Qwen2-VL model on AMOS dataset")
-    parser.add_argument("--base_model", type=str, default="Qwen/Qwen2-VL-2B-Instruct",
-                        help="Base model ID")
+    parser.add_argument("--checkpoint", type=str, 
+                        default="/home/m340g/Projects/rocket-vlm/qwen2-2b-amos-mm/checkpoint-3050",
+                        help="Path to fine-tuned checkpoint")
+    parser.add_argument("--base_processor", type=str, 
+                        default="Qwen/Qwen2-VL-2B-Instruct",
+                        help="Base model ID to use for the processor")
     parser.add_argument("--dataset", type=str, 
                         default="/home/m340g/DrivesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/dataset.json", 
                         help="Path to the dataset JSON file")
@@ -484,9 +491,8 @@ def main():
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Final part of main() function where we pass the hide_answers parameter
-    # Initialize inference
-    inference = VLMInference(args.base_model)
+    # Initialize inference with both checkpoint and base processor model
+    inference = VLMInference(args.checkpoint, args.base_processor)
     
     if args.custom_image:
         # Run custom inference on a specific image
