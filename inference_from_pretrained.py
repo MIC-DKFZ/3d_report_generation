@@ -189,7 +189,7 @@ class VLMInference:
             return f"Error: {str(e)}"
             
 
-    def run_test_mode(self, dataset_path, split="train", num_samples=5, question_types=None):
+    def run_test_mode(self, dataset_path, split="val", num_samples=20, question_types=None):
         """
         Run a true test without seeing any answers.
         """
@@ -286,102 +286,6 @@ class VLMInference:
         text = text.strip()
         
         return text
-
-    def run_inference_from_dataset(self, dataset_path, split="train", num_samples=5, filter_type=None):
-        """
-        Run inference on samples from dataset.
-        
-        Args:
-            dataset_path: Path to the dataset JSON
-            split: Dataset split to use
-            num_samples: Number of samples to run inference on
-            filter_type: Optional filter for "qa" or "region" question types
-        """
-        try:
-            # Load dataset using the AMOSMMDataset class
-            dataset = AMOSMMDataset(
-                dataset_json_path=dataset_path,
-                model_name="qwen",
-                split=split,
-                embeddings_path=self.embeddings_path
-            )
-            
-            print(f"Loaded {len(dataset)} samples from {split} split")
-            
-            # Filter by question type if requested
-            if filter_type:
-                subset = []
-                for i in range(len(dataset)):
-                    example = dataset[i]
-                    # Check if it's a QA question or region question based on format
-                    is_qa = any("The answer is" in msg.get("content", [{}])[0].get("text", "") 
-                               for msg in example if isinstance(msg, dict) and msg.get("role") == "assistant")
-                    if (filter_type == "qa" and is_qa) or (filter_type == "region" and not is_qa):
-                        subset.append(example)
-                
-                print(f"Filtered to {len(subset)} {filter_type} samples")
-            else:
-                subset = [dataset[i] for i in range(min(num_samples, len(dataset)))]
-            
-            # Limit to num_samples
-            if len(subset) > num_samples:
-                subset = subset[:num_samples]
-            
-            results = []
-            for i, example in enumerate(tqdm(subset, desc=f"Running inference on {split} split")):
-                try:
-                    # Process the example
-                    inputs, user_query, embedding_path = self.process_example(example)
-                    
-                    # Generate response
-                    response = self.generate(inputs)
-                    
-                    # Get ground truth response if available
-                    ground_truth = None
-                    for msg in example:
-                        if isinstance(msg, dict) and msg.get("role") == "assistant":
-                            content = msg.get("content")
-                            if isinstance(content, list) and len(content) > 0:
-                                ground_truth = content[0].get("text", None)
-                                break
-                    
-                    # Store results
-                    results.append({
-                        "index": i,
-                        "query": user_query,
-                        "response": response,
-                        "ground_truth": ground_truth,
-                        "embedding_path": embedding_path,
-                        "example": example  # Store full example for reference
-                    })
-                    
-                    # Print results
-                    print(f"\nSample {i+1}/{len(subset)}")
-                    print(f"Query: {user_query}")
-                    print(f"Response: {response}")
-                    if ground_truth:
-                        print(f"Ground Truth: {ground_truth}")
-                    print("-" * 80)
-                    
-                except Exception as e:
-                    print(f"Error processing sample {i}: {e}")
-                    continue
-                
-            # Save results to file
-            timestamp = int(time.time())
-            output_file = f"inference_results_{split}_{timestamp}.json"
-            with open(output_file, "w") as f:
-                json.dump(results, f, indent=2)
-            
-            print(f"Results saved to {output_file}")
-            return results
-            
-        except Exception as e:
-            print(f"Error in run_inference_from_dataset: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
-
             
     def _modify_example_for_test_mode(self, example):
         """
@@ -469,7 +373,7 @@ def main():
                         help="Path to the dataset JSON file")
     parser.add_argument("--split", type=str, default="val", 
                         help="Dataset split to use (train, val)")
-    parser.add_argument("--num_samples", type=int, default=5, 
+    parser.add_argument("--num_samples", type=int, default=20, 
                         help="Number of samples to process")
     parser.add_argument("--question_types", nargs="+", choices=["qa", "region"], default=None,
                         help="Filter for specific question types (can specify multiple)")
