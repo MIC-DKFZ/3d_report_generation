@@ -67,7 +67,7 @@ class AMOSMMDataset(Dataset):
     def get_embedding_path(self, image_path):
         """Convert image path to embedding path"""
         base_name = image_path.replace('.nii.gz', '')
-        return str(Path(self.embeddings_path) / f"{base_name}_embedding.npz")
+        return str(Path(self.embeddings_path) / f"{base_name}_embedding.npy")
 
     def verify(self):
         """Test function to verify dataset loading"""
