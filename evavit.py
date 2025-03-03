@@ -478,18 +478,18 @@ class Eva(nn.Module):
         else:
             return x, rot_pos_embed, None
 
-    def forward_features(self, x):
+    def forward_features(self, x, attn_mask: Optional[torch.Tensor] = None):
         x, rot_pos_embed, keep_indices = self._pos_embed(x)
         for blk in self.blocks:
             if self.grad_checkpointing and not torch.jit.is_scripting():
-                x = checkpoint(blk, x, rope=rot_pos_embed)
+                x = checkpoint(blk, x, rope=rot_pos_embed, attn_mask=attn_mask)
             else:
-                x = blk(x, rope=rot_pos_embed)
+                x = blk(x, rope=rot_pos_embed, attn_mask=attn_mask)
         x = self.norm(x)
         return x, keep_indices
 
-    def forward(self, x):
-        x, keep_indices = self.forward_features(x)
+    def forward(self, x, attn_mask: Optional[torch.Tensor] = None):
+        x, keep_indices = self.forward_features(x, attn_mask)
         return x, keep_indices
 
 
@@ -586,24 +586,24 @@ class EvaEncFromEvaMAE(nn.Module):
         restored[masked_positions] = mask_tokens.view(-1, C)
         return restored
 
-    def forward(self, x):
+    def forward(self, x, attn_mask: Optional[torch.Tensor] = None):
         # Encode patches
         x = self.down_projection(x)
         B, C, W, H, D = x.shape
         x = rearrange(x, 'b c w h d -> b (h w d) c')
 
         # Encode using EVA (internally applies masking with patch_drop_rate)
-        encoded, keep_indices = self.eva(x)
+        encoded, keep_indices = self.eva(x, attn_mask)
         # Restore full sequence with mask tokens
         num_patches = W * H * D
         if self.class_token:
             restored_x = self.restore_full_sequence(encoded[:, 1:, :], keep_indices, num_patches)
         else:
             restored_x = self.restore_full_sequence(encoded, keep_indices, num_patches)
-        
+
         # Reshape back to 3D
         x = rearrange(restored_x, 'b (h w d) c -> b c w h d', h=H, w=W, d=D)
-        
+
         return x
 
 
