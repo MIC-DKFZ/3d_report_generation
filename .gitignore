@@ -2,6 +2,7 @@ qwen2-2b-instruct-trl-sft-ChartQA/
 qwen2-2b-amos-mm/
 wandb/
 nnssl/
+owl-owl3-1b/
 
 # Python cache files
 __pycache__/
@@ -27,3 +28,5 @@ env/
 
 .env
 .python-version
+
+
