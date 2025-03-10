@@ -116,10 +116,12 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
             video_grid_thw = torch.tensor([videos_input_embeddings.shape[-3:]]).int()
 
             videos_input_embeddings = videos_input_embeddings.view(videos_input_embeddings.size(0), videos_input_embeddings.size(1), -1)
-            
+
             videos_inputs = {
                 "pixel_values_videos": videos_input_embeddings,
-                "video_grid_thw": torch.tensor((video_grid_thw // torch.tensor(self.reduce_block)).tolist())
+                # TODO: do we need this self.reduce_block. Further maybe we need ceil instead of // (floor).
+                # "video_grid_thw": torch.tensor((video_grid_thw // torch.tensor(self.reduce_block)).tolist())
+                "video_grid_thw": torch.tensor((video_grid_thw).tolist())
             }
 
         else:
@@ -151,7 +153,8 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
             for i in range(len(text)):
                 while self.video_token in text[i]:
                     text[i] = text[i].replace(
-                        self.video_token, "<|placeholder|>" * (video_grid_thw[index].prod() // merge_length), 1
+                        # TODO: In the adapter we use unfold to create merger patches. If the image size is not divisible by the reduce block the last row/column will be dropped.
+                        self.video_token, "<|placeholder|>" * ((video_grid_thw[index] - video_grid_thw[index] % torch.as_tensor(self.reduce_block)).prod() // merge_length), 1
                     )
                     index += 1
                 text[i] = text[i].replace("<|placeholder|>", self.video_token)

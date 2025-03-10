@@ -14,7 +14,11 @@ import time
 
 
 class VLMTrainer:
-    def __init__(self, model_id="Qwen/Qwen2-VL-2B-Instruct", output_dir="qwen2-2b-amos-mm", train_only_vision_adapter=False):
+    def __init__(self, 
+                 dataset_path: str,
+                 model_id="Qwen/Qwen2-VL-2B-Instruct", 
+                 output_dir="qwen2-2b-amos-mm", 
+                 train_only_vision_adapter=False):
         self.model_id = model_id
         self.output_dir = output_dir
         self.processor = None
@@ -28,6 +32,7 @@ class VLMTrainer:
         if self.embeddings_path is None:
             raise ValueError("Environment variable ROCKET_VLM_VISION_EMBEDDINGS is not set")
 
+        # TODO - rename class to VLMAmosMMTrainer
         self.train_dataset = AMOSMMDataset(dataset_json_path=dataset_path,
                                            model_name="qwen",
                                            split='train',
@@ -92,7 +97,7 @@ class VLMTrainer:
     def setup_model(self):
         """Initialize model, processor and PEFT configuration"""
         # Initialize processor
-        self.processor = Qwen2VLProcessor3D.from_pretrained(self.model_id)
+        self.processor = Qwen2VLProcessor3D.from_pretrained(self.model_id, cache_dir="/home/r403k/.cache/huggingface/hub", local_files_only=True)  
         
         if self.train_only_vision_adapter:
             # For adapter-only training, don't use 4-bit quantization for the adapter
@@ -178,7 +183,7 @@ class VLMTrainer:
             remove_unused_columns=False
         )
 
-    def train(self, dataset_path):
+    def train(self):
         """Main training function"""
         # Setup model and get configurations
 
@@ -193,7 +198,7 @@ class VLMTrainer:
             eval_dataset=self.val_dataset,
             data_collator=self.collate_fn,
             peft_config=None if self.train_only_vision_adapter else peft_config,
-            tokenizer=self.processor.tokenizer,
+            # tokenizer=self.processor.tokenizer,
         )
 
         # Train and save
@@ -203,10 +208,10 @@ class VLMTrainer:
 
 
 if __name__ == "__main__":
-    dataset_path = "/home/m340g/DrivesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/dataset.json"
+    dataset_path = "/home/r403k/ResourcesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/dataset.json"
     
     # Initialize trainer
-    trainer = VLMTrainer(train_only_vision_adapter=True)
+    trainer = VLMTrainer(dataset_path, model_id="/home/r403k/.cache/huggingface/hub/Qwen2-VL-2B-Instruct", train_only_vision_adapter=True)
     
     # Run training
-    trainer.train(dataset_path)
+    trainer.train()
