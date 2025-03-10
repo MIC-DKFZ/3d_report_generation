@@ -4,7 +4,7 @@ from pathlib import Path
 from utils import set_seed
 from tqdm import tqdm
 
-from metrics import BERTScore, RateScore, BleuScoreHF
+from metrics import BERTScore, RateScore, BleuScoreHF, GREENScore, ROUGEScore, METEORScore
 
 def get_scores_individual(input_data, eval_file):
 
@@ -16,16 +16,22 @@ def get_scores_individual(input_data, eval_file):
         rate_score = RateScore([pred], [gt])
         bleu_score = BleuScoreHF([pred], [gt])
         bert_score = BERTScore([pred], [gt])
+        green_score = GREENScore([pred], [gt])
+        rouge_score = ROUGEScore([pred], [gt])
+        meteor_score = METEORScore([pred], [gt])
         results.append(
             {
                 "prediction": pred,
                 "gt": gt,
                 'rate_score': rate_score[0],
                 "bleu_score_hf": bleu_score['bleu'],
-                "bert_score": bert_score['f1'][0]
+                "bert_score": bert_score['f1'][0],
+                "green_score": green_score,
+                "rouge_score": rouge_score['rougeLsum'],
+                "meteor_score": meteor_score['meteor']
             }
         )
-    
+
     if eval_file is not None:
         # save evaluation as JSON
         if not Path(eval_file).parent.is_dir():
@@ -41,6 +47,9 @@ def get_scores_avg(input_data, eval_file):
     rate_score = RateScore(pred, gt)
     bleu_score = BleuScoreHF(pred, gt)
     bert_score = BERTScore(pred, gt)
+    green_score = GREENScore(pred, gt)
+    rouge_score = ROUGEScore(pred, gt)
+    meteor_score = METEORScore(pred, gt)
 
     results = [
         {
@@ -49,6 +58,9 @@ def get_scores_avg(input_data, eval_file):
             'rate_score': sum(rate_score) / len(rate_score), # returns the list of scores, we need to take the mean
             "bleu_score_hf": bleu_score['bleu'], # returns the avg,
             "bert_score": sum(bert_score['f1']) / len(bert_score['f1']), # returns the list of scores, we need to take the mean
+            "green_score": green_score,
+            "rouge_score": rouge_score['rougeLsum'],
+            "meteor_score": meteor_score['meteor']
         }
     ]
 
@@ -63,7 +75,7 @@ def main(input_data, seed = 123):
     set_seed(seed)
     get_scores_individual(input_data=input_data, eval_file=Path('./Results/result_single.json'))
     get_scores_avg(input_data=input_data, eval_file=Path('./Results/result_avg.json'))
-    
+
 
 if __name__ == '__main__':
     pred_report = ['There are no intracranial hemorrhages.',
