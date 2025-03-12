@@ -4,18 +4,15 @@ import sys
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-import re
-import json
-import time
 import gc
-import torch
-import numpy as np
+import json
+import re
+import time
 from pathlib import Path
-from transformers import (
-    AutoConfig,
-    AutoModel,
-    AutoTokenizer,
-)
+
+import numpy as np
+import torch
+from transformers import AutoConfig, AutoModel, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
@@ -24,15 +21,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../../.."))
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../.."))
 
 
+from callbacks import PrintEvalBatchCallback, PrintFirstEvalBatchCallback
+
 # Import OwnOwlModel from plygrnd.py if it is in the same workspace.
 from model import OwnOwlModel  # ensure plygrnd.py is in PYTHONPATH
-from data.datasets import AMOSMMDataset, LIDCDataset
-from callbacks import PrintEvalBatchCallback
-
-
 from transformers import TrainerCallback, TrainerControl, TrainerState
 
 import wandb
+from data.datasets import AMOSMMDataset, LIDCDataset
 
 
 class VLMTrainer:
@@ -124,9 +120,13 @@ class VLMTrainer:
 
     def pad_inputs(self, input_ids_list, input_ids_list_prompt_only, media_offset_list):
         # Pad text inputs using the tokenizer.
-        padded = self.tokenizer.pad({"input_ids": input_ids_list}, return_tensors="pt", padding="do_not_pad")
+        padded = self.tokenizer.pad(
+            {"input_ids": input_ids_list}, return_tensors="pt", padding="do_not_pad"
+        )
         padded_prompt_only = self.tokenizer.pad(
-            {"input_ids": input_ids_list_prompt_only}, return_tensors="pt", padding="do_not_pad"
+            {"input_ids": input_ids_list_prompt_only},
+            return_tensors="pt",
+            padding="do_not_pad",
         )
         pad_shape = padded["input_ids"].shape
 
@@ -188,7 +188,9 @@ class VLMTrainer:
             model_inputs_prompt_only = sample["tokenized_qa_text_prompt_only_tokens"]
 
             input_ids_list.append(model_inputs["input_ids"].squeeze(0))
-            input_ids_list_prompt_only.append(model_inputs_prompt_only["input_ids"].squeeze(0))
+            input_ids_list_prompt_only.append(
+                model_inputs_prompt_only["input_ids"].squeeze(0)
+            )
             media_offset_list.append(model_inputs["media_offset"])
 
         images = torch.cat(image_tensors, dim=0)
@@ -258,7 +260,9 @@ class VLMTrainer:
         # Load dataset using the owl pipeline
         # train_dataset = self.load_owl_dataset(dataset_json_path, split="train")
 
-        tokenize_fn = lambda x: self.processor.encode_text_sft(self.processor.build_text_qwen(x))
+        tokenize_fn = lambda x: self.processor.encode_text_sft(
+            self.processor.build_text_qwen(x)
+        )
 
         train_dataset = AMOSMMDataset(
             dataset_json_path=dataset_json_path,
@@ -292,7 +296,9 @@ class VLMTrainer:
 
         # For demonstration purposes, take a subset of validation samples if needed.
         # val_dataset = self.load_owl_dataset(dataset_json_path, split="val")
-        print(f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples")
+        print(
+            f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
+        )
 
         training_args = self.get_training_args()
 
@@ -303,7 +309,11 @@ class VLMTrainer:
             eval_dataset=val_dataset,
             data_collator=self.collate_fn,
             tokenizer=self.tokenizer,
-            callbacks=[PrintEvalBatchCallback(tokenizer=self.tokenizer, processor=self.processor)],
+            callbacks=[
+                PrintEvalBatchCallback(
+                    tokenizer=self.tokenizer, processor=self.processor
+                )
+            ],
         )
 
         self.trainer.train()
