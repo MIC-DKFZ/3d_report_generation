@@ -110,3 +110,41 @@ def format_qwen_amos_region_question(embedding_path, region, findings):
             ],
         },
     ]
+
+
+@register_formatter("qwen_lidc_qa")
+def format_qwen_amos_qa_data(embedding_path, qa_pair):
+    """Format QA pair for training"""
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a medical imaging AI trained to answer questions about CT scans."
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "embedding_path": embedding_path,
+                },
+                {
+                    "type": "text",
+                    "text": f"{qa_pair['question']}"
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"{qa_pair['answer']}"
+                }
+            ],
+        },
+    ]
