@@ -213,7 +213,7 @@ def main():
                 continue
 
             try:
-                embeddings, affine = process_image_fct(img_path, model, config, device)
+                embeddings, affine = process_image_native_res(img_path, model, config, device)
 
                 # Print embedding information
                 print(f"Embedding shape: {embeddings.shape}")

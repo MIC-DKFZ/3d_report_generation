@@ -28,7 +28,7 @@ from transformers.models.qwen2_vl.modeling_qwen2_vl import ACT2FN
         super().__init__()
         self.adapter = VisionMlp(
             dim=embedding_dim,  # 864
-            hidden_dim=embed_dim,  # 1536 
+            hidden_dim=embed_dim,  # 1536
             hidden_act="quick_gelu"
         )
 '''
@@ -41,27 +41,27 @@ class VisionAdapter(nn.Module):
             nn.GELU(),
             nn.Linear(embed_dim, embed_dim),  # 1536 -> 1536
         )
-        
+
     def forward(self, x):
         # x shape: (batch_size, 864, sequence_length)
         # Need to output: (sequence_length, embed_dim)
-        
+
         # Transpose to get sequence_length as first dimension
         x = x.transpose(1, 2)  # -> (batch_size, sequence_length, 864)
-        
+
         # Reshape to process all sequences at once
         batch_size, seq_len, emb_dim = x.shape
         x = x.reshape(-1, emb_dim)  # -> (batch_size * sequence_length, 864)
-        
+
         # Apply adapter
         x = self.adapter(x)  # -> (batch_size * sequence_length, 1536)
-        
+
         # Reshape back
         x = x.reshape(batch_size * seq_len, -1)  # -> (batch_size * sequence_length, 1536)
-        
+
         return x
 
-    
+
 class VisionAdapterReduceBlocks(nn.Module):
     def __init__(self, embedding_dim: int, embed_dim: int, reduce_block: Tuple[int, int, int] = [2, 2, 2]):
         super().__init__()
@@ -71,30 +71,34 @@ class VisionAdapterReduceBlocks(nn.Module):
             QuickGELUActivation(),
             nn.Linear(5120, embed_dim),
         )
-        
-    def forward(self, x):        
+
+    def forward(self, x, video_grid_thw):
         # Convert input to float first
         x = x.to(torch.bfloat16)
-        
+
         # Input shape is (batch_size, embedding_dim, sequence_length)
         batch_size, embedding_dim, seq_length = x.shape
-        
+
         # E.g for 13824 video tokens, reshape to 24x24x24
+        # TODO: instead of + 1 use np.round and then int
         cube_size = int(seq_length ** (1/3)) + 1
-        x = x.reshape(batch_size, embedding_dim, cube_size, cube_size, cube_size)
-        
+        # x = x.reshape(batch_size, embedding_dim, cube_size, cube_size, cube_size)
+        # x = torch.randn(batch_size, embedding_dim, cube_size, cube_size, cube_size, device=x.device, dtype=x.dtype)
+        # TODO how to handle cases where each image has different size i.e. video_grid_thw has size (B, 3) and this only works for B==1?
+        x = x.reshape(batch_size, embedding_dim, *video_grid_thw[0])
+
         # Use unfold to create reduce_block
         x = x.unfold(2, self.reduce_block[0], self.reduce_block[0])
         x = x.unfold(3, self.reduce_block[1], self.reduce_block[1])
         x = x.unfold(4, self.reduce_block[2], self.reduce_block[2])
-       
+
         # Reshape to combine all reduce_block
         x = x.permute(0, 2, 3, 4, 1, 5, 6, 7)  # Move embedding_dim after spatial dims
         x = x.reshape(batch_size, -1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
-       
+
         # Process through adapter
         x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
-        x = self.adapter(x)    
+        x = self.adapter(x)
 
         return x
 
@@ -104,7 +108,8 @@ from transformers.utils import add_start_docstrings_to_model_forward, replace_re
 class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
     def __init__(self, config, reduce_block = [2, 2, 2]):
             super().__init__(config)
-            
+
+            self.reduce_block = reduce_block
             self.vision_adapter = VisionAdapterReduceBlocks(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
 
     @add_start_docstrings_to_model_forward(QWEN2_VL_INPUTS_DOCSTRING)
@@ -198,8 +203,8 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
                 #pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
                 #video_embeds = self.vision_adapter(pixel_values_videos) # The only line that has changed so far (and the added adapter above)
                 pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
-                video_embeds = self.vision_adapter(pixel_values_videos)
-                
+                video_embeds = self.vision_adapter(pixel_values_videos, video_grid_thw)
+
                 n_video_tokens = (input_ids == self.config.video_token_id).sum().item()
                 n_video_features = video_embeds.shape[0]
                 if n_video_tokens != n_video_features:
@@ -226,6 +231,9 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
                 or self.rope_deltas is None
                 or (past_key_values is None or past_key_values.get_seq_length() == 0)
             ):
+                for video in video_grid_thw:
+                    # Since we use the time dimension as spatial dimension we have to apply the reduce factor already here since it is not done in the rope function below
+                    video[0] = torch.floor_divide(video[0], self.reduce_block[0])
                 position_ids, rope_deltas = self.get_rope_index(
                     input_ids, image_grid_thw, video_grid_thw, attention_mask
                 )

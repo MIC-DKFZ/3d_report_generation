@@ -105,3 +105,11 @@ def format_owl_amos_region_question(region_data, embedding_path=None):
     return create_qa_conversations(
         region_data["system_text"], user_message, region_data["full_answer"], region_data["minimal_answer"]
     )
+
+
+@register_formatter("qwen_lidc_qa")
+def format_qwen_lidc_qa_data(embedding_path, qa_pair):
+    """Format QA pair for training using pre-generated texts"""
+    system_text = "You are a medical imaging AI trained to answer questions about CT scans."
+    user_message = build_user_message_qwen(qa_pair["question"], embedding_path)
+    return create_qa_conversations(system_text, user_message, qa_pair["answer"])
