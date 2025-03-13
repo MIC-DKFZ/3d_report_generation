@@ -44,17 +44,15 @@ def build_assistant_message(text: str) -> Dict:
     return {"role": "assistant", "content": [{"type": "text", "text": text}]}
 
 
-def create_qa_conversations(
-    system_text: str, user_message: Dict, full_answer: str, minimal_answer: str = "The answer is"
-) -> Tuple[List[Dict], List[Dict]]:
-    """Create full and minimal conversations from components"""
+def create_qa_conversations(system_text: str, user_message: Dict, full_answer: str) -> Tuple[List[Dict], List[Dict]]:
+    """Create full and prompt_only conversations from components"""
     system_message = build_system_message(system_text)
 
     full_conversation = [system_message, user_message, build_assistant_message(full_answer)]
 
-    minimal_conversation = [system_message, user_message]
+    prompt_only_conversation = [system_message, user_message]
 
-    return full_conversation, minimal_conversation
+    return full_conversation, prompt_only_conversation
 
 
 @register_formatter("qwen_amos_qa")
@@ -63,9 +61,7 @@ def format_qwen_amos_qa_data(qa_data, embedding_path):
     # Build user message (Qwen style)
     user_message = build_user_message_qwen(qa_data["user_text"], embedding_path)
 
-    return create_qa_conversations(
-        qa_data["system_text"], user_message, qa_data["full_answer"], qa_data["minimal_answer"]
-    )
+    return create_qa_conversations(qa_data["system_text"], user_message, qa_data["full_answer"])
 
 
 @register_formatter("owl_amos_qa")
@@ -74,9 +70,7 @@ def format_owl_amos_qa_data(qa_data, embedding_path=None):
     # Build user message (Owl style)
     user_message = build_user_message_owl(qa_data["user_text"])
 
-    return create_qa_conversations(
-        qa_data["system_text"], user_message, qa_data["full_answer"], qa_data["minimal_answer"]
-    )
+    return create_qa_conversations(qa_data["system_text"], user_message, qa_data["full_answer"])
 
 
 @register_formatter("qwen_amos_regions")
@@ -88,9 +82,7 @@ def format_qwen_amos_region_question(region_data, embedding_path):
     # Build user message (Qwen style)
     user_message = build_user_message_qwen(region_data["user_text"], embedding_path)
 
-    return create_qa_conversations(
-        region_data["system_text"], user_message, region_data["full_answer"], region_data["minimal_answer"]
-    )
+    return create_qa_conversations(region_data["system_text"], user_message, region_data["full_answer"])
 
 
 @register_formatter("owl_amos_regions")
@@ -102,14 +94,20 @@ def format_owl_amos_region_question(region_data, embedding_path=None):
     # Build user message (Owl style)
     user_message = build_user_message_owl(region_data["user_text"])
 
-    return create_qa_conversations(
-        region_data["system_text"], user_message, region_data["full_answer"], region_data["minimal_answer"]
-    )
+    return create_qa_conversations(region_data["system_text"], user_message, region_data["full_answer"])
 
 
 @register_formatter("qwen_lidc_qa")
-def format_qwen_lidc_qa_data(embedding_path, qa_pair):
+def format_qwen_lidc_qa_data(qa_pair, embedding_path=None):
     """Format QA pair for training using pre-generated texts"""
     system_text = "You are a medical imaging AI trained to answer questions about CT scans."
     user_message = build_user_message_qwen(qa_pair["question"], embedding_path)
+    return create_qa_conversations(system_text, user_message, qa_pair["answer"])
+
+
+@register_formatter("owl_lidc_qa")
+def format_owl_lidc_qa_data(qa_pair, embedding_path=None):
+    """Format QA pair for training using pre-generated texts"""
+    system_text = "You are a medical imaging AI trained to answer questions about CT scans."
+    user_message = build_user_message_owl(qa_pair["question"])
     return create_qa_conversations(system_text, user_message, qa_pair["answer"])

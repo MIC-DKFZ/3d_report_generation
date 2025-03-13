@@ -1,42 +1,119 @@
 import json
 import os
 from pathlib import Path
+from abc import ABC, abstractmethod
 
 import numpy as np
 from torch.utils.data import Dataset
-from data.extractors import AMOSMMExtractor
+from data.extractors import AMOSMMExtractor, LIDCExtractor
 from data.formatters import get_formatter
 
-SSL_MODEL_NAME = "EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres"
 
-
-class AMOSMMDataset(Dataset):
+class MedicalImageDataset(Dataset, ABC):
     """
-    AMOS-MM dataset class
+    Base class for medical imaging datasets with vision-language models
+
     Args:
-        dataset_json_path (str): Path to the dataset JSON file
-        model_name (str): Name of the vlm the dataset is used for. Used to infere the formatter for the questions
-        split (str): Split name ('train' or 'val')
+        dataset_json_path (str): Path to the dataset JSON file or directory
+        model_name (str): Name of the VLM the dataset is used for
+        split (str): Split name ('train', 'val' or 'test')
         embeddings_path (str | Path): Root path to the vision embeddings directory
+        n_samples (int, optional): Number of samples to load (for debugging)
     """
 
     def __init__(self, dataset_json_path, model_name, split="train", embeddings_path=None, n_samples=None):
-        super(AMOSMMDataset).__init__()
+        super().__init__()
 
         if embeddings_path is None:
             embeddings_path = os.environ.get("ROCKET_VLM_VISION_EMBEDDINGS")
 
-        self.format_region_question = get_formatter(f"{model_name}_amos_regions")
-        self.format_qa_data = get_formatter(f"{model_name}_amos_qa")
-
+        self.model_name = model_name
         self.split = split
-        self.embeddings_path = embeddings_path
-
-        with open(dataset_json_path, "r") as f:
-            self.data = json.load(f)
-
+        self.embeddings_path = Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
         self.n_samples = n_samples
+
+        # Load and process data
+        self.data = self._load_data(dataset_json_path)
+        self._init_formatters()
         self.samples = self.format_data()
+
+    @abstractmethod
+    def _load_data(self, dataset_json_path):
+        """Load data from JSON file(s)"""
+        pass
+
+    @abstractmethod
+    def _init_formatters(self):
+        """Initialize formatters based on model name"""
+        pass
+
+    @abstractmethod
+    def format_data(self):
+        """Format raw data into structured samples"""
+        pass
+
+    @abstractmethod
+    def get_embedding_path(self, identifier):
+        """Convert image identifier to embedding path"""
+        pass
+
+    @abstractmethod
+    def verify(self):
+        """Test function to verify dataset loading"""
+        pass
+
+    def _load_embedding(self, embedding_path):
+        """Load embedding from file"""
+        if embedding_path.endswith(".npy"):
+            return np.load(embedding_path)
+        elif embedding_path.endswith(".npz"):
+            npz_file = np.load(embedding_path)
+            # Attempt to load the "embeddings" key if it exists, otherwise load the first array
+            if "embedding" in npz_file:
+                return npz_file["embeddings"]
+            else:
+                return npz_file[npz_file.files[0]]
+        else:
+            raise ValueError(f"Unsupported embedding file format: {embedding_path}")
+
+    def __getitem__(self, index):
+        sample = self.samples[index]
+
+        # Create a new dictionary instead of modifying the stored one
+        result = dict(sample)
+        result["embedding"] = self._load_embedding(sample["embedding_path"])
+
+        return result
+
+    def __len__(self):
+        return len(self.samples)
+
+
+class AMOSMMDataset(MedicalImageDataset):
+    """
+    AMOS-MM dataset class
+
+    Args:
+        dataset_json_path (str): Path to the dataset JSON file
+        model_name (str): Name of the VLM the dataset is used for
+        split (str): Split name ('train' or 'val')
+        embeddings_path (str | Path): Root path to the vision embeddings directory
+        n_samples (int, optional): Number of samples to load (for debugging)
+    """
+
+    def _load_data(self, dataset_json_path):
+        json_file_path = os.path.join(dataset_json_path, "dataset.json")
+        with open(json_file_path, "r") as f:
+            return json.load(f)
+
+    def _init_formatters(self):
+        self.format_region_question = get_formatter(f"{self.model_name}_amos_regions")
+        self.format_qa_data = get_formatter(f"{self.model_name}_amos_qa")
+
+    def get_embedding_path(self, image_path):
+        """Convert image path to embedding path"""
+        base_name = image_path.replace(".nii.gz", "")
+        return str(os.path.join(self.embeddings_path, f"{base_name}_embedding.npy"))
 
     def format_data(self):
         if self.split == "train":
@@ -45,6 +122,7 @@ class AMOSMMDataset(Dataset):
             samples = self.data["validation"]
         else:
             raise ValueError(f"Invalid split name {self.split}")
+
         formatted_data = []
 
         if self.n_samples:
@@ -56,7 +134,6 @@ class AMOSMMDataset(Dataset):
             # Skip if embedding file doesn't exist
             if not os.path.exists(embedding_path):
                 continue
-                # raise FileNotFoundError(f"Embedding file not found: {embedding_path}")
 
             # Use extractor to get all structured data
             extracted_data = AMOSMMExtractor.extract_sample(sample)
@@ -98,11 +175,6 @@ class AMOSMMDataset(Dataset):
 
         return formatted_data
 
-    def get_embedding_path(self, image_path):
-        """Convert image path to embedding path"""
-        base_name = image_path.replace(".nii.gz", "")
-        return str(self.embeddings_path / f"{base_name}_embedding.npy")
-
     def verify(self):
         """Test function to verify dataset loading"""
         print(f"\nTotal number of samples: {len(self)}")
@@ -110,77 +182,45 @@ class AMOSMMDataset(Dataset):
         # Print example of region-specific question
         print("\nExample of region question:")
         for sample in self.samples:
-            if "do you see" in sample[1]["content"][1]["text"]:
-                print(f"Question: {sample[1]['content'][1]['text']}")
-                print(f"Answer: {sample[2]['content'][0]['text']}")
+            if "do you see" in sample["qa_text"][0]:
+                print(f"Question: {sample['qa_text'][0]}")
                 break
 
         # Print example of original QA
         print("\nExample of original QA:")
         for sample in self.samples:
-            if "The answer is" in sample[2]["content"][0]["text"]:
-                print(f"Question: {sample[1]['content'][1]['text']}")
-                print(f"Answer: {sample[2]['content'][0]['text']}")
+            if "The answer is" in sample["qa_text"][0]:
+                print(f"Question: {sample['qa_text'][0]}")
                 break
 
-    def __getitem__(self, index):
-        sample = self.samples[index]
 
-        # Create a new dictionary instead of modifying the stored one
-        result = dict(sample)
-
-        if sample["embedding_path"].endswith(".npy"):
-            result["embedding"] = np.load(sample["embedding_path"])
-        elif sample["embedding_path"].endswith(".npz"):
-            npz_file = np.load(sample["embedding_path"])
-            # Attempt to load the "embeddings" key if it exists, otherwise load the first array in the file
-            if "embedding" in npz_file:
-                result["embedding"] = npz_file["embeddings"]
-            else:
-                result["embedding"] = npz_file[npz_file.files[0]]
-        else:
-            raise ValueError(f"Unsupported embedding file format: {sample['embedding_path']}")
-        return result
-
-    def __len__(self):
-        return len(self.samples)
-
-
-class LIDCDataset(Dataset):
+class LIDCDataset(MedicalImageDataset):
     """
     LIDC dataset class
+
     Args:
-        dataset_json_path (str): Path where the dataset jsons are located.
-            Should contain train_questions.json, val_questions.json, and test_questions.json
-        model_name (str): Name of the vlm the dataset is used for. Used to infere the formatter for the questions
+        dataset_json_path (str): Path where the dataset jsons are located
+        model_name (str): Name of the VLM the dataset is used for
         split (str): Split name ('train', 'val', or 'test')
         embeddings_path (str | Path): Path to the vision embeddings directory
+        n_samples (int, optional): Number of samples to load (for debugging)
     """
 
-    def __init__(
-        self,
-        dataset_json_path,
-        model_name,
-        split="train",
-        embeddings_path=Path(os.getenv("ROCKET_VLM_VISION_EMBEDDINGS")),
-    ):
-        super(LIDCDataset).__init__()
-        self.format_qa_data = get_formatter(f"{model_name}_lidc_qa")
-        self.split = split
+    def _load_data(self, dataset_json_path):
         if self.split == "train":
-            dataset_json_path = os.path.join(dataset_json_path, "train_questions.json")
+            file_path = os.path.join(dataset_json_path, "train_questions.json")
         elif self.split == "val":
-            dataset_json_path = os.path.join(dataset_json_path, "val_questions.json")
+            file_path = os.path.join(dataset_json_path, "val_questions.json")
         elif self.split == "test":
-            dataset_json_path = os.path.join(dataset_json_path, "test_questions.json")
+            file_path = os.path.join(dataset_json_path, "test_questions.json")
         else:
             raise ValueError(f"Invalid split name {self.split}")
-        with open(dataset_json_path, "r") as f:
-            self.data = json.load(f)
-        self.embeddings_path = Path(embeddings_path) / "LIDC-IDRI" / "192_sliding_window" / SSL_MODEL_NAME / "npz"
-        print(self.embeddings_path)
-        print(self.embeddings_path.exists())
-        self.samples = self.format_data()
+
+        with open(file_path, "r") as f:
+            return json.load(f)
+
+    def _init_formatters(self):
+        self.format_qa_data = get_formatter(f"{self.model_name}_lidc_qa")
 
     def get_embedding_path(self, series_uid):
         """Convert image path to embedding path"""
@@ -189,29 +229,45 @@ class LIDCDataset(Dataset):
 
     def format_data(self):
         formatted_data = []
-        for sample in self.data:
+        samples = self.data
+
+        if self.n_samples:
+            samples = samples[: self.n_samples]
+
+        for sample in samples:
             embedding_path = self.get_embedding_path(sample["series_uid"])
 
             # Skip if embedding file doesn't exist
             if not os.path.exists(embedding_path):
                 continue
-                # raise FileNotFoundError(f"Embedding file not found: {embedding_path}")
+
+            # Extract data using the LIDCExtractor
+            extracted_data = LIDCExtractor.extract_sample(sample)
 
             # Format QA pairs
-            formatted_qa = self.format_qa_data(embedding_path, sample)
-            formatted_data.append(formatted_qa)
+            formatted_qa, formatted_qa_prompt_only = self.format_qa_data(extracted_data["item_qa"], embedding_path)
+
+            item = {
+                "series_uid": extracted_data["series_uid"],
+                "subject_id": extracted_data["subject_id"],
+                "scan_id": extracted_data["scan_id"],
+                "study_uid": extracted_data["study_uid"],
+                "embedding_path": embedding_path,
+                "embedding": None,
+                "qa_text": [formatted_qa],
+                "qa_text_prompt_only": [formatted_qa_prompt_only],
+                "item_qa": extracted_data["item_qa"],
+            }
+
+            formatted_data.append(item)
+
         return formatted_data
 
     def verify(self):
         """Test function to verify dataset loading"""
         print(f"\nTotal number of samples: {len(self)}")
-
-        # Print example of region-specific question
         print("\nExample question:")
-        print(self.samples[0])
-
-    def __getitem__(self, index):
-        return self.samples[index]
-
-    def __len__(self):
-        return len(self.samples)
+        if len(self.samples) > 0:
+            sample = self.samples[0]
+            print(f"Series UID: {sample['series_uid']}")
+            print(f"Question: {sample['qa_text'][0]}")

@@ -19,19 +19,18 @@ class AMOSMMExtractor:
         # Generate formatted texts
         user_text = f"{qa_pair['question']}\n\n{options_text}"
         full_answer = f"The answer is {qa_pair['answer']}. {correct_option_text}. {reasoning}"
-        minimal_answer = "The answer is"
 
         return {
             "question": qa_pair["question"],
             "options": qa_pair["options"],
             "answer": qa_pair["answer"],
+            "answer_type": "CHOICE",
             "reasoning": reasoning,
             "correct_option_text": correct_option_text,
             "options_text": options_text,
             # Formatted texts
             "user_text": user_text,
             "full_answer": full_answer,
-            "minimal_answer": minimal_answer,
             "system_text": "You are a medical imaging AI trained to answer questions about CT scans.",
         }
 
@@ -46,9 +45,9 @@ class AMOSMMExtractor:
         return {
             "region": region,
             "findings": findings,
+            "answer_type": "OPEN",
             "user_text": f"What do you see in the {region} region of this CT scan?",
             "full_answer": findings,
-            "minimal_answer": "",
             "system_text": "You are a medical imaging AI trained to analyze CT scans.",
         }
 
@@ -94,3 +93,65 @@ class AMOSMMExtractor:
                     extracted["qa_items"].append(AMOSMMExtractor.extract_qa(qa_pair))
 
         return extracted
+
+
+class LIDCExtractor:
+    """
+    Extractor for LIDC dataset that separates data extraction from formatting.
+    """
+
+    @staticmethod
+    def extract_qa(qa_item: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract all information from a LIDC QA pair.
+        """
+        # Basic information from the sample
+        extracted = {
+            "question": qa_item["question"],
+            "answer": qa_item["answer"],
+            "content_type": qa_item["content_type"],
+            "answer_type": qa_item["answer_type"],
+            "scan_id": qa_item["scan_id"],
+            "series_uid": qa_item["series_uid"],
+            "subject_id": qa_item["subject_id"],
+            "study_uid": qa_item["study_uid"],
+        }
+
+        # Generate formatted texts
+        user_text = qa_item["question"]
+
+        # Format the answer based on type
+        if isinstance(qa_item["answer"], int):
+            # For numerical answers (like count questions)
+            full_answer = str(qa_item["answer"])
+        else:
+            # For text answers
+            full_answer = qa_item["answer"]
+
+        # Add formatted texts
+        extracted.update(
+            {
+                "user_text": user_text,
+                "full_answer": full_answer,
+                "system_text": "You are a medical imaging AI trained to analyze lung CT scans and identify nodule characteristics.",
+            }
+        )
+
+        return extracted
+
+    @staticmethod
+    def extract_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract all relevant information from a LIDC sample.
+        Since LIDC samples are already QA pairs, this mostly wraps extract_qa.
+        """
+        extracted_qa = LIDCExtractor.extract_qa(sample)
+
+        # Structure it similar to the AMOS extractor's output format
+        return {
+            "series_uid": sample["series_uid"],
+            "subject_id": sample["subject_id"],
+            "scan_id": sample["scan_id"],
+            "study_uid": sample["study_uid"],
+            "item_qa": extracted_qa,
+        }
