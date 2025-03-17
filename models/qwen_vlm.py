@@ -12,9 +12,8 @@ from qwenvl.Qwen3D import Qwen2VLForConditionalGeneration3D
 
 class QwenVLModel(AbstractVLMModel):
     def __init__(self, model_id, output_dir="qwen2-vlm", train_only_vision_adapter=False):
-        super().__init__(model_id)
+        super().__init__(model_id, train_only_vision_adapter)
         self.output_dir = output_dir
-        self.train_only_vision_adapter = train_only_vision_adapter
         self.batch_count = 0
 
     def setup_model(self, bnb_config=None):

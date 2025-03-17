@@ -3,6 +3,8 @@ import gc
 import os
 import random
 import time
+import json
+import yaml
 from pathlib import Path
 
 import torch
@@ -19,7 +21,7 @@ from models.qwen_vlm import QwenVLModel
 
 
 class UnifiedVLMTrainer:
-    def __init__(self, vlm_model, output_dir="vlm_output"):
+    def __init__(self, vlm_model, output_dir="vlm_output", config_file_path: str = None, sft_trainer_config: dict = None):
         """
         Initialize the unified VLM trainer.
 
@@ -30,6 +32,8 @@ class UnifiedVLMTrainer:
         self.vlm_model = vlm_model
         self.output_dir = output_dir
         self.trainer = None
+        self.config_file_path = config_file_path
+        self.sft_trainer_config = sft_trainer_config
 
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -38,31 +42,9 @@ class UnifiedVLMTrainer:
         """Configure standard training arguments"""
         base_args = {
             "output_dir": self.output_dir,
-            "num_train_epochs": 3,
-            "per_device_train_batch_size": 1,
-            "per_device_eval_batch_size": 1,
-            "gradient_accumulation_steps": 8,
-            "gradient_checkpointing": True,
-            "optim": "adamw_torch_fused",
-            "learning_rate": 2e-4,
-            "lr_scheduler_type": "constant",
-            "logging_steps": 10,
-            "eval_steps": 50,
-            "eval_strategy": "steps",
-            "save_strategy": "steps",
-            "save_steps": 50,
-            "save_total_limit": 2,
-            "metric_for_best_model": "eval_loss",
-            "greater_is_better": False,
-            "load_best_model_at_end": True,
-            "max_grad_norm": 0.3,
-            "warmup_ratio": 0.03,
-            "gradient_checkpointing_kwargs": {"use_reentrant": False},
-            "dataset_kwargs": {"skip_prepare_dataset": True},
-            "remove_unused_columns": False,
-            "report_to": ["wandb"],
             "run_name": f"{type(self.vlm_model).__name__}_training",
         }
+        base_args.update(self.sft_trainer_config)
 
         # Add model-specific arguments
         model_args = self.vlm_model.get_model_specific_training_args()
@@ -146,60 +128,131 @@ class UnifiedVLMTrainer:
         wandb.finish()
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Train a Vision Language Model")
-    parser.add_argument(
+def parse_args(default_config=None):
+    if default_config is None:
+        default_config = {}
+    general_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
+    general_parser.add_argument(
         "--model_type",
         type=str,
         choices=["owl", "qwen"],
         required=True,
         help="Type of VLM model to train (owl or qwen)",
     )
-    parser.add_argument("--model_id", type=str, required=True, help="Model ID or path")
-    parser.add_argument("--dataset_path", type=str, required=True, help="Path to the dataset JSON file")
-    parser.add_argument("--output_dir", type=str, default="vlm_output", help="Directory to save model outputs")
-    parser.add_argument("--embeddings_path", type=str, required=True, help="Path to the vision embeddings")
-    parser.add_argument(
+    general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
+    general_parser.add_argument("--dataset_path", type=str, required=True, help="Path to the dataset JSON file")
+    general_parser.add_argument("--output_dir", type=str, default="vlm_output", help="Directory to save model outputs")
+    general_parser.add_argument("--embeddings_path", type=str, required=True, help="Path to the vision embeddings")
+    general_parser.add_argument(
         "--train_only_vision_adapter", action="store_true", help="Train only the vision adapter (Qwen only)"
     )
-    return parser.parse_args()
+    general_parser.add_argument('--train_config', type=str, help='Path to config file (YAML or JSON)')
+
+    # First parse just the config argument to load the file
+    general_args, _ = general_parser.parse_known_args()
+
+    sft_trainer_parser = argparse.ArgumentParser(description="SFTTrainer args which overwrite the train_config file.")
+
+    # Load config file if provided
+    if general_args.train_config and os.path.exists(general_args.train_config):
+        file_ext = os.path.splitext(general_args.train_config)[1].lower()
+        with open(general_args.train_config, 'r') as file:
+            if file_ext == '.yaml' or file_ext == '.yml':
+                file_config = yaml.safe_load(file)
+            elif file_ext == '.json':
+                file_config = json.load(file)
+            else:
+                raise ValueError(f"Unsupported config file format: {file_ext}")
+
+            # Update config with values from file
+            default_config.update(file_config)
+
+    # Add arguments for each config value with the default from config
+    for key, value in default_config.items():
+        arg_type = type(value)
+        if arg_type == bool:
+            # Handle boolean values with store_true/store_false
+            if value:
+                sft_trainer_parser.add_argument(f'--no-{key}', action='store_false', dest=key,
+                                    help=f'Disable {key} (default: enabled)')
+            else:
+                sft_trainer_parser.add_argument(f'--{key}', action='store_true',
+                                    help=f'Enable {key} (default: disabled)')
+        else:
+            sft_trainer_parser.add_argument(f'--{key}', type=arg_type, default=value,
+                                help=f'Set {key} (default: {value})')
+
+    sft_trainer_parsed, _ = sft_trainer_parser.parse_known_args()
+    return general_args, sft_trainer_parsed
 
 
 def main():
-    args = parse_args()
+    default_sft_trainer_config = {
+        "num_train_epochs": 3,
+        "per_device_train_batch_size": 1,
+        "per_device_eval_batch_size": 1,
+        "gradient_accumulation_steps": 8,
+        "gradient_checkpointing": True,
+        "optim": "adamw_torch_fused",
+        "learning_rate": 2e-4,
+        "lr_scheduler_type": "constant",
+        "logging_steps": 10,
+        "eval_steps": 50,
+        "eval_strategy": "steps",
+        "save_strategy": "steps",
+        "save_steps": 50,
+        "save_total_limit": 2,
+        "metric_for_best_model": "eval_loss",
+        "greater_is_better": False,
+        "load_best_model_at_end": True,
+        "max_grad_norm": 0.3,
+        "warmup_ratio": 0.03,
+        "gradient_checkpointing_kwargs": {"use_reentrant": False},
+        "dataset_kwargs": {"skip_prepare_dataset": True},
+        "remove_unused_columns": False,
+        "report_to": ["wandb"],
+    }
+    general_args, sft_trainer_args = parse_args(default_sft_trainer_config)
+    if general_args.model_id is None:
+        if general_args.model_type == "owl":
+            general_args.model_id = "mPLUG/mPLUG-Owl3-1B-241014"
+        elif general_args.model_type == "qwen":
+            general_args.model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
     # Create the appropriate VLM model based on model_type
-    if args.model_type == "owl":
-        vlm_model = OwlVLModel(model_id=args.model_id, output_dir=args.output_dir)
-    elif args.model_type == "qwen":
-        vlm_model = QwenVLModel(
-            model_id=args.model_id,
-            output_dir=args.output_dir,
-            train_only_vision_adapter=args.train_only_vision_adapter,
-        )
+    if general_args.model_type == "owl":
+        vlm_model_class = OwlVLModel
+    elif general_args.model_type == "qwen":
+        vlm_model_class = QwenVLModel
     else:
-        raise ValueError(f"Unknown model type: {args.model_type}")
+        raise ValueError(f"Unknown model type: {general_args.model_type}")
+
+    vlm_model = vlm_model_class(
+        model_id=general_args.model_id,
+        output_dir=general_args.output_dir,
+        train_only_vision_adapter=general_args.train_only_vision_adapter,
+    )
 
     # Create datasets
     train_dataset = AMOSMMDataset(
-        dataset_json_path=args.dataset_path,
-        model_name=args.model_type,
+        dataset_json_path=general_args.dataset_path,
+        model_name=general_args.model_type,
         split="train",
-        embeddings_path=args.embeddings_path,
+        embeddings_path=general_args.embeddings_path,
     )
 
     val_dataset = AMOSMMDataset(
-        dataset_json_path=args.dataset_path,
-        model_name=args.model_type,
+        dataset_json_path=general_args.dataset_path,
+        model_name=general_args.model_type,
         split="val",
-        embeddings_path=args.embeddings_path,
+        embeddings_path=general_args.embeddings_path,
         n_samples=50,  # Limit the validation set size
     )
 
     print(f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples")
 
     # Create the trainer and train the model
-    trainer = UnifiedVLMTrainer(vlm_model, output_dir=args.output_dir)
+    trainer = UnifiedVLMTrainer(vlm_model, output_dir=general_args.output_dir, sft_trainer_config = vars(sft_trainer_args))
     trainer.train(train_dataset, val_dataset)
 
 

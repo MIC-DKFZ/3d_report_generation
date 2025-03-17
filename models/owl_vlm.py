@@ -9,8 +9,8 @@ from owl.model import OwnOwlModel
 
 
 class OwlVLModel(AbstractVLMModel):
-    def __init__(self, model_id, output_dir="owl-vlm", vision_dim=864, embed_dim=896):
-        super().__init__(model_id)
+    def __init__(self, model_id, train_only_vision_adapter: bool, output_dir="owl-vlm", vision_dim=864, embed_dim=896):
+        super().__init__(model_id, train_only_vision_adapter)
         self.output_dir = output_dir
         self.vision_dim = vision_dim
         self.embed_dim = embed_dim
@@ -66,7 +66,7 @@ class OwlVLModel(AbstractVLMModel):
     def _set_trainable_params(self):
         """Set which parameters are trainable for the Owl model"""
 
-        if self.self.train_only_vision_adapter:
+        if self.train_only_vision_adapter:
 
             # Freeze all parameters first
             for param in self.model.parameters():
