@@ -65,20 +65,23 @@ class OwlVLModel(AbstractVLMModel):
 
     def _set_trainable_params(self):
         """Set which parameters are trainable for the Owl model"""
-        # Freeze all parameters first
-        for param in self.model.parameters():
-            param.requires_grad = False
 
-        # Unfreeze only the vision2text_model parameters
-        for param in self.model.vision2text_model.parameters():
-            param.requires_grad = True
+        if self.self.train_only_vision_adapter:
 
-        # Optionally unfreeze HyperQwen2DecoderLayer parameters
-        for m_module in self.model.modules():
-            if "HyperQwen2DecoderLayer" in str(m_module.__class__):
-                if m_module.is_hyper_enabled:
-                    for param in m_module.self_attn.parameters():
-                        param.requires_grad = True
+            # Freeze all parameters first
+            for param in self.model.parameters():
+                param.requires_grad = False
+
+            # Unfreeze only the vision2text_model parameters
+            for param in self.model.vision2text_model.parameters():
+                param.requires_grad = True
+
+            # Optionally unfreeze HyperQwen2DecoderLayer parameters
+            for m_module in self.model.modules():
+                if "HyperQwen2DecoderLayer" in str(m_module.__class__):
+                    if m_module.is_hyper_enabled:
+                        for param in m_module.self_attn.parameters():
+                            param.requires_grad = True
 
         # Print trainable parameters summary
         total_params = sum(p.numel() for p in self.model.parameters())
