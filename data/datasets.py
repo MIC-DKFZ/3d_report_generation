@@ -9,6 +9,8 @@ from torch.utils.data import Dataset
 from data.extractors import AMOSMMExtractor, LIDCExtractor
 from data.formatters import get_formatter
 
+SSL_MODEL_NAME = "EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres"
+IMAGE_EMBEDDING_METHOD = "192_sliding_window"
 
 class MedicalImageDataset(Dataset, ABC):
     """
