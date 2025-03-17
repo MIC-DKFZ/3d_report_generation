@@ -1,7 +1,10 @@
 import os
+import random
+import sys
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+import re
 import json
 import time
 import gc
@@ -15,85 +18,21 @@ from transformers import (
 )
 from trl import SFTConfig, SFTTrainer
 
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../.."))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../../.."))
+
+
 # Import OwnOwlModel from plygrnd.py if it is in the same workspace.
 from model import OwnOwlModel  # ensure plygrnd.py is in PYTHONPATH
+from data.datasets import AMOSMMDataset, LIDCDataset
+from callbacks import PrintFirstEvalBatchCallback
 
 
 from transformers import TrainerCallback, TrainerControl, TrainerState
 
 import wandb
-
-
-class PrintFirstEvalBatchCallback(TrainerCallback):
-    def __init__(self, tokenizer=None, processor=None):
-        self.tokenizer = tokenizer
-        self.printed = False
-        self.sample_count = 2
-
-        messages = [
-            {
-                "role": "user",
-                "content": """<|image|>\n Describe this image.""",
-            },
-            {"role": "assistant", "content": "chest:"},
-        ]
-
-        # model_inputs = processor(messages, images=[image], videos=None, cut_enable=True)
-
-        text = processor.build_text_qwen(messages)
-        self.model_inputs = processor.encode_text_sft(text)
-
-    # def on_prediction_step(self, args, state: TrainerState, control: TrainerControl, **kwargs):
-    #     # The first time on_prediction_step is called during evaluation,
-    #     # print the outputs (if available)
-    #     if not self.printed:
-    #         outputs = kwargs.get("outputs", None)
-    #         if outputs is not None:
-    #             print("First evaluation batch outputs:", outputs)
-    #         else:
-    #             print("First evaluation batch reached (no outputs available)")
-    #         self.printed = True
-    #     return control
-
-    def on_evaluate(self, args, state, control, model=None, eval_dataloader=None, metrics=None, **kwargs):
-        print(f"Output samples from validation dataset after epoch 1:")
-        # if state.epoch * 100 % 10 == 0:
-        print(f"Epoch {state.epoch} reached")
-        model.eval()  # Ensure model is in evaluation mode
-        with torch.no_grad():  # Disable gradient calculations
-            for i, inputs in enumerate(eval_dataloader):
-                if i >= self.sample_count:  # Limit the number of samples to print
-                    break
-
-                image_embeds = inputs["image_embeds"].to(args.device)
-                image_lin = model.vision2text_model(image_embeds)
-
-                new_input = inputs["input_ids"][:, :23]
-                new_media_offset = inputs["media_offset"][:, :23]
-
-                outputs = model.language_model.generate(
-                    input_ids=new_input.to(args.device),
-                    image_embeds=image_lin,
-                    # attention_mask=inputs["attention_mask"].to(args.device),
-                    media_offset=new_media_offset.to(args.device),
-                    max_new_tokens=350,  # Adjust max_new_tokens as needed
-                )
-
-                # xd = model.language_model.forward(input_ids=input_ids)
-
-                # Decode input and generated output
-                # decoded_input = self.tokenizer.batch_decode(new_input, skip_special_tokens=True)
-                decoded_output = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-                print(decoded_output)
-
-                # print(f"\nSample {i+1}:")
-                # print(f"  Input:     {decoded_input[0]}")  # Print the first item in the batch
-                # print(f"  Generated: {decoded_output[0]}")  # Print the first item in the batch
-                # # If you have labels and want to compare:
-                # decoded_label = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
-                # print(f"  Label:     {decoded_label[0]}")
-
-            model.train()  # Ensure model is back in training mode
 
 
 class VLMTrainer:
@@ -183,38 +122,30 @@ class VLMTrainer:
         self.processor = processor
         self.tokenizer = tokenizer
 
-    def load_owl_dataset(self, dataset_json_path, split="train"):
-        """
-        Loads a dataset from a JSON file.
-        For each sample, load image embeddings from an npz file
-        (reshaping as in plygrnd.py) and save the report string.
-        The text encoding is deferred to collate_fn.
-        """
-        with open(dataset_json_path, "r") as f:
-            data = json.load(f)
+    def pad_inputs(self, input_ids_list, input_ids_list_prompt_only, media_offset_list):
+        # Pad text inputs using the tokenizer.
+        padded = self.tokenizer.pad({"input_ids": input_ids_list}, return_tensors="pt", padding="do_not_pad")
+        padded_prompt_only = self.tokenizer.pad(
+            {"input_ids": input_ids_list_prompt_only}, return_tensors="pt", padding="do_not_pad"
+        )
+        pad_shape = padded["input_ids"].shape
 
-        # Assume training samples are in key "training" (or change as needed)
-        samples = data["training"] if split == "train" else data["validation"]
-        dataset = []
-        for sample in samples:
-            # derive npz file name from sample image path
-            np_img_name = sample["image"][2:].replace(".nii.gz", "_embedding.npz")
-            img_path = os.path.join(self.images_path, np_img_name)
-            if not os.path.exists(img_path):
-                continue
+        padded_media_offsets = []
+        for media_offset in media_offset_list:
+            media_offset = media_offset.squeeze(0).to(torch.int32)
+            # If the media offset is shorter than the pad width, pad it with the last row.
+            if media_offset.shape[0] < pad_shape[1]:
+                pad_amount = pad_shape[1] - media_offset.shape[0]
+                pad = torch.zeros(pad_amount, media_offset.shape[1], dtype=torch.int32)
+                pad[:] = media_offset[-1, :]
+                media_offset = torch.cat([media_offset, pad], dim=0)
+            else:
+                media_offset = media_offset[: pad_shape[1], :]
+            padded_media_offsets.append(media_offset)
+        media_offsets = torch.stack(padded_media_offsets, dim=0)
+        return padded, padded_prompt_only, media_offsets
 
-            # Build a report by joining the key:value pairs
-            report = "; ".join([k + ": " + v for k, v in sample["labels"]["report"]["findings"].items()])
-
-            # Save the image tensor and report for later text processing in collate_fn.
-            dataset.append(
-                {
-                    "img_path": img_path,
-                    # "pixel_values": img_tensor,  # image embeddings
-                    "report": report,
-                }
-            )
-        return dataset
+    # media_offsets = media_offsets.astype(np.int32)
 
     def collate_fn(self, batch):
         """
@@ -224,60 +155,44 @@ class VLMTrainer:
         # Stack image tensors (assumed to have the same shape)
 
         image_tensors = []
+        input_ids_list = []
+        input_ids_list_prompt_only = []
+        media_offset_list = []
 
         for sample in batch:
-            # Load and reshape the embedding as in plygrnd.py
-            try:
-                np_img = np.load(sample["img_path"])["embeddings"]
-            except Exception as e:
-                print(f"Error loading {sample["img_path"]}: {e}")
-                continue
+
+            if len(sample["qa_text"]) > 0:
+                rand_idx = random.randint(0, len(sample["qa_text"]) - 1)
+                messages = sample["qa_text"][rand_idx]
+                messages_prompt_only = sample["qa_text_prompt_only"][rand_idx]
+            else:
+                messages = []
+                messages_prompt_only = []
 
             # Flatten and transpose dimensions
-            np_img_flat = np_img.reshape(np_img.shape[0], np_img.shape[1], -1)
-            np_img_flat = np_img_flat.transpose(0, 2, 1)
-            img_tensor = torch.tensor(np_img_flat)  # .half()
+            img_tensor = sample["embedding_tensor"]
             image_tensors.append(img_tensor)
+
+            rand_idx = random.randint(0, len(sample["qa_text"]) - 1)
+
+            if "tokenized" in sample:
+                model_inputs = sample["tokenized"]["qa_text_tokens"][rand_idx]
+                model_inputs_prompt_only = sample["tokenized"]["qa_text_prompt_only_tokens"][rand_idx]
+            else:
+                model_inputs = self.processor.encode_text_sft(self.processor.build_text_qwen(messages))
+                model_inputs_prompt_only = self.processor.encode_text_sft(
+                    self.processor.build_text_qwen(messages_prompt_only)
+                )
+
+            input_ids_list.append(model_inputs["input_ids"].squeeze(0))
+            input_ids_list_prompt_only.append(model_inputs_prompt_only["input_ids"].squeeze(0))
+            media_offset_list.append(model_inputs["media_offset"])
 
         images = torch.cat(image_tensors, dim=0)
 
-        input_ids_list = []
-        media_offset_list = []
-        # For each sample, build the messages and encode using the processor.
-        for sample in batch:
-            messages = [
-                {"role": "user", "content": "<|image|>\nDescribe this image."},
-                {"role": "assistant", "content": sample["report"]},
-            ]
-            text = self.processor.build_text_qwen(messages)
-            model_inputs = self.processor.encode_text_sft(text)
-            input_ids_list.append(model_inputs["input_ids"].squeeze(0))
-            media_offset_list.append(model_inputs["media_offset"])
-
-        # Pad text inputs using the tokenizer.
-        padded = self.tokenizer.pad({"input_ids": input_ids_list}, return_tensors="pt", padding="do_not_pad")
-        # padded_media_offsets = self.tokenizer.pad({"input_ids": media_offset_list}, return_tensors="pt", padding="longest")
-        pad_shape = padded["input_ids"].shape
-
-        # Stack media offsets
-        padded_media_offsets = []
-        for media_offset in media_offset_list:
-            media_offset = media_offset.squeeze(0)
-            # turn to int tensor
-            media_offset = media_offset.to(torch.int32)
-            if media_offset.shape[0] < pad_shape[1]:
-                pad = torch.zeros(
-                    pad_shape[1] - media_offset.shape[0],
-                    media_offset.shape[1],
-                    dtype=torch.int32,
-                )  # -1 for padding
-                pad[:, :] = media_offset[-1, :]
-                media_offset = torch.cat([media_offset, pad], dim=0)
-            else:
-                media_offset = media_offset[: pad_shape[1], :]
-            padded_media_offsets.append(media_offset)
-        media_offsets = torch.stack(padded_media_offsets, dim=0)
-        # media_offsets = media_offsets.astype(np.int32)
+        padded, padded_prompt_only, media_offsets = self.pad_inputs(
+            input_ids_list, input_ids_list_prompt_only, media_offset_list
+        )
 
         # Use input_ids as labels (mask pad tokens with -100)
         labels = padded["input_ids"].clone()
@@ -290,6 +205,7 @@ class VLMTrainer:
             "labels": labels,
             "media_offset": media_offsets,
             "batch_count": self.batch_count,
+            "input_ids_prompt_only": padded_prompt_only["input_ids"],
         }
 
         self.batch_count += 1
@@ -299,7 +215,7 @@ class VLMTrainer:
     def get_training_args(self):
         return SFTConfig(
             output_dir=self.output_dir,
-            num_train_epochs=10,
+            num_train_epochs=20,
             per_device_train_batch_size=1,
             per_device_eval_batch_size=1,
             gradient_accumulation_steps=8,
@@ -337,9 +253,41 @@ class VLMTrainer:
         wandb.init(project="vlm_project", reinit=True)
 
         # Load dataset using the owl pipeline
-        train_dataset = self.load_owl_dataset(dataset_json_path, split="train")
+        # train_dataset = self.load_owl_dataset(dataset_json_path, split="train")
+
+        tokenize_fn = lambda x: self.processor.encode_text_sft(self.processor.build_text_qwen(x))
+
+        train_dataset = AMOSMMDataset(
+            dataset_json_path=dataset_json_path,
+            model_name="owl",
+            split="train",
+            embeddings_path="/home/david/mnt/cluster_data/m340g/vision_embeddings/192_reshaped/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/2024_MICCAI24_AMOS-MM",
+            tokenize_fn=tokenize_fn,
+        )
+        val_dataset = AMOSMMDataset(
+            dataset_json_path=dataset_json_path,
+            model_name="owl",
+            split="val",
+            embeddings_path="/home/david/mnt/cluster_data/m340g/vision_embeddings/192_reshaped/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/2024_MICCAI24_AMOS-MM",
+            n_samples=50,
+        )
+
+        # train_dataset = LIDCDataset(
+        #     dataset_json_path=dataset_json_path,
+        #     model_name="owl",
+        #     split="train",
+        #     embeddings_path="/home/david/mnt/E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings/LIDC-IDRI/192_sliding_window/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/npz",
+        # )
+        # val_dataset = LIDCDataset(
+        #     dataset_json_path=dataset_json_path,
+        #     model_name="owl",
+        #     split="val",
+        #     embeddings_path="/home/david/mnt/E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings/LIDC-IDRI/192_sliding_window/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/npz",
+        #     # n_samples=50,
+        # )
+
         # For demonstration purposes, take a subset of validation samples if needed.
-        val_dataset = self.load_owl_dataset(dataset_json_path, split="val")
+        # val_dataset = self.load_owl_dataset(dataset_json_path, split="val")
         print(f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples")
 
         training_args = self.get_training_args()
@@ -348,7 +296,7 @@ class VLMTrainer:
             model=self.model,
             args=training_args,
             train_dataset=train_dataset,
-            eval_dataset=val_dataset[:50],
+            eval_dataset=val_dataset,
             data_collator=self.collate_fn,
             tokenizer=self.tokenizer,
             callbacks=[PrintFirstEvalBatchCallback(tokenizer=self.tokenizer, processor=self.processor)],
@@ -376,7 +324,8 @@ class VLMTrainer:
 
 if __name__ == "__main__":
     # dataset_json_path should point to the JSON file with dataset info.
-    dataset_json_path = "/home/david/mnt/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/dataset.json"
+    dataset_json_path = "/home/david/mnt/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/"
+    # dataset_json_path = "/home/david/ws/vlm/data/lidc"
 
     trainer = VLMTrainer()
     # trainer.setup_model()

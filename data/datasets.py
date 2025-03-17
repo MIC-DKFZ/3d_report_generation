@@ -4,6 +4,7 @@ from pathlib import Path
 from abc import ABC, abstractmethod
 
 import numpy as np
+import torch
 from torch.utils.data import Dataset
 from data.extractors import AMOSMMExtractor, LIDCExtractor
 from data.formatters import get_formatter
@@ -21,7 +22,9 @@ class MedicalImageDataset(Dataset, ABC):
         n_samples (int, optional): Number of samples to load (for debugging)
     """
 
-    def __init__(self, dataset_json_path, model_name, split="train", embeddings_path=None, n_samples=None):
+    def __init__(
+        self, dataset_json_path, model_name, split="train", embeddings_path=None, n_samples=None, tokenize_fn=None
+    ):
         super().__init__()
 
         if embeddings_path is None:
@@ -31,11 +34,15 @@ class MedicalImageDataset(Dataset, ABC):
         self.split = split
         self.embeddings_path = Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
         self.n_samples = n_samples
+        self.tokenize_fn = tokenize_fn
 
         # Load and process data
         self.data = self._load_data(dataset_json_path)
         self._init_formatters()
         self.samples = self.format_data()
+
+        if self.tokenize_fn:
+            self._tokenize_samples()
 
     @abstractmethod
     def _load_data(self, dataset_json_path):
@@ -62,6 +69,18 @@ class MedicalImageDataset(Dataset, ABC):
         """Test function to verify dataset loading"""
         pass
 
+    def _tokenize_samples(self):
+        for sample in self.samples:
+            sample["tokenized"] = {}
+            sample["tokenized"]["qa_text_tokens"] = [self.tokenize_fn(text) for text in sample["qa_text"]]
+            sample["tokenized"]["qa_text_prompt_only_tokens"] = [
+                self.tokenize_fn(text) for text in sample["qa_text_prompt_only"]
+            ]
+            sample["tokenized"]["report_text_tokens"] = [self.tokenize_fn(text) for text in sample["report_text"]]
+            sample["tokenized"]["report_text_prompt_only_tokens"] = [
+                self.tokenize_fn(text) for text in sample["report_text_prompt_only"]
+            ]
+
     def _load_embedding(self, embedding_path):
         """Load embedding from file"""
         if embedding_path.endswith(".npy"):
@@ -76,12 +95,20 @@ class MedicalImageDataset(Dataset, ABC):
         else:
             raise ValueError(f"Unsupported embedding file format: {embedding_path}")
 
+    def _embedding_2_tensor(self, embedding):
+        np_img_flat = embedding.reshape(embedding.shape[0], embedding.shape[1], -1)
+        np_img_flat = np_img_flat.transpose(0, 2, 1)
+        img_tensor = torch.tensor(np_img_flat)
+
+        return img_tensor
+
     def __getitem__(self, index):
         sample = self.samples[index]
 
         # Create a new dictionary instead of modifying the stored one
         result = dict(sample)
         result["embedding"] = self._load_embedding(sample["embedding_path"])
+        result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
 
         return result
 
