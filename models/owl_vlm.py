@@ -1,0 +1,160 @@
+import os
+import torch
+import re
+import random
+from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+from .abstract_vlm import AbstractVLMModel
+from owl.model import OwnOwlModel
+
+
+class OwlVLModel(AbstractVLMModel):
+    def __init__(self, model_id, output_dir="owl-vlm", vision_dim=864, embed_dim=896):
+        super().__init__(model_id)
+        self.output_dir = output_dir
+        self.vision_dim = vision_dim
+        self.embed_dim = embed_dim
+        self.batch_count = 0
+
+    def setup_model(self, bnb_config=None):
+        """Initialize model, processor, and tokenizer for Owl"""
+        # Note: bnb_config is received but not used for this model - could be
+        # implemented if needed for Owl model quantization
+
+        config = AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
+        language_model = AutoModel.from_pretrained(
+            self.model_id,
+            attn_implementation="sdpa",
+            trust_remote_code=True,
+        )
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+
+        # Initialize processor via the language model
+        self.processor = language_model.init_processor(self.tokenizer)
+        self.processor.inference_mode = False
+
+        # Create our custom OwnOwlModel
+        self.model = OwnOwlModel(
+            config,
+            language_model=language_model.language_model,
+            vision_dim=self.vision_dim,
+            embed_dim=self.embed_dim,
+            tokenizer=self.tokenizer,
+            debug=False,
+        )
+        self.model.to(self.device)
+
+        # Set trainable parameters
+        self._set_trainable_params()
+
+        return self.model
+
+    def _set_trainable_params(self):
+        """Set which parameters are trainable for the Owl model"""
+        # Freeze all parameters first
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+        # Unfreeze only the vision2text_model parameters
+        for param in self.model.vision2text_model.parameters():
+            param.requires_grad = True
+
+        # Optionally unfreeze HyperQwen2DecoderLayer parameters
+        for m_module in self.model.modules():
+            if "HyperQwen2DecoderLayer" in str(m_module.__class__):
+                if m_module.is_hyper_enabled:
+                    for param in m_module.self_attn.parameters():
+                        param.requires_grad = True
+
+    def pad_inputs(self, input_ids_list, input_ids_list_prompt_only, media_offset_list):
+        """Helper function to pad inputs for Owl model"""
+        # Pad text inputs using the tokenizer
+        padded = self.tokenizer.pad({"input_ids": input_ids_list}, return_tensors="pt", padding="do_not_pad")
+        padded_prompt_only = self.tokenizer.pad(
+            {"input_ids": input_ids_list_prompt_only}, return_tensors="pt", padding="do_not_pad"
+        )
+        pad_shape = padded["input_ids"].shape
+
+        padded_media_offsets = []
+        for media_offset in media_offset_list:
+            media_offset = media_offset.squeeze(0).to(torch.int32)
+            # If the media offset is shorter than the pad width, pad it with the last row
+            if media_offset.shape[0] < pad_shape[1]:
+                pad_amount = pad_shape[1] - media_offset.shape[0]
+                pad = torch.zeros(pad_amount, media_offset.shape[1], dtype=torch.int32)
+                pad[:] = media_offset[-1, :]
+                media_offset = torch.cat([media_offset, pad], dim=0)
+            else:
+                media_offset = media_offset[: pad_shape[1], :]
+            padded_media_offsets.append(media_offset)
+        media_offsets = torch.stack(padded_media_offsets, dim=0)
+        return padded, padded_prompt_only, media_offsets
+
+    def collate_fn(self, batch):
+        """Custom collate function for Owl model"""
+        image_tensors = []
+        input_ids_list = []
+        input_ids_list_prompt_only = []
+        media_offset_list = []
+
+        for sample in batch:
+            if len(sample["qa_text"]) > 0:
+                rand_idx = random.randint(0, len(sample["qa_text"]) - 1)
+                messages = sample["qa_text"][rand_idx]
+                messages_prompt_only = sample["qa_text_prompt_only"][rand_idx]
+            else:
+                messages = []
+                messages_prompt_only = []
+
+            # Flatten and transpose dimensions
+            img_tensor = sample["embedding_tensor"]
+            image_tensors.append(img_tensor)
+
+            rand_idx = random.randint(0, len(sample["qa_text"]) - 1)
+
+            if "tokenized" in sample:
+                model_inputs = sample["tokenized"]["qa_text_tokens"][rand_idx]
+                model_inputs_prompt_only = sample["tokenized"]["qa_text_prompt_only_tokens"][rand_idx]
+            else:
+                model_inputs = self.processor.encode_text_sft(self.processor.build_text_qwen(messages))
+                model_inputs_prompt_only = self.processor.encode_text_sft(
+                    self.processor.build_text_qwen(messages_prompt_only)
+                )
+
+            input_ids_list.append(model_inputs["input_ids"].squeeze(0))
+            input_ids_list_prompt_only.append(model_inputs_prompt_only["input_ids"].squeeze(0))
+            media_offset_list.append(model_inputs["media_offset"])
+
+        images = torch.cat(image_tensors, dim=0)
+
+        padded, padded_prompt_only, media_offsets = self.pad_inputs(
+            input_ids_list, input_ids_list_prompt_only, media_offset_list
+        )
+
+        # Use input_ids as labels (mask pad tokens with -100)
+        labels = padded["input_ids"].clone()
+        labels[labels == self.tokenizer.pad_token_id] = -100
+
+        batch_out = {
+            "image_embeds": images,
+            "input_ids": padded["input_ids"],
+            "attention_mask": padded["attention_mask"],
+            "labels": labels,
+            "media_offset": media_offsets,
+            "batch_count": self.batch_count,
+            "input_ids_prompt_only": padded_prompt_only["input_ids"],
+        }
+
+        self.batch_count += 1
+
+        return batch_out
+
+    def get_trainable_params(self):
+        """Return information about trainable parameters"""
+        return {"peft_config": None, "train_vision2text_model": True}
+
+    def get_model_specific_training_args(self):
+        """Return model-specific training arguments"""
+        return {
+            "bf16": True,
+        }
