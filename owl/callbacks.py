@@ -4,7 +4,7 @@ import wandb
 from transformers import TrainerCallback, TrainerState, TrainerControl
 
 
-class PrintFirstEvalBatchCallback(TrainerCallback):
+class PrintEvalBatchCallback(TrainerCallback):
     def __init__(self, tokenizer=None, processor=None):
         self.tokenizer = tokenizer
         self.printed = False

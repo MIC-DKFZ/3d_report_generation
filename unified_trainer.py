@@ -16,7 +16,6 @@ import wandb
 from data.datasets import AMOSMMDataset
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
-from unified_trainer import UnifiedVLMTrainer
 
 
 class UnifiedVLMTrainer:
@@ -129,7 +128,6 @@ class UnifiedVLMTrainer:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=self.vlm_model.collate_fn,
-            tokenizer=self.vlm_model.tokenizer,
             callbacks=[callback],
             # No need to pass peft_config here, we've already applied it
         )

@@ -3,6 +3,7 @@ from transformers import BitsAndBytesConfig, Qwen2VLForConditionalGeneration
 from peft import LoraConfig, get_peft_model
 import os
 from pathlib import Path
+import random
 
 from .abstract_vlm import AbstractVLMModel
 from qwenvl.processing_3d import Qwen2VLProcessor3D
@@ -66,8 +67,8 @@ class QwenVLModel(AbstractVLMModel):
     def collate_fn(self, examples):
         """Custom collate function for Qwen model"""
         # Get the texts and images, and apply the chat template
-        texts = [self.processor.apply_chat_template(example, tokenize=False) for example in examples]
-        embedding_paths = [example[1]["content"][0]["embedding_path"] for example in examples]
+        texts = [self.processor.apply_chat_template(random.choice(example['qa_text']), tokenize=False) for example in examples]
+        embedding_paths = [example["embedding_path"] for example in examples]
 
         batch = self.processor(text=texts, vision_embedding_paths=embedding_paths, return_tensors="pt", padding=True)
 
