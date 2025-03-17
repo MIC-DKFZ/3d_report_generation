@@ -18,16 +18,27 @@ class OwlVLModel(AbstractVLMModel):
 
     def setup_model(self, bnb_config=None):
         """Initialize model, processor, and tokenizer for Owl"""
-        # Note: bnb_config is received but not used for this model - could be
-        # implemented if needed for Owl model quantization
-
-        config = AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
-        language_model = AutoModel.from_pretrained(
-            self.model_id,
-            attn_implementation="sdpa",
-            trust_remote_code=True,
-        )
+        # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+
+        # Load configuration
+        config = AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
+
+        # Apply BNB config if provided
+        if bnb_config:
+            language_model = AutoModel.from_pretrained(
+                self.model_id,
+                attn_implementation="sdpa",
+                trust_remote_code=True,
+                quantization_config=bnb_config,
+                device_map="auto",
+            )
+        else:
+            language_model = AutoModel.from_pretrained(
+                self.model_id,
+                attn_implementation="sdpa",
+                trust_remote_code=True,
+            )
 
         # Initialize processor via the language model
         self.processor = language_model.init_processor(self.tokenizer)
@@ -42,7 +53,10 @@ class OwlVLModel(AbstractVLMModel):
             tokenizer=self.tokenizer,
             debug=False,
         )
-        self.model.to(self.device)
+
+        # Only manually move to device if not using device_map
+        if bnb_config is None:
+            self.model.to(self.device)
 
         # Set trainable parameters
         self._set_trainable_params()
@@ -65,6 +79,13 @@ class OwlVLModel(AbstractVLMModel):
                 if m_module.is_hyper_enabled:
                     for param in m_module.self_attn.parameters():
                         param.requires_grad = True
+
+        # Print trainable parameters summary
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"Total parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
+        print(f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%")
 
     def pad_inputs(self, input_ids_list, input_ids_list_prompt_only, media_offset_list):
         """Helper function to pad inputs for Owl model"""
@@ -151,7 +172,8 @@ class OwlVLModel(AbstractVLMModel):
 
     def get_trainable_params(self):
         """Return information about trainable parameters"""
-        return {"peft_config": None, "train_vision2text_model": True}
+        # No PEFT config for Owl - we use direct parameter freezing instead
+        return {"peft_config": None, "train_only_vision_adapter": False}
 
     def get_model_specific_training_args(self):
         """Return model-specific training arguments"""
