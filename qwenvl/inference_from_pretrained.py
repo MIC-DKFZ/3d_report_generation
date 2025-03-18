@@ -3,20 +3,23 @@ import os
 from pathlib import Path
 import argparse
 import json
-import numpy as np
 from tqdm import tqdm
-import glob
 import time
+import sys
 
+# Add parent directory to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import model and processor classes
 from Qwen3D import Qwen2VLForConditionalGeneration3D
 from processing_3d import Qwen2VLProcessor3D
+
+# Import dataset, formatters, and extractors
 from data.datasets import AMOSMMDataset
-from data.formatters import get_formatter
 
 
 class VLMInference:
-    def __init__(self, checkpoint_path="/home/m340g/Projects/rocket-vlm/qwen2-2b-amos-mm/checkpoint-3050", 
-                base_processor_model="Qwen/Qwen2-VL-2B-Instruct"):
+    def __init__(self, checkpoint_path, base_processor_model):
         """
         Initialize the VLM inference class.
         
@@ -26,10 +29,8 @@ class VLMInference:
         """
         self.checkpoint_path = checkpoint_path
         self.base_processor_model = base_processor_model
-        self.processor = None
-        self.model = None
         
-        # Set up embeddings path (same as in training)
+        # Set up embeddings path - same as during training
         self.embeddings_path = os.environ.get('ROCKET_VLM_VISION_EMBEDDINGS')
         if self.embeddings_path is None:
             raise ValueError("Environment variable ROCKET_VLM_VISION_EMBEDDINGS is not set")
@@ -39,99 +40,117 @@ class VLMInference:
     
     def setup_model(self):
         """Load processor from base model and model from checkpoint"""
-        try:
-            # Load processor from the base model (which has the preprocessor config)
-            print(f"Loading processor from base model: {self.base_processor_model}")
-            self.processor = Qwen2VLProcessor3D.from_pretrained(self.base_processor_model)
-            
-            # Load model from the fine-tuned checkpoint
-            print(f"Loading model from checkpoint: {self.checkpoint_path}")
-            self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
-                self.checkpoint_path,
-                device_map="auto",
-                torch_dtype=torch.bfloat16
-            )
-            
-            # Set model to evaluation mode
-            self.model.eval()
-            print(f"Model and processor loaded successfully")
-            
-        except Exception as e:
-            print(f"Error in setup_model: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-    
+        print(f"Loading processor from base model: {self.base_processor_model}")
+        self.processor = Qwen2VLProcessor3D.from_pretrained(self.base_processor_model)
+        
+        print(f"Loading model from checkpoint: {self.checkpoint_path}")
+        self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
+            self.checkpoint_path,
+            device_map="auto",
+            torch_dtype=torch.bfloat16
+        )
+        
+        # Set model to evaluation mode
+        self.model.eval()
+        print(f"Model loaded successfully and set to evaluation mode")
 
-    # In the process_example method, add this near the beginning:
     def process_example(self, example):
-        """Process a single example"""
-        for msg in example:
-            if isinstance(msg, dict):
-                role = msg.get('role', 'unknown')
-                content = msg.get('content', [])
-                if isinstance(content, list):
-                    content_text = []
-                    for item in content:
-                        if isinstance(item, dict):
-                            if item.get('type') == 'text':
-                                content_text.append(item.get('text', ''))
-                            elif item.get('type') == 'image':
-                                content_text.append('[IMAGE]')
-                    content = ' '.join(content_text)
         """
-        Process a single example from the dataset, similar to the collate_fn in training.
+        Process a single example using the prompt-only part of a conversation.
         
         Args:
             example: A single example from the dataset
             
         Returns:
             inputs: Processed inputs ready for the model
-            user_query: The text query from the user
+            prompt_conversation: The conversation prompt (without answers)
+            metadata: Additional information about the example
         """
-        try:
-            # Apply chat template to the example
-            text = self.processor.apply_chat_template(example, tokenize=False)
+        metadata = {}
+        
+        # For QA examples
+        if "qa_text_prompt_only" in example and len(example["qa_text_prompt_only"]) > 0:
+            # Get the prompt-only conversation (system + user message only)
+            prompt_conversation = example["qa_text_prompt_only"][0]  # Use first QA pair
+            metadata["type"] = "qa"
             
-            # Get embedding path - making sure it matches the dataset format
-            embedding_path = example[1]["content"][0]["embedding_path"]
+            # Get ground truth for evaluation (but don't pass to model)
+            if "qa_text" in example and len(example["qa_text"]) > 0:
+                full_conversation = example["qa_text"][0]
+                for msg in full_conversation:
+                    if msg.get("role") == "assistant":
+                        metadata["ground_truth"] = msg.get("content", [{}])[0].get("text", "")
             
-            # Process inputs
-            inputs = self.processor(
-                text=text,
-                vision_embedding_paths=[embedding_path],
-                return_tensors="pt",
-                padding=True
-            )
+            # Get question details from item_qa if available
+            if "item_qa" in example and len(example["item_qa"]) > 0:
+                qa_item = example["item_qa"][0]
+                metadata["question"] = qa_item.get("question", "")
+                metadata["options"] = qa_item.get("options", {})
+                metadata["answer"] = qa_item.get("answer", "")
+        
+        # For region description examples
+        elif "report_text_prompt_only" in example and len(example["report_text_prompt_only"]) > 0:
+            # Get the prompt-only conversation (system + user message only)
+            prompt_conversation = example["report_text_prompt_only"][0]  # Use first region
+            metadata["type"] = "region"
             
-            # Move to same device as model
-            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+            # Get ground truth for evaluation (but don't pass to model)
+            if "report_text" in example and len(example["report_text"]) > 0:
+                full_conversation = example["report_text"][0]
+                for msg in full_conversation:
+                    if msg.get("role") == "assistant":
+                        metadata["ground_truth"] = msg.get("content", [{}])[0].get("text", "")
             
-            # Extract user query for display
-            user_query = None
-            for msg in example:
-                if isinstance(msg, dict) and msg.get("role") == "user":
-                    content = msg.get("content")
-                    if isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, dict) and item.get("type") == "text":
-                                user_query = item.get("text")
-                                break
-                    break
-            
-            if not user_query:
-                user_query = "Describe this medical image"
-            
-            return inputs, user_query, embedding_path
-            
-        except Exception as e:
-            print(f"Error processing example: {e}")
-            print("Example structure:", example)
-            raise
+            # Get region details if available
+            if "item_report" in example and "region_questions" in example["item_report"]:
+                for region, region_data in example["item_report"]["region_questions"].items():
+                    if region_data:
+                        metadata["region"] = region
+                        break
+        
+        else:
+            raise ValueError("Could not find any prompt_only conversations in the example")
+        
+        # Extract user query for display
+        user_query = None
+        embedding_path = None
+        
+        for msg in prompt_conversation:
+            if msg.get("role") == "user":
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict):
+                            if item.get("type") == "text":
+                                user_query = item.get("text", "")
+                            elif item.get("type") == "image" and "embedding_path" in item:
+                                embedding_path = item["embedding_path"]
+        
+        if not embedding_path and "embedding_path" in example:
+            embedding_path = example["embedding_path"]
+        
+        metadata["user_query"] = user_query
+        metadata["embedding_path"] = embedding_path
+        
+        # Apply chat template to the conversation
+        text = self.processor.apply_chat_template(prompt_conversation, tokenize=False)
+        
+        # Process inputs
+        inputs = self.processor(
+            text=text,
+            vision_embedding_paths=[embedding_path],
+            return_tensors="pt",
+            padding=True
+        )
+        
+        # Move to same device as model
+        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        
+        return inputs, prompt_conversation, metadata
     
     def generate(self, inputs, max_new_tokens=500, temperature=0.7, top_p=0.9):
         """
-        Generate text response.
+        Generate text response with no special formatting.
         
         Args:
             inputs: Processed inputs from process_example
@@ -140,58 +159,40 @@ class VLMInference:
             top_p: Nucleus sampling parameter
         
         Returns:
-            Generated text response
+            Raw generated text response
         """
-        try:
-            # Generate
-            with torch.no_grad():
-                output = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=True,
-                    temperature=temperature,
-                    top_p=top_p
-                )
-            
-            # Decode output
-            generated_text = self.processor.tokenizer.batch_decode(output, skip_special_tokens=True)[0]
-            
-            # Extract just the model's response
-            if "ASSISTANT:" in generated_text:
-                response = generated_text.split("ASSISTANT:")[-1].strip()
-            else:
-                response = generated_text
-            
-            # Properly clean the response by removing anything before "The answer is" for QA questions
-            if "The answer is" in response:
-                response = response[response.find("The answer is"):].strip()
-            elif "A." in response and "B." in response:
-                # Handle case where model repeats the options
-                lines = response.split("\n")
-                answer_start = -1
-                for i, line in enumerate(lines):
-                    if "A." in line and i < len(lines) - 1 and "B." in lines[i+1]:
-                        answer_start = i + 4  # Skip past the options (A, B, C, D)
-                        break
-                
-                if answer_start >= 0 and answer_start < len(lines):
-                    response = "\n".join(lines[answer_start:])
-            
-            # Clean up unwanted phrases and system/user/assistant text
-            response = self._clean_response_text(response)
-            
-            return response
-            
-        except Exception as e:
-            print(f"Error during generation: {e}")
-            import traceback
-            traceback.print_exc()
-            return f"Error: {str(e)}"
-            
-
-    def run_test_mode(self, dataset_path, split="val", num_samples=20, question_types=None):
+        # Generate
+        with torch.no_grad():
+            output = self.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
+                temperature=temperature,
+                top_p=top_p
+            )
+        
+        # Decode output without special formatting
+        generated_text = self.processor.tokenizer.batch_decode(output, skip_special_tokens=True)[0]
+        
+        # Extract just the model's response
+        if "ASSISTANT:" in generated_text:
+            response = generated_text.split("ASSISTANT:")[-1].strip()
+        else:
+            response = generated_text
+        
+        return response
+    
+    def run_inference_on_dataset(self, dataset_path, split="val", output_file=None):
         """
-        Run a true test without seeing any answers.
+        Run inference on the entire dataset.
+        
+        Args:
+            dataset_path: Path to the dataset
+            split: Dataset split to use
+            output_file: File to save results
+            
+        Returns:
+            List of results
         """
         # Load dataset
         dataset = AMOSMMDataset(
@@ -201,163 +202,74 @@ class VLMInference:
             embeddings_path=self.embeddings_path
         )
         
-        # Filter and select samples
-        samples = []
-        for i in range(len(dataset)):
-            example = dataset[i]
-            # Filter by question type if needed
-            if question_types:
-                is_qa = any("The answer is" in str(msg.get("content", [{}])[0].get("text", "")) 
-                        for msg in example if isinstance(msg, dict) and msg.get("role") == "assistant")
-                if ("qa" in question_types and is_qa) or ("region" in question_types and not is_qa):
-                    samples.append((i, example))
-            else:
-                samples.append((i, example))
+        print(f"Running inference on {len(dataset)} examples from {split} split")
         
-        if len(samples) > num_samples:
-            samples = samples[:num_samples]
-        
-        # Process samples in true test mode
+        # Process all samples
         results = []
-        for idx, (orig_idx, example) in enumerate(samples):
-            # Create a clean example with ONLY system and user messages
-            clean_example = []
-            ground_truth = None
-            
-            for msg in example:
-                if isinstance(msg, dict):
-                    if msg.get("role") == "system":
-                        clean_example.append(msg)
-                    elif msg.get("role") == "user":
-                        clean_example.append(msg)
-                    elif msg.get("role") == "assistant":
-                        # Save ground truth but don't add to clean example
-                        content = msg.get("content")
-                        if isinstance(content, list) and len(content) > 0:
-                            ground_truth = content[0].get("text", None)
-            
-            # Process and generate
-            inputs, user_query, _ = self.process_example(clean_example)
-            response = self.generate(inputs)
-            
-            # Print and save results
-            print(f"Query: {user_query}")
-            print(f"Response: {response}")
-            print(f"Ground Truth: {ground_truth}")
-            
-            results.append({
-                "index": orig_idx,
-                "query": user_query,
-                "response": response,
-                "ground_truth": ground_truth
-            })
-
-            print("------------------------------------------------------------")
+        for idx in tqdm(range(len(dataset)), desc="Running inference"):
+            try:
+                example = dataset[idx]
+                
+                # Process and generate
+                inputs, prompt_conversation, metadata = self.process_example(example)
+                response = self.generate(inputs)
+                
+                # Save full result with metadata
+                result = {
+                    "index": idx,
+                    "query": metadata["user_query"],
+                    "response": response,
+                    "ground_truth": metadata.get("ground_truth", ""),
+                    "embedding_path": metadata["embedding_path"],
+                    "question_type": metadata["type"],
+                }
+                
+                # Add additional metadata based on question type
+                if metadata["type"] == "qa":
+                    result.update({
+                        "question": metadata.get("question", ""),
+                        "options": metadata.get("options", {}),
+                        "correct_answer": metadata.get("answer", "")
+                    })
+                elif metadata["type"] == "region":
+                    result.update({
+                        "region": metadata.get("region", "")
+                    })
+                
+                # Try to extract image ID if available
+                try:
+                    if metadata["embedding_path"]:
+                        # Extract image ID from embedding path
+                        basename = os.path.basename(metadata["embedding_path"])
+                        image_id = basename.split("_embedding")[0]
+                        result["image_id"] = image_id
+                except Exception:
+                    pass
+                
+                results.append(result)
+                
+                # Print progress updates periodically - FIXED: don't print system/user messages
+                if idx % 1 == 0:  # Changed from every example to every 10 examples
+                    print(f"\nProcessed {idx}/{len(dataset)} examples")
+                    print(f"Type: {metadata['type']}")
+                    print(f"Query: {metadata['user_query']}")
+                    print(f"Model response: {response}")
+                    # FIXED: Also print ground truth
+                    print(f"Ground truth: {metadata.get('ground_truth', 'Not available')}")
+                    print("-" * 50)  # Add separator for clarity
+                
+            except Exception as e:
+                print(f"Error processing example {idx}: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Save results if output file provided
+        if output_file:
+            with open(output_file, "w") as f:
+                json.dump(results, f, indent=2)
+            print(f"Results saved to {output_file}")
         
         return results
-    
-    def _clean_response_text(self, text):
-        """Clean up the response text by removing unwanted elements"""
-        # Remove common unwanted artifacts
-        unwanted_phrases = [
-            "We use it is not a problem.",
-            "We use it is not clear.",
-            "We have a new approach",
-            "a medical imaging AI trained to",
-        ]
-        
-        for phrase in unwanted_phrases:
-            text = text.replace(phrase, "").strip()
-        
-        # Remove system/user/assistant prefixes
-        role_prefixes = ["system\n", "user\n", "assistant\n"]
-        for prefix in role_prefixes:
-            text = text.replace(prefix, "")
-        
-        # Remove any repeated question text
-        if "What do you see in the" in text:
-            parts = text.split("What do you see in the")
-            if len(parts) > 1:
-                remainder = parts[1]
-                if "region of this CT scan?" in remainder:
-                    text = remainder.split("region of this CT scan?")[-1].strip()
-        
-        # Clean up any trailing or leading whitespace
-        text = text.strip()
-        
-        return text
-            
-    def _modify_example_for_test_mode(self, example):
-        """
-        Modify an example to hide answer for test mode.
-        
-        Args:
-            example: The original formatted example
-            
-        Returns:
-            Modified example with answer removed completely
-        """
-        import copy
-        modified = copy.deepcopy(example)
-        
-        # For true test mode, we need to completely remove the assistant's answer
-        # Rather than modifying it, we'll remove it entirely from the example 
-        # so the model has to generate the answer from scratch
-        
-        # Keep only the system and user messages
-        test_example = []
-        for msg in modified:
-            if isinstance(msg, dict) and msg.get("role") in ["system", "user"]:
-                test_example.append(msg)
-        
-        return test_example
-            
-    def create_custom_prompt_with_formatter(self, image_id, prompt_type, custom_text=None):
-        """
-        Create a custom prompt for a specific image using formatters.
-        
-        Args:
-            image_id: ID of the image (used to construct embedding path)
-            prompt_type: Type of prompt ('region' or 'qa')
-            custom_text: Custom text for prompt
-            
-        Returns:
-            Formatted prompt
-        """
-        # Construct embedding path
-        embedding_path = str(Path(self.embeddings_path) / f"{image_id}_embedding.npz")
-        
-        if not os.path.exists(embedding_path):
-            raise FileNotFoundError(f"Embedding not found: {embedding_path}")
-        
-        # Use the formatters from data.formatters
-        format_region_question = get_formatter("qwen_amos_regions")
-        format_qa_data = get_formatter("qwen_amos_qa")
-        
-        if prompt_type == "region":
-            region = "abdomen"  # Default region
-            if custom_text:
-                # Extract region from custom text
-                for r in ["chest", "abdomen", "pelvis"]:
-                    if r in custom_text.lower():
-                        region = r
-                        break
-            
-            return format_region_question(
-                embedding_path,
-                region,
-                ""  # No findings provided since we're generating them
-            )
-        elif prompt_type == "qa":
-            # Create a dummy QA pair
-            qa_pair = {
-                "question": custom_text or "Describe what you see in this CT scan.",
-                "options": {"A": "Option A", "B": "Option B", "C": "Option C", "D": "Option D"},
-                "answer": "A"  # Dummy answer
-            }
-            return format_qa_data(embedding_path, qa_pair)
-        else:
-            raise ValueError(f"Unknown prompt type: {prompt_type}")
 
 
 def main():
@@ -369,79 +281,58 @@ def main():
                         default="Qwen/Qwen2-VL-2B-Instruct",
                         help="Base model ID to use for the processor")
     parser.add_argument("--dataset", type=str, 
-                        default="/home/m340g/DrivesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/dataset.json", 
-                        help="Path to the dataset JSON file")
+                        default="/home/m340g/DrivesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM", 
+                        help="Path to the dataset directory")
     parser.add_argument("--split", type=str, default="val", 
-                        help="Dataset split to use (train, val)")
-    parser.add_argument("--num_samples", type=int, default=20, 
-                        help="Number of samples to process")
-    parser.add_argument("--question_types", nargs="+", choices=["qa", "region"], default=None,
-                        help="Filter for specific question types (can specify multiple)")
-    parser.add_argument("--hide_answers", action="store_true", default=False,
-                        help="Hide answers in ground truth display (for evaluation)")
-    parser.add_argument("--test_mode", action="store_true", default=True,
-                        help="Run in test mode: hide answers in prompts to evaluate model performance")
-    parser.add_argument("--custom_prompt", type=str, default=None,
-                        help="Custom prompt text to use with --custom_image")
-    parser.add_argument("--custom_image", type=str, default=None,
-                        help="Image ID to run custom inference on (without file extension)")
-    parser.add_argument("--custom_type", type=str, choices=["qa", "region"], default="region",
-                        help="Type of prompt to create for custom image")
-    parser.add_argument("--output_dir", type=str, default=".", 
-                        help="Directory to save results")
+                        help="Dataset split to use (train, val, test)")
+    parser.add_argument("--output_file", type=str, default=None,
+                        help="Path to save inference results (JSON)")
+    parser.add_argument("--max_new_tokens", type=int, default=500,
+                        help="Maximum number of new tokens to generate")
+    parser.add_argument("--temperature", type=float, default=0.7,
+                        help="Sampling temperature (higher = more random)")
+    parser.add_argument("--top_p", type=float, default=0.9,
+                        help="Nucleus sampling parameter")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Print detailed output for each example")
     
     args = parser.parse_args()
     
-    # Create output directory if it doesn't exist
-    os.makedirs(args.output_dir, exist_ok=True)
+    # Set default output file if not provided
+    if not args.output_file:
+        timestamp = int(time.time())
+        args.output_file = f"inference_results_{args.split}_{timestamp}.json"
     
-    # Initialize inference with both checkpoint and base processor model
+    # Create output directory if needed
+    output_dir = os.path.dirname(args.output_file)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"Created output directory: {output_dir}")
+    
+    # Initialize inference
     inference = VLMInference(args.checkpoint, args.base_processor)
     
-    if args.custom_image:
-        # Run custom inference on a specific image
-        try:
-            print(f"Running custom inference on image ID: {args.custom_image}")
-            example = inference.create_custom_prompt_with_formatter(
-                args.custom_image,
-                args.custom_type,
-                args.custom_prompt
-            )
-            
-            if example:
-                inputs, user_query, embedding_path = inference.process_example(example)
-                response = inference.generate(inputs)
-                
-                print(f"\nQuery: {user_query}")
-                print(f"Response: {response}")
-                
-                # Save result to file
-                timestamp = int(time.time())
-                output_file = os.path.join(args.output_dir, f"custom_inference_{timestamp}.json")
-                with open(output_file, "w") as f:
-                    json.dump({
-                        "image_id": args.custom_image,
-                        "query": user_query,
-                        "response": response,
-                        "prompt_type": args.custom_type
-                    }, f, indent=2)
-                
-                print(f"Result saved to {output_file}")
-            else:
-                print("Failed to create custom prompt")
-        except Exception as e:
-            print(f"Error in custom inference: {e}")
-    else:
-        # Run inference using dataset
-        print(f"Running inference on dataset: {args.dataset}")
-
-        results = inference.run_test_mode(
-            args.dataset,
-            split=args.split,
-            num_samples=args.num_samples,
-            question_types=args.question_types
-        )
-        print(f"Completed inference on {len(results)} samples")
+    # Run inference on dataset
+    results = inference.run_inference_on_dataset(
+        args.dataset,
+        split=args.split,
+        output_file=args.output_file
+    )
+    
+    print(f"Completed inference on {len(results)} samples")
+    print(f"Results saved to {args.output_file}")
+    
+    # Calculate basic statistics
+    question_types = {}
+    for result in results:
+        q_type = result.get("question_type", "unknown")
+        if q_type not in question_types:
+            question_types[q_type] = 0
+        question_types[q_type] += 1
+    
+    print("\nQuestion type statistics:")
+    for q_type, count in question_types.items():
+        print(f"  {q_type}: {count} questions ({count/len(results)*100:.1f}%)")
 
 
 if __name__ == "__main__":
