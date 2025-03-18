@@ -8,8 +8,11 @@ import os
 class AbstractVLMModel(ABC):
     def __init__(self, model_id, train_only_vision_adapter: bool, device=None):
         self.model_id = model_id
+        # TODO: Make a default argument since its not needed for inference
         self.train_only_vision_adapter = train_only_vision_adapter
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device or torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
         self.model = None
         self.tokenizer = None
         self.processor = None
