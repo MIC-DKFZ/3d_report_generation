@@ -12,6 +12,7 @@ from data.formatters import get_formatter
 SSL_MODEL_NAME = "EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres"
 IMAGE_EMBEDDING_METHOD = "192_sliding_window"
 
+
 class MedicalImageDataset(Dataset, ABC):
     """
     Base class for medical imaging datasets with vision-language models
@@ -73,15 +74,9 @@ class MedicalImageDataset(Dataset, ABC):
 
     def _tokenize_samples(self):
         for sample in self.samples:
-            sample["tokenized"] = {}
-            sample["tokenized"]["qa_text_tokens"] = [self.tokenize_fn(text) for text in sample["qa_text"]]
-            sample["tokenized"]["qa_text_prompt_only_tokens"] = [
-                self.tokenize_fn(text) for text in sample["qa_text_prompt_only"]
-            ]
-            sample["tokenized"]["report_text_tokens"] = [self.tokenize_fn(text) for text in sample["report_text"]]
-            sample["tokenized"]["report_text_prompt_only_tokens"] = [
-                self.tokenize_fn(text) for text in sample["report_text_prompt_only"]
-            ]
+            # sample["tokenized"] = {}
+            sample["tokenized_qa_text_tokens"] = self.tokenize_fn(sample["formatted_qa"])
+            sample["tokenized_qa_text_prompt_only_tokens"] = self.tokenize_fn(sample["formatted_qa_prompt_only"])
 
     def _load_embedding(self, embedding_path):
         """Load embedding from file"""
@@ -171,38 +166,53 @@ class AMOSMMDataset(MedicalImageDataset):
                 "image_path": extracted_data["image_path"],
                 "embedding_path": embedding_path,
                 "embedding": None,
-                "report_text": [],
-                "report_text_prompt_only": [],
-                "qa_text": [],
-                "qa_text_prompt_only": [],
-                "item_qa": extracted_data["qa_items"],
-                "item_report": extracted_data["report"] if extracted_data["report"] else {},
+                "questions": extracted_data["questions"],
+                "report": extracted_data["report"] if extracted_data["report"] else {},
             }
 
-            # Process report data using formatters
-            if extracted_data["report"]:
-                for region, region_data in extracted_data["report"]["region_questions"].items():
-                    if region_data:
-                        region_report, region_report_prompt_only = self.format_region_question(
-                            region_data, embedding_path
-                        )
-                        if region_report:
-                            item["report_text"].append(region_report)
-                            item["report_text_prompt_only"].append(region_report_prompt_only)
+            # # Process report data using formatters
+            # if extracted_data["report"]:
+            #     for region, region_data in extracted_data["report"]["region_questions"].items():
+            #         if region_data:
+            #             region_report, region_report_prompt_only = self.format_region_question(
+            #                 region_data, embedding_path
+            #             )
+            #             if region_report:
+            #                 item["report_text"].append(region_report)
+            #                 item["report_text_prompt_only"].append(region_report_prompt_only)
 
             # Process QA data using formatters
-            for qa_item in extracted_data["qa_items"]:
+            for qa_idx, qa_item in enumerate(extracted_data["qa_items"]):
                 formatted_qa, formatted_qa_prompt_only = self.format_qa_data(qa_item, embedding_path)
-                item["qa_text"].append(formatted_qa)
-                item["qa_text_prompt_only"].append(formatted_qa_prompt_only)
+                extracted_data["qa_items"][qa_idx]["formatted_qa"] = formatted_qa
+                extracted_data["qa_items"][qa_idx]["formatted_qa_prompt_only"] = formatted_qa_prompt_only
+
+            item["item_qa"] = extracted_data["qa_items"]
 
             # Skip samples with no report text or QA text
-            if len(item["report_text"]) == 0 or len(item["qa_text"]) == 0:
+            if len(item["item_qa"]) == 0:
                 continue
 
             formatted_data.append(item)
 
-        return formatted_data
+        self.structure_data = formatted_data
+
+        flattened_data = []
+
+        for item in formatted_data:
+            for qa_item in item["item_qa"]:
+                flat_item = {
+                    "image_path": item["image_path"],
+                    "embedding_path": item["embedding_path"],
+                    "embedding": item["embedding"],
+                    "question": qa_item["formatted_qa"],
+                    "report": item["report"],
+                    **qa_item,
+                }
+
+                flattened_data.append(flat_item)
+
+        return flattened_data
 
     def verify(self):
         """Test function to verify dataset loading"""
@@ -283,8 +293,8 @@ class LIDCDataset(MedicalImageDataset):
                 "study_uid": extracted_data["study_uid"],
                 "embedding_path": embedding_path,
                 "embedding": None,
-                "qa_text": [formatted_qa],
-                "qa_text_prompt_only": [formatted_qa_prompt_only],
+                "formatted_qa": formatted_qa,
+                "formatted_qa_prompt_only": formatted_qa_prompt_only,
                 "item_qa": extracted_data["item_qa"],
             }
 

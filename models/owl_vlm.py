@@ -122,23 +122,17 @@ class OwlVLModel(AbstractVLMModel):
         media_offset_list = []
 
         for sample in batch:
-            if len(sample["qa_text"]) > 0:
-                rand_idx = random.randint(0, len(sample["qa_text"]) - 1)
-                messages = sample["qa_text"][rand_idx]
-                messages_prompt_only = sample["qa_text_prompt_only"][rand_idx]
-            else:
-                messages = []
-                messages_prompt_only = []
+
+            messages = sample["qa_text"]
+            messages_prompt_only = sample["qa_text_prompt_only"]
 
             # Flatten and transpose dimensions
             img_tensor = sample["embedding_tensor"]
             image_tensors.append(img_tensor)
 
-            rand_idx = random.randint(0, len(sample["qa_text"]) - 1)
-
-            if "tokenized" in sample:
-                model_inputs = sample["tokenized"]["qa_text_tokens"][rand_idx]
-                model_inputs_prompt_only = sample["tokenized"]["qa_text_prompt_only_tokens"][rand_idx]
+            if "tokenized_qa_text_tokens" in sample:
+                model_inputs = sample["tokenized_qa_text_tokens"]
+                model_inputs_prompt_only = sample["tokenized_qa_text_prompt_only_tokens"]
             else:
                 model_inputs = self.processor.encode_text_sft(self.processor.build_text_qwen(messages))
                 model_inputs_prompt_only = self.processor.encode_text_sft(

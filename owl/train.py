@@ -27,7 +27,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../../../.."))
 # Import OwnOwlModel from plygrnd.py if it is in the same workspace.
 from model import OwnOwlModel  # ensure plygrnd.py is in PYTHONPATH
 from data.datasets import AMOSMMDataset, LIDCDataset
-from callbacks import PrintFirstEvalBatchCallback
+from callbacks import PrintEvalBatchCallback
 
 
 from transformers import TrainerCallback, TrainerControl, TrainerState
@@ -161,28 +161,31 @@ class VLMTrainer:
 
         for sample in batch:
 
-            if len(sample["qa_text"]) > 0:
-                rand_idx = random.randint(0, len(sample["qa_text"]) - 1)
-                messages = sample["qa_text"][rand_idx]
-                messages_prompt_only = sample["qa_text_prompt_only"][rand_idx]
-            else:
-                messages = []
-                messages_prompt_only = []
+            # if len(sample["qa_text"]) > 0:
+            #     rand_idx = random.randint(0, len(sample["qa_text"]) - 1)
+            #     messages = sample["qa_text"][rand_idx]
+            #     messages_prompt_only = sample["qa_text_prompt_only"][rand_idx]
+            # else:
+            messages = sample["formatted_qa"]
+            messages_prompt_only = sample["formatted_qa_prompt_only"]
 
             # Flatten and transpose dimensions
             img_tensor = sample["embedding_tensor"]
             image_tensors.append(img_tensor)
 
-            rand_idx = random.randint(0, len(sample["qa_text"]) - 1)
+            # rand_idx = random.randint(0, len(sample["qa_text"]) - 1)
 
-            if "tokenized" in sample:
-                model_inputs = sample["tokenized"]["qa_text_tokens"][rand_idx]
-                model_inputs_prompt_only = sample["tokenized"]["qa_text_prompt_only_tokens"][rand_idx]
-            else:
-                model_inputs = self.processor.encode_text_sft(self.processor.build_text_qwen(messages))
-                model_inputs_prompt_only = self.processor.encode_text_sft(
-                    self.processor.build_text_qwen(messages_prompt_only)
-                )
+            # if "tokenized" in sample:
+            #     model_inputs = sample["tokenized"]["qa_text_tokens"][rand_idx]
+            #     model_inputs_prompt_only = sample["tokenized"]["qa_text_prompt_only_tokens"][rand_idx]
+            # else:
+            #     model_inputs = self.processor.encode_text_sft(self.processor.build_text_qwen(messages))
+            #     model_inputs_prompt_only = self.processor.encode_text_sft(
+            #         self.processor.build_text_qwen(messages_prompt_only)
+            #     )
+
+            model_inputs = sample["tokenized_qa_text_tokens"]
+            model_inputs_prompt_only = sample["tokenized_qa_text_prompt_only_tokens"]
 
             input_ids_list.append(model_inputs["input_ids"].squeeze(0))
             input_ids_list_prompt_only.append(model_inputs_prompt_only["input_ids"].squeeze(0))
@@ -270,6 +273,7 @@ class VLMTrainer:
             split="val",
             embeddings_path="/home/david/mnt/cluster_data/m340g/vision_embeddings/192_reshaped/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/2024_MICCAI24_AMOS-MM",
             n_samples=50,
+            tokenize_fn=tokenize_fn,
         )
 
         # train_dataset = LIDCDataset(
@@ -299,7 +303,7 @@ class VLMTrainer:
             eval_dataset=val_dataset,
             data_collator=self.collate_fn,
             tokenizer=self.tokenizer,
-            callbacks=[PrintFirstEvalBatchCallback(tokenizer=self.tokenizer, processor=self.processor)],
+            callbacks=[PrintEvalBatchCallback(tokenizer=self.tokenizer, processor=self.processor)],
         )
 
         self.trainer.train()

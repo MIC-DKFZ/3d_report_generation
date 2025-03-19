@@ -25,6 +25,7 @@ class AMOSMMExtractor:
             "options": qa_pair["options"],
             "answer": qa_pair["answer"],
             "answer_type": "CHOICE",
+            "answer_subtype": "MULTIPLE_CHOICE",
             "reasoning": reasoning,
             "correct_option_text": correct_option_text,
             "options_text": options_text,
@@ -35,7 +36,7 @@ class AMOSMMExtractor:
         }
 
     @staticmethod
-    def extract_region_question(region: str, findings: str) -> Dict[str, Any]:
+    def extract_finding_question(region: str, findings: str) -> Dict[str, Any]:
         """
         Extract formatted texts for region questions.
         """
@@ -46,8 +47,30 @@ class AMOSMMExtractor:
             "region": region,
             "findings": findings,
             "answer_type": "OPEN",
-            "user_text": f"What do you see in the {region} region of this CT scan?",
+            "answer_subtype": "FINDINGS",
+            "user_text": f"How would you describe the {region} region of this CT scan?",
             "full_answer": findings,
+            "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+        }
+
+    @staticmethod
+    def extract_impressions_question(region: str, impressions: str) -> Dict[str, Any]:
+        """
+        Extract formatted texts for impression questions.
+        """
+        if not impressions:
+            return None
+
+        if isinstance(impressions, list):
+            impressions = ", ".join(impressions)
+
+        return {
+            "region": region,
+            "impressions": impressions,
+            "answer_type": "OPEN",
+            "answer_subtype": "IMPRESSIONS",
+            "user_text": f"What can you detect in the {region} region of this CT scan?",
+            "full_answer": impressions,
             "system_text": "You are a medical imaging AI trained to analyze CT scans.",
         }
 
@@ -58,21 +81,32 @@ class AMOSMMExtractor:
         """
         extracted_report = {
             "raw": report,  # Keep the original data
-            "regions": {},
-            "region_questions": {},
-            "impression": report.get("impression", ""),
+            "finding_questions": {},
+            "impression_question": {},
+            "impression": report.get("impression", {}),
+            "findings": report.get("findings", {}),
         }
 
         # Extract region findings and create region questions
         if "findings" in report:
             for region in ["chest", "abdomen", "pelvis"]:
-                findings = report["findings"].get(region, "")
-                extracted_report["regions"][region] = findings
+                region_findings = report["findings"].get(region, "")
 
                 # Create formatted region question
-                if findings:
-                    extracted_report["region_questions"][region] = AMOSMMExtractor.extract_region_question(
-                        region, findings
+                if region_findings:
+                    extracted_report["finding_questions"][region] = AMOSMMExtractor.extract_finding_question(
+                        region, region_findings
+                    )
+
+        # Extract impression and create impression question
+        if "impression" in report:
+            for region in ["chest", "abdomen", "pelvis"]:
+                region_impressions = report["impression"].get(region, "")
+
+                # Create formatted impression question
+                if region_impressions:
+                    extracted_report["impression_question"][region] = AMOSMMExtractor.extract_impressions_question(
+                        region, region_impressions
                     )
 
         return extracted_report
@@ -82,13 +116,26 @@ class AMOSMMExtractor:
         """
         Extract all relevant information from an AMOS-MM sample.
         """
-        extracted = {"image_path": sample["image"], "qa_items": [], "report": None}
+        extracted = {"image_path": sample["image"], "qa_items": [], "report": {}, "questions": []}
 
         if "labels" in sample:
             if "report" in sample["labels"]:
-                extracted["report"] = AMOSMMExtractor.extract_report(sample["labels"]["report"])
+                report_dict = AMOSMMExtractor.extract_report(sample["labels"]["report"])
+                extracted["report"]["raw"] = report_dict["raw"]
+                extracted["report"]["findings"] = report_dict["findings"]
+                extracted["report"]["impression"] = report_dict["impression"]
+
+                # Add finding questions
+                for region, finding_questions in report_dict["finding_questions"].items():
+                    extracted["qa_items"].append(finding_questions)
+
+                # Add impression question
+                for region, impression_question in report_dict["impression_question"].items():
+                    extracted["qa_items"].append(impression_question)
 
             if "qa" in sample["labels"]:
+                extracted["questions"] = sample["labels"]["qa"]
+
                 for qa_pair in sample["labels"]["qa"]:
                     extracted["qa_items"].append(AMOSMMExtractor.extract_qa(qa_pair))
 
@@ -105,12 +152,24 @@ class LIDCExtractor:
         """
         Extract all information from a LIDC QA pair.
         """
+
+        answer_subtype = "TEXT"  # Default to text answers
+
+        if qa_item["answer_type"] == "CLOSED":
+            answer_subtype = "YESNO"
+        elif qa_item["answer_type"] == "OPEN":
+            if isinstance(qa_item["answer"], int):
+                answer_subtype = "NUMERIC"
+            else:
+                answer_subtype = "TEXT"
+
         # Basic information from the sample
         extracted = {
             "question": qa_item["question"],
             "answer": qa_item["answer"],
             "content_type": qa_item["content_type"],
             "answer_type": qa_item["answer_type"],
+            "answer_subtype": answer_subtype,
             "scan_id": qa_item["scan_id"],
             "series_uid": qa_item["series_uid"],
             "subject_id": qa_item["subject_id"],
