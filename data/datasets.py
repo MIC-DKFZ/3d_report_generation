@@ -26,7 +26,14 @@ class MedicalImageDataset(Dataset, ABC):
     """
 
     def __init__(
-        self, dataset_json_path, model_name, split="train", embeddings_path=None, n_samples=None, tokenize_fn=None
+        self,
+        dataset_json_path,
+        model_name,
+        split="train",
+        embeddings_path=None,
+        n_samples=None,
+        tokenize_fn=None,
+        answer_types=("CHOICE",),
     ):
         super().__init__()
 
@@ -39,10 +46,26 @@ class MedicalImageDataset(Dataset, ABC):
         self.n_samples = n_samples
         self.tokenize_fn = tokenize_fn
 
+        if isinstance(answer_types, str):
+            answer_types = [answer_types]  # Convert single string to list of strings for consistency
+
+        self.answer_type_dict = {}
+        for answer_type in answer_types:
+            if isinstance(answer_type, str):
+                self.answer_type_dict[answer_type] = None
+            elif isinstance(answer_type, tuple):
+                self.answer_type_dict[answer_type[0]] = answer_type[1]
+            elif isinstance(answer_type, list):
+                self.answer_type_dict[answer_type[0]] = answer_type[1:]
+            elif isinstance(answer_type, dict):
+                self.answer_type_dict.update(answer_type)
+
         # Load and process data
         self.data = self._load_data(dataset_json_path)
         self._init_formatters()
+
         self.samples = self.format_data()
+        self.samples = self._filter_samples(self.samples)
 
         if self.tokenize_fn:
             self._tokenize_samples()
@@ -77,6 +100,20 @@ class MedicalImageDataset(Dataset, ABC):
             # sample["tokenized"] = {}
             sample["tokenized_qa_text_tokens"] = self.tokenize_fn(sample["formatted_qa"])
             sample["tokenized_qa_text_prompt_only_tokens"] = self.tokenize_fn(sample["formatted_qa_prompt_only"])
+
+    def _filter_samples(self, samples):
+        """Filter samples based on answer type"""
+        filtered_samples = []
+
+        for sample in samples:
+            if sample["answer_type"] in self.answer_type_dict:
+                if self.answer_type_dict[sample["answer_type"]] is not None:
+                    if sample["answer_subtype"] in self.answer_type_dict[sample["answer_type"]]:
+                        filtered_samples.append(sample)
+                else:
+                    filtered_samples.append(sample)
+
+        return filtered_samples
 
     def _load_embedding(self, embedding_path):
         """Load embedding from file"""
