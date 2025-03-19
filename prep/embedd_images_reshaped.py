@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional, Union, Dict, Tuple
 from evavit import PretrainedEvaEncFromEvaMAE, get_config_from_plans
 import nibabel as nib
 import nrrd
@@ -65,11 +65,12 @@ def split_image_into_patches(img, patch_size: List[int], vit_patch_size: List[in
         # This creates a 24x24x24 grid of patches, each size 8x8x8 (if vit_patch_size = 8 and patch_size / vit_patch_size = 24)
         foreground_mask_patches = rearrange(foreground_mask_padded, '(m x) (n y) (o z) -> (m n o) x y z', x=vit_patch_size[0], y=vit_patch_size[1], z=vit_patch_size[2])
         # If any voxel in a 8x8x8 patch contains foreground, set the whole patch to foreground
-        # (24 * 24 * 24, 8, 8, 8) -> (24, 24, 24)
+        # (24 * 24 * 24, 8, 8, 8) -> (24 * 24 * 24)
         mask = torch.any(foreground_mask_patches != 0, dim=(-3, -2, -1))
-        #
-        foreground_mask_for_mask = rearrange(mask, '(m n o) -> m n o', m=reduced_ps[0], n=reduced_ps[1], o=reduced_ps[2]).unsqueeze(0)
-        attn_mask = attn_mask | foreground_mask_for_mask.to(attn_mask.device)
+
+        foreground_mask_for_mask = rearrange(mask, '(m n o) -> m n o', m=reduced_ps[0] * num_patches[0], n=reduced_ps[1] * num_patches[1], o=reduced_ps[2] * num_patches[2])
+        foreground_mask_match_attn_mask = rearrange(foreground_mask_for_mask, '(i m) (j n) (k o) -> (i j k) m n o', i=num_patches[0], j=num_patches[1], k=num_patches[2]).to(attn_mask.device)
+        attn_mask = attn_mask | foreground_mask_match_attn_mask.to(attn_mask.device)
 
     # (B, C, N, H, W, D) -> (N, B, C, H, W, D)
     return patches.permute(-4, 0, 1, -3, -2, -1), attn_mask, num_patches
@@ -125,7 +126,8 @@ def process_region_from_segmentation_native_res(
         img_path,
         model,
         config,
-        device='cuda' if torch.cuda.is_available() else 'cpu'):
+        device='cuda' if torch.cuda.is_available() else 'cpu',
+        set_of_interesting_masks: Optional[Union[List[int], List[List[int]]]] = None):
     # Print debug information about patch size
     # TODO: How to handle segmentation_path?
     segmentation_path = "/home/r403k/ResourcesDKFZ/cluster_data/r403k/papertrack25/YannickResEnc/amos-mm/chunk_0"
@@ -134,13 +136,40 @@ def process_region_from_segmentation_native_res(
     patch_size = tuple(config['input_shape'])
     print(f"Target patch size from config: {patch_size}")
     rocket2raw, raw2rocket = _create_name_mapping_rocket_raw()
+
+    if set_of_interesting_masks is None:
+        # This are the default TotalSegmentator classes
+        # from prep.helper import ts_classes
+        # set_of_interesting_masks = ts_classes
+        from prep.helper import first_group_attempt
+        set_of_interesting_masks = first_group_attempt
+        # remove background key
+        set_of_interesting_masks.pop("background", None)
+
+    def _mask_idx_in_dict_of_interesting_masks(mask_idx: int, set_of_interesting_masks: Dict[str, Union[int, List[int]]]) -> Union[bool, Tuple[str, List[int]]]:
+        """
+        If mask index is in set return list of mask indicies that should be combined else False.
+        :param mask_idx: int
+        :param set_of_interesting_masks: Dict[str, Union[int, List[int]]]
+        :return: List[int] or False
+        """
+        for key, value in set_of_interesting_masks.items():
+            if isinstance(value, list):
+                if mask_idx in value:
+                    return key, value
+            elif isinstance(value, int):
+                if mask_idx == value:
+                    return key, [value]
+            else:
+                raise ValueError(f"Unknown type in set_of_interesting_masks: {type(value)}")
+        return False
+
     try:
         img = nib.load(img_path)
         seg, header = nrrd.read(get_seg_path_from_img_path(img_path, raw2rocket))
         img_data = img.get_fdata()
         seg_data = seg
         mask_idx_list = np.unique(seg_data)
-        set_of_interesting_masks = [28, 42, 43, 44]
         # Add batch and channel dimensions
         img_data = np.expand_dims(img_data, axis=(0, 1))
         affine = img.affine
@@ -154,26 +183,25 @@ def process_region_from_segmentation_native_res(
             target_dtype=np.float32,
             use_mask_for_norm=False,
         )
+        embeddings = {}
         for mask_idx in mask_idx_list:
-            if mask_idx in set_of_interesting_masks:
-                # TODO: Add feature where one can specify the mask indicies to use (i.e. lists which combine indicies, e.g. to have the left lung lobes combined.)
-                # matching_indicies_x = np.where(np.isin(seg_data, mask_idx))[0]
-                # if len(matching_indicies_x) > 0:
-                #     x_min, x_max = matching_indicies_x.min(), matching_indicies_x.max()
-                x_min, x_max = np.where(seg_data == mask_idx)[0].min(), np.where(seg_data == mask_idx)[0].max()
-                y_min, y_max = np.where(seg_data == mask_idx)[1].min(), np.where(seg_data == mask_idx)[1].max()
-                z_min, z_max = np.where(seg_data == mask_idx)[2].min(), np.where(seg_data == mask_idx)[2].max()
+            if class_name_and_current_set_of_indicies := _mask_idx_in_dict_of_interesting_masks(mask_idx, set_of_interesting_masks):
+                class_name, current_set_of_indicies = class_name_and_current_set_of_indicies
+                # Find limits for current set of mask indicies for later crop
+                x_min, x_max = np.where(np.isin(seg_data, current_set_of_indicies))[0].min(), np.where(np.isin(seg_data, current_set_of_indicies))[0].max()
+                y_min, y_max = np.where(np.isin(seg_data, current_set_of_indicies))[1].min(), np.where(np.isin(seg_data, current_set_of_indicies))[1].max()
+                z_min, z_max = np.where(np.isin(seg_data, current_set_of_indicies))[2].min(), np.where(np.isin(seg_data, current_set_of_indicies))[2].max()
 
                 # normalized_np: [B, C, H, W, D]
                 img_data_cropped = normalized_np[: ,: , x_min:x_max, y_min:y_max, z_min:z_max]
                 # seg_data [H, W, D]
                 seg_data_cropped = seg_data[x_min:x_max, y_min:y_max, z_min:z_max]
-                # set mask to with mask_idx to 1 and all other to 0
-                seg_data_cropped = np.where(seg_data_cropped == mask_idx, 1, 0)
+                # set (combined) mask values to 1 and all other to 0
+                seg_data_cropped = np.where(np.isin(seg_data_cropped, current_set_of_indicies), 1, 0)
 
                 # Convert back to tensor
                 img_tensor = torch.from_numpy(img_data_cropped).to(device)
-                print(f"Tensor shape after adding batch/channel dims: {img_tensor.shape}")
+                print(f"Tensor shape after adding batch/channel dims: {img_tensor.shape} for {class_name}")
 
                 # Get patch size from config and ensure it's a tuple
                 patch_size = tuple(config['input_shape'])  # Should be (192, 192, 192)
@@ -182,15 +210,16 @@ def process_region_from_segmentation_native_res(
                     img_tensor, patch_size, vit_patch_size=[8, 8, 8],
                     foreground_mask=torch.from_numpy(seg_data_cropped).to(device))
 
-                embeddings = []
-                # Generate embeddings
+                embeddings_region = []
+                # Generate embeddings_region
                 for patch, attn_mask in zip(patches, attn_masks):
                     with torch.no_grad():
-                        patch_embeddings = model(patch, rearrange(attn_mask, 'h w d -> (h w d)').to(device))
-                    embeddings.append(patch_embeddings)
-                embeddings = combine_patches_into_image(embeddings, attn_masks.to(device), num_patches)
+                        patch_embeddings_region = model(patch, rearrange(attn_mask, 'h w d -> (h w d)').to(device))
+                    embeddings_region.append(patch_embeddings_region)
+                embeddings_region = combine_patches_into_image(embeddings_region, attn_masks.to(device), num_patches)
+                embeddings[class_name] = embeddings_region.cpu()
 
-        return embeddings.cpu(), affine
+        return embeddings, affine
 
     except Exception as e:
         print(f"Error in process_image for {img_path}: {str(e)}")
@@ -304,7 +333,7 @@ def process_image(img_path, model, config, device='cuda' if torch.cuda.is_availa
 def main():
     # Define paths
     base_path = "/home/r403k/ResourcesDKFZ/e230-thrp-data/mic_rocket/checkpoints/pretraining/MAE/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres"
-    output_base = "/home/r403k/ResourcesDKFZ/E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings/192_sliding_window/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres"
+    output_base = "/home/r403k/Data/papertrack25/segmentations/test_embeddings"
 
     input_dirs = [
         "/home/r403k/ResourcesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/imagesTr",
@@ -341,20 +370,37 @@ def main():
             try:
                 embeddings, affine = process_image_fct(img_path, model, config, device)
 
-                # Print embedding information
-                print(f"Embedding shape: {embeddings.shape}")
-                print(f"Value range: [{embeddings.min():.3f}, {embeddings.max():.3f}]")
-                print(f"Mean: {embeddings.mean():.3f}")
-                print(f"Std: {embeddings.std():.3f}")
+                if isinstance(embeddings, np.ndarray):
+                    # Print embedding information
+                    print(f"Embedding shape: {embeddings.shape}")
+                    print(f"Value range: [{embeddings.min():.3f}, {embeddings.max():.3f}]")
+                    print(f"Mean: {embeddings.mean():.3f}")
+                    print(f"Std: {embeddings.std():.3f}")
 
 
-                # Save embeddings and metadata
-                np.savez_compressed(
-                    output_path,
-                    embeddings=embeddings.numpy(),
-                    affine=affine,
-                    original_file=img_file
-                )
+                    # Save embeddings and metadata
+                    np.savez_compressed(
+                        output_path,
+                        embeddings=embeddings.numpy(),
+                        affine=affine,
+                        original_file=img_file
+                    )
+
+                elif isinstance(embeddings, dict):
+                    for key, value in embeddings.items():
+                        # Print embedding information
+                        print(f"Embedding shape: {value.shape}")
+                        print(f"Value range: [{value.min():.3f}, {value.max():.3f}]")
+                        print(f"Mean: {value.mean():.3f}")
+                        print(f"Std: {value.std():.3f}")
+
+                        # Save embeddings and metadata
+                        np.savez_compressed(
+                            output_path.replace("_embedding.npz", f"_{key}_embedding.npz"),
+                            embeddings=value.numpy(),
+                            affine=affine,
+                            original_file=img_file
+                        )
 
             except Exception as e:
                 print(f"Error processing {img_file}: {str(e)}")
