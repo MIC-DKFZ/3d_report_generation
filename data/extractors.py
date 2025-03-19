@@ -1,4 +1,59 @@
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
+
+
+class RequiredKeys(TypedDict):
+    """
+    Defines the required keys for the dictionary.
+    """
+
+    image_id: str
+    question: str
+    answer: str
+    answer_type: str
+    system_text: str
+
+
+class QAItemDict(RequiredKeys):
+    """
+    A dictionary-like class that inherits from TypedDict and enforces the presence of required keys.
+    """
+
+    def __init__(self, data: Dict[str, Any]):
+        """
+        Initializes the MyDict object.
+
+        Args:
+            data: A dictionary containing the initial data.
+
+        Raises:
+            ValueError: If any of the required keys are missing.
+        """
+        # Validate required keys
+        required_keys = set(QAItemDict.__required_keys__)  # Access required keys from TypedDict
+        if not required_keys.issubset(data.keys()):
+            missing_keys = required_keys - data.keys()
+            raise ValueError(f"Missing required keys: {missing_keys}")
+
+        super().__init__(**data)  # Initialize TypedDict with the data
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        """
+        Allows setting items using the square bracket notation (e.g., my_dict["key1"] = "new value").
+        """
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key: str) -> None:
+        """
+        Allows deleting items using the del statement (e.g., del my_dict["key1"]).
+        """
+        super().__delitem__(key)
+
+    @property
+    def __required_keys__(self) -> Set[str]:
+        """
+        Returns the set of required keys for the TypedDict.
+        """
+        return set(self.__annotations__.keys())
 
 
 class AMOSMMExtractor:
@@ -153,7 +208,7 @@ class AMOSMMExtractor:
         return extracted
 
     @staticmethod
-    def extract_sample_list(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def extract_sample_list(samples: List[Dict[str, Any]]) -> List[QAItemDict[str, Any]]:
         """
         Extract all relevant information from a list of AMOS-MM samples.
         """
@@ -168,10 +223,10 @@ class AMOSMMExtractor:
             cleaned_sample = {k: v for k, v in sample.items() if k != "qa_items"}
             if "qa_items" in sample:
                 for qa_item in sample["qa_items"]:
-                    flattened_sample = {
+                    flattened_sample = QAItemDict(
                         **cleaned_sample,
                         **qa_item,
-                    }
+                    )
                     samples_flattened.append(flattened_sample)
 
         return samples_flattened
@@ -203,13 +258,8 @@ class LIDCExtractor:
             "question": qa_item["question"],
             "answer": qa_item["answer"],
             "full_answer": qa_item["answer"],
-            "content_type": qa_item["content_type"],
             "answer_type": qa_item["answer_type"],
             "answer_subtype": answer_subtype,
-            "scan_id": qa_item["scan_id"],
-            "series_uid": qa_item["series_uid"],
-            "subject_id": qa_item["subject_id"],
-            "study_uid": qa_item["study_uid"],
         }
 
         # Generate formatted texts
@@ -255,7 +305,7 @@ class LIDCExtractor:
         }
 
     @staticmethod
-    def extract_sample_list(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def extract_sample_list(samples: List[Dict[str, Any]]) -> List[QAItemDict[str, Any]]:
         """
         Extract all relevant information from a list of LIDC samples.
         """
@@ -267,10 +317,10 @@ class LIDCExtractor:
 
             cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "item_qa"}
             if "item_qa" in extracted_sample:
-                flattened_sample = {
+                flattened_sample = QAItemDict(
                     **cleaned_sample,
                     **extracted_sample["item_qa"],
-                }
+                )
                 extracted_samples.append(flattened_sample)
 
         return extracted_samples
