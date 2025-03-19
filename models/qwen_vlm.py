@@ -67,9 +67,10 @@ class QwenVLModel(AbstractVLMModel):
         """Custom collate function for Qwen model"""
         # Get the texts and images, and apply the chat template
         texts = [self.processor.apply_chat_template(example["formatted_qa"], tokenize=False) for example in examples]
-        embedding_paths = [example["embedding_path"] for example in examples]
+        
+        embeddings = [example["embedding"] for example in examples]
 
-        batch = self.processor(text=texts, vision_embedding_paths=embedding_paths, return_tensors="pt", padding=True)
+        batch = self.processor(text=texts, vision_embeddings=embeddings, return_tensors="pt", padding=True)
 
         labels = batch["input_ids"].clone()
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
