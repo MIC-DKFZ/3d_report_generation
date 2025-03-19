@@ -15,7 +15,7 @@ from transformers import TrainerCallback
 from trl import SFTConfig, SFTTrainer
 
 import wandb
-from data.datasets_refactored import MedicalQADataset
+from data.datasets import AMOSMMDataset
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
 
@@ -237,14 +237,14 @@ def main():
     )
 
     # Create datasets
-    train_dataset = MedicalQADataset(
+    train_dataset = AMOSMMDataset(
         dataset_json_path=general_args.dataset_path,
         model_name=general_args.model_type,
         split="train",
         embeddings_path=general_args.embeddings_path,
     )
 
-    val_dataset = MedicalQADataset(
+    val_dataset = AMOSMMDataset(
         dataset_json_path=general_args.dataset_path,
         model_name=general_args.model_type,
         split="val",
