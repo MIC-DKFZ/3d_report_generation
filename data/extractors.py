@@ -29,32 +29,12 @@ class QAItemDict(RequiredKeys):
             ValueError: If any of the required keys are missing.
         """
         # Validate required keys
-        required_keys = set(QAItemDict.__required_keys__)  # Access required keys from TypedDict
-        if not required_keys.issubset(data.keys()):
-            missing_keys = required_keys - data.keys()
+        required_keys = set(RequiredKeys.__annotations__.keys())
+        missing_keys = required_keys - set(data.keys())
+        if missing_keys:
             raise ValueError(f"Missing required keys: {missing_keys}")
 
         super().__init__(**data)  # Initialize TypedDict with the data
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        """
-        Allows setting items using the square bracket notation (e.g., my_dict["key1"] = "new value").
-        """
-        super().__setitem__(key, value)
-
-    def __delitem__(self, key: str) -> None:
-        """
-        Allows deleting items using the del statement (e.g., del my_dict["key1"]).
-        """
-        super().__delitem__(key)
-
-    @property
-    def __required_keys__(self) -> Set[str]:
-        """
-        Returns the set of required keys for the TypedDict.
-        """
-        return set(self.__annotations__.keys())
-
 
 class AMOSMMExtractor:
     """
@@ -92,47 +72,43 @@ class AMOSMMExtractor:
         }
 
     @staticmethod
+    def _extract_region_question(region: str, text: str, question_type: str) -> Dict[str, Any]:
+        """
+        Helper method to extract formatted texts for region questions.
+        """
+        if not text:
+            return None
+
+        if isinstance(text, list):
+            text = ", ".join(text)
+
+        question_prefix = "What are the findings in " if question_type == "FINDINGS" else "What is the impression of "
+        
+        return {
+            "region": region,
+            f"{question_type.lower()}": text,
+            "answer_type": "OPEN",
+            "answer_subtype": question_type,
+            "user_text": f"{question_prefix} the {region} region of this CT scan?", # TODO add prompt variety
+            "question": f"{question_prefix} the {region} region of this CT scan?",
+            "full_answer": text,
+            "answer": text,
+            "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+        }
+
+    @staticmethod
     def extract_finding_question(region: str, findings: str) -> Dict[str, Any]:
         """
         Extract formatted texts for region questions.
         """
-        if not findings:
-            return None
-
-        return {
-            "region": region,
-            "findings": findings,
-            "answer_type": "OPEN",
-            "answer_subtype": "FINDINGS",
-            "user_text": f"How would you describe the {region} region of this CT scan?",
-            "question": f"How would you describe the {region} region of this CT scan?",
-            "full_answer": findings,
-            "answer": findings,
-            "system_text": "You are a medical imaging AI trained to analyze CT scans.",
-        }
+        return AMOSMMExtractor._extract_region_question(region, findings, "FINDINGS")
 
     @staticmethod
     def extract_impressions_question(region: str, impressions: str) -> Dict[str, Any]:
         """
         Extract formatted texts for impression questions.
         """
-        if not impressions:
-            return None
-
-        if isinstance(impressions, list):
-            impressions = ", ".join(impressions)
-
-        return {
-            "region": region,
-            "impressions": impressions,
-            "answer_type": "OPEN",
-            "answer_subtype": "IMPRESSIONS",
-            "user_text": f"What can you detect in the {region} region of this CT scan?",
-            "question": f"What can you detect in the {region} region of this CT scan?",
-            "full_answer": impressions,
-            "answer": impressions,
-            "system_text": "You are a medical imaging AI trained to analyze CT scans.",
-        }
+        return AMOSMMExtractor._extract_region_question(region, impressions, "IMPRESSIONS")
 
     @staticmethod
     def extract_report(report: Dict[str, Any]) -> Dict[str, Any]:
@@ -186,7 +162,7 @@ class AMOSMMExtractor:
 
         if "labels" in sample:
             if "report" in sample["labels"]:
-                report_dict = AMOSMMExtractor.extract_report(sample["labels"]["report"])
+                report_dict = AMOSMMExtractor.extract_report(sample["labels"]["report"]) # TODO Throw out report here?
                 extracted["report"]["raw"] = report_dict["raw"]
                 extracted["report"]["findings"] = report_dict["findings"]
                 extracted["report"]["impression"] = report_dict["impression"]
@@ -212,22 +188,15 @@ class AMOSMMExtractor:
         """
         Extract all relevant information from a list of AMOS-MM samples.
         """
-        extracted_samples = []
+        samples_flattened = []
 
         for sample in samples:
             extracted_sample = AMOSMMExtractor.extract_sample(sample)
-            extracted_samples.append(extracted_sample)
-
-        samples_flattened = []
-        for sample in extracted_samples:
-            cleaned_sample = {k: v for k, v in sample.items() if k != "qa_items"}
-            if "qa_items" in sample:
-                for qa_item in sample["qa_items"]:
-                    flattened_sample = QAItemDict(
-                        **cleaned_sample,
-                        **qa_item,
-                    )
-                    samples_flattened.append(flattened_sample)
+            cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "qa_items"}
+            
+            for qa_item in extracted_sample.get("qa_items", []):
+                flattened_sample = QAItemDict({**cleaned_sample, **qa_item})
+                samples_flattened.append(flattened_sample)
 
         return samples_flattened
 
@@ -245,44 +214,23 @@ class LIDCExtractor:
 
         answer_subtype = "TEXT"  # Default to text answers
 
+        answer = qa_item["answer"]
+
         if qa_item["answer_type"] == "CLOSED":
             answer_subtype = "YESNO"
-        elif qa_item["answer_type"] == "OPEN":
-            if isinstance(qa_item["answer"], int):
-                answer_subtype = "NUMERIC"
-            else:
-                answer_subtype = "TEXT"
+        elif isinstance(answer, int):
+            answer_subtype = "NUMERIC"
 
-        # Basic information from the sample
-        extracted = {
+        # Basic information with formatted texts
+        return {
             "question": qa_item["question"],
-            "answer": qa_item["answer"],
-            "full_answer": qa_item["answer"],
+            "answer": answer,
+            "full_answer": answer, # TODO remove duplicate
             "answer_type": qa_item["answer_type"],
             "answer_subtype": answer_subtype,
+            "user_text": qa_item["question"],
+            "system_text": "You are a medical imaging AI trained to analyze lung CT scans and identify nodule characteristics.",
         }
-
-        # Generate formatted texts
-        user_text = qa_item["question"]
-
-        # Format the answer based on type
-        if isinstance(qa_item["answer"], int):
-            # For numerical answers (like count questions)
-            full_answer = str(qa_item["answer"])
-        else:
-            # For text answers
-            full_answer = qa_item["answer"]
-
-        # Add formatted texts
-        extracted.update(
-            {
-                "user_text": user_text,
-                "full_answer": full_answer,
-                "system_text": "You are a medical imaging AI trained to analyze lung CT scans and identify nodule characteristics.",
-            }
-        )
-
-        return extracted
 
     @staticmethod
     def extract_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
@@ -313,14 +261,9 @@ class LIDCExtractor:
 
         for sample in samples:
             extracted_sample = LIDCExtractor.extract_sample(sample)
-            # extracted_samples.append(extracted_sample)
-
-            cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "item_qa"}
+            cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "item_qa"}     
             if "item_qa" in extracted_sample:
-                flattened_sample = QAItemDict(
-                    **cleaned_sample,
-                    **extracted_sample["item_qa"],
-                )
+                flattened_sample = QAItemDict({**cleaned_sample, **extracted_sample["item_qa"]})
                 extracted_samples.append(flattened_sample)
 
         return extracted_samples
