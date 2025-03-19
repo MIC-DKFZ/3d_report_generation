@@ -49,7 +49,9 @@ class AMOSMMExtractor:
             "answer_type": "OPEN",
             "answer_subtype": "FINDINGS",
             "user_text": f"How would you describe the {region} region of this CT scan?",
+            "question": f"How would you describe the {region} region of this CT scan?",
             "full_answer": findings,
+            "answer": findings,
             "system_text": "You are a medical imaging AI trained to analyze CT scans.",
         }
 
@@ -70,7 +72,9 @@ class AMOSMMExtractor:
             "answer_type": "OPEN",
             "answer_subtype": "IMPRESSIONS",
             "user_text": f"What can you detect in the {region} region of this CT scan?",
+            "question": f"What can you detect in the {region} region of this CT scan?",
             "full_answer": impressions,
+            "answer": impressions,
             "system_text": "You are a medical imaging AI trained to analyze CT scans.",
         }
 
@@ -167,6 +171,7 @@ class LIDCExtractor:
         extracted = {
             "question": qa_item["question"],
             "answer": qa_item["answer"],
+            "full_answer": qa_item["answer"],
             "content_type": qa_item["content_type"],
             "answer_type": qa_item["answer_type"],
             "answer_subtype": answer_subtype,

@@ -2,15 +2,36 @@ import json
 import os
 from pathlib import Path
 from abc import ABC, abstractmethod
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from data.extractors import AMOSMMExtractor, LIDCExtractor
-from data.formatters import get_formatter
 
-SSL_MODEL_NAME = "EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres"
-IMAGE_EMBEDDING_METHOD = "192_sliding_window"
+SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
+
+
+def format_into_message(question, answer, model_name, system_text=SYSTEM_TEXT, embedding_path=None):
+
+    system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
+
+    if model_name == "qwen":
+        user_message = {
+            "role": "user",
+            "content": [{"type": "image", "embedding_path": embedding_path}, {"type": "text", "text": question}],
+        }
+    elif model_name == "owl":
+        user_message = {"role": "user", "content": [{"type": "text", "text": f"<|image|>\n{question}"}]}
+    else:
+        raise ValueError(f"Unsupported model name: {model_name}")
+
+    answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
+
+    full_conversation = [system_message, user_message, answer_message]
+    prompt_only_conversation = [system_message, user_message]
+
+    return full_conversation, prompt_only_conversation
 
 
 class MedicalImageDataset(Dataset, ABC):
@@ -62,7 +83,6 @@ class MedicalImageDataset(Dataset, ABC):
 
         # Load and process data
         self.data = self._load_data(dataset_json_path)
-        self._init_formatters()
 
         self.samples = self.format_data()
         self.samples = self._filter_samples(self.samples)
@@ -73,11 +93,6 @@ class MedicalImageDataset(Dataset, ABC):
     @abstractmethod
     def _load_data(self, dataset_json_path):
         """Load data from JSON file(s)"""
-        pass
-
-    @abstractmethod
-    def _init_formatters(self):
-        """Initialize formatters based on model name"""
         pass
 
     @abstractmethod
@@ -167,10 +182,6 @@ class AMOSMMDataset(MedicalImageDataset):
         with open(json_file_path, "r") as f:
             return json.load(f)
 
-    def _init_formatters(self):
-        self.format_region_question = get_formatter(f"{self.model_name}_amos_regions")
-        self.format_qa_data = get_formatter(f"{self.model_name}_amos_qa")
-
     def get_embedding_path(self, image_path):
         """Convert image path to embedding path"""
         base_name = image_path.replace(".nii.gz", "")
@@ -207,20 +218,11 @@ class AMOSMMDataset(MedicalImageDataset):
                 "report": extracted_data["report"] if extracted_data["report"] else {},
             }
 
-            # # Process report data using formatters
-            # if extracted_data["report"]:
-            #     for region, region_data in extracted_data["report"]["region_questions"].items():
-            #         if region_data:
-            #             region_report, region_report_prompt_only = self.format_region_question(
-            #                 region_data, embedding_path
-            #             )
-            #             if region_report:
-            #                 item["report_text"].append(region_report)
-            #                 item["report_text_prompt_only"].append(region_report_prompt_only)
-
             # Process QA data using formatters
             for qa_idx, qa_item in enumerate(extracted_data["qa_items"]):
-                formatted_qa, formatted_qa_prompt_only = self.format_qa_data(qa_item, embedding_path)
+                formatted_qa, formatted_qa_prompt_only = format_into_message(
+                    qa_item["question"], qa_item["full_answer"], self.model_name, system_text=qa_item["system_text"]
+                )
                 extracted_data["qa_items"][qa_idx]["formatted_qa"] = formatted_qa
                 extracted_data["qa_items"][qa_idx]["formatted_qa_prompt_only"] = formatted_qa_prompt_only
 
@@ -255,20 +257,6 @@ class AMOSMMDataset(MedicalImageDataset):
         """Test function to verify dataset loading"""
         print(f"\nTotal number of samples: {len(self)}")
 
-        # Print example of region-specific question
-        print("\nExample of region question:")
-        for sample in self.samples:
-            if "do you see" in sample["qa_text"][0]:
-                print(f"Question: {sample['qa_text'][0]}")
-                break
-
-        # Print example of original QA
-        print("\nExample of original QA:")
-        for sample in self.samples:
-            if "The answer is" in sample["qa_text"][0]:
-                print(f"Question: {sample['qa_text'][0]}")
-                break
-
 
 class LIDCDataset(MedicalImageDataset):
     """
@@ -295,9 +283,6 @@ class LIDCDataset(MedicalImageDataset):
         with open(file_path, "r") as f:
             return json.load(f)
 
-    def _init_formatters(self):
-        self.format_qa_data = get_formatter(f"{self.model_name}_lidc_qa")
-
     def get_embedding_path(self, series_uid):
         """Convert image path to embedding path"""
         base_name = series_uid.replace(".", "_")
@@ -321,7 +306,12 @@ class LIDCDataset(MedicalImageDataset):
             extracted_data = LIDCExtractor.extract_sample(sample)
 
             # Format QA pairs
-            formatted_qa, formatted_qa_prompt_only = self.format_qa_data(extracted_data["item_qa"], embedding_path)
+            formatted_qa, formatted_qa_prompt_only = format_into_message(
+                extracted_data["item_qa"]["question"],
+                extracted_data["item_qa"]["full_answer"],
+                self.model_name,
+                system_text=extracted_data["item_qa"]["system_text"],
+            )
 
             item = {
                 "series_uid": extracted_data["series_uid"],
@@ -332,7 +322,7 @@ class LIDCDataset(MedicalImageDataset):
                 "embedding": None,
                 "formatted_qa": formatted_qa,
                 "formatted_qa_prompt_only": formatted_qa_prompt_only,
-                "item_qa": extracted_data["item_qa"],
+                **extracted_data["item_qa"],
             }
 
             formatted_data.append(item)
