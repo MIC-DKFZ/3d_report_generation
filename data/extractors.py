@@ -21,15 +21,16 @@ class AMOSMMExtractor:
         full_answer = f"The answer is {qa_pair['answer']}. {correct_option_text}. {reasoning}"
 
         return {
-            "question": qa_pair["question"],
-            "options": qa_pair["options"],
+            "qa_question": qa_pair["question"],
+            "qa_options": qa_pair["options"],
             "answer": qa_pair["answer"],
             "answer_type": "CHOICE",
             "answer_subtype": "MULTIPLE_CHOICE",
             "reasoning": reasoning,
             "correct_option_text": correct_option_text,
             "options_text": options_text,
-            # Formatted texts
+            "content_type": qa_pair["type"],
+            "question": user_text,
             "user_text": user_text,
             "full_answer": full_answer,
             "system_text": "You are a medical imaging AI trained to answer questions about CT scans.",
@@ -120,7 +121,13 @@ class AMOSMMExtractor:
         """
         Extract all relevant information from an AMOS-MM sample.
         """
-        extracted = {"image_path": sample["image"], "qa_items": [], "report": {}, "questions": []}
+        extracted = {
+            "image_path": sample["image"],
+            "image_id": sample["image"],
+            "qa_items": [],
+            "report": {},
+            "questions": [],
+        }
 
         if "labels" in sample:
             if "report" in sample["labels"]:
@@ -144,6 +151,30 @@ class AMOSMMExtractor:
                     extracted["qa_items"].append(AMOSMMExtractor.extract_qa(qa_pair))
 
         return extracted
+
+    @staticmethod
+    def extract_sample_list(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Extract all relevant information from a list of AMOS-MM samples.
+        """
+        extracted_samples = []
+
+        for sample in samples:
+            extracted_sample = AMOSMMExtractor.extract_sample(sample)
+            extracted_samples.append(extracted_sample)
+
+        samples_flattened = []
+        for sample in extracted_samples:
+            cleaned_sample = {k: v for k, v in sample.items() if k != "qa_items"}
+            if "qa_items" in sample:
+                for qa_item in sample["qa_items"]:
+                    flattened_sample = {
+                        **cleaned_sample,
+                        **qa_item,
+                    }
+                    samples_flattened.append(flattened_sample)
+
+        return samples_flattened
 
 
 class LIDCExtractor:
@@ -216,6 +247,30 @@ class LIDCExtractor:
             "series_uid": sample["series_uid"],
             "subject_id": sample["subject_id"],
             "scan_id": sample["scan_id"],
+            "image_id": sample["series_uid"],
             "study_uid": sample["study_uid"],
+            "content_type": sample["content_type"],
+            "qid": sample["qid"],
             "item_qa": extracted_qa,
         }
+
+    @staticmethod
+    def extract_sample_list(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Extract all relevant information from a list of LIDC samples.
+        """
+        extracted_samples = []
+
+        for sample in samples:
+            extracted_sample = LIDCExtractor.extract_sample(sample)
+            # extracted_samples.append(extracted_sample)
+
+            cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "item_qa"}
+            if "item_qa" in extracted_sample:
+                flattened_sample = {
+                    **cleaned_sample,
+                    **extracted_sample["item_qa"],
+                }
+                extracted_samples.append(flattened_sample)
+
+        return extracted_samples

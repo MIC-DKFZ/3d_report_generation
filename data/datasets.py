@@ -96,19 +96,45 @@ class MedicalImageDataset(Dataset, ABC):
         pass
 
     @abstractmethod
-    def format_data(self):
-        """Format raw data into structured samples"""
-        pass
-
-    @abstractmethod
     def get_embedding_path(self, identifier):
         """Convert image identifier to embedding path"""
         pass
 
     @abstractmethod
-    def verify(self):
-        """Test function to verify dataset loading"""
+    def extract_sample_list(self, samples):
+        """Extract sample list from raw data"""
         pass
+
+    def format_data(self):
+        """Format raw data into structured samples"""
+        formatted_data = []
+
+        samples = self.data
+
+        if self.n_samples:
+            samples = samples[: self.n_samples]
+
+        extracted_samples = self.extract_sample_list(samples)
+
+        for sample in extracted_samples:
+            embedding_path = self.get_embedding_path(sample["image_id"])
+
+            # Skip if embedding file doesn't exist
+            if not os.path.exists(embedding_path):
+                continue
+
+            sample["embedding_path"] = embedding_path
+
+            formatted_qa, formatted_qa_prompt_only = format_into_message(
+                sample["question"], sample["full_answer"], self.model_name, system_text=sample["system_text"]
+            )
+
+            sample["formatted_qa"] = formatted_qa
+            sample["formatted_qa_prompt_only"] = formatted_qa_prompt_only
+
+            formatted_data.append(sample)
+
+        return formatted_data
 
     def _tokenize_samples(self):
         for sample in self.samples:
@@ -119,6 +145,11 @@ class MedicalImageDataset(Dataset, ABC):
     def _filter_samples(self, samples):
         """Filter samples based on answer type"""
         filtered_samples = []
+
+        if self.answer_type_dict is None:
+            return samples  # If answer_type_dict is empty, return all samples
+        if len(self.answer_type_dict) == 0:
+            return samples  # If answer_type_dict is not empty, filter samples
 
         for sample in samples:
             if sample["answer_type"] in self.answer_type_dict:
@@ -164,6 +195,18 @@ class MedicalImageDataset(Dataset, ABC):
     def __len__(self):
         return len(self.samples)
 
+    def verify(self):
+        """Test function to verify dataset loading"""
+        print(f"\nTotal number of samples: {len(self)}")
+        print("\nExample question:")
+        if len(self.samples) > 0:
+            sample = self.samples[0]
+            print(f"Image ID: {sample['image_id']}")
+            print(f"Question: {sample['question']}")
+            print(f"Answer: {sample['full_answer']}")
+            print(f"Answer Type: {sample['answer_type']}")
+            print(f"Answer Subtype: {sample['answer_subtype']}")
+
 
 class AMOSMMDataset(MedicalImageDataset):
     """
@@ -180,82 +223,26 @@ class AMOSMMDataset(MedicalImageDataset):
     def _load_data(self, dataset_json_path):
         json_file_path = os.path.join(dataset_json_path, "dataset.json")
         with open(json_file_path, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+
+        if self.split == "train":
+            samples = data["training"]
+        elif self.split == "val":
+            samples = data["validation"]
+        else:
+            raise ValueError(f"Invalid split name {self.split}")
+
+        return samples
 
     def get_embedding_path(self, image_path):
         """Convert image path to embedding path"""
         base_name = image_path.replace(".nii.gz", "")
         return str(os.path.join(self.embeddings_path, f"{base_name}_embedding.npy"))
 
-    def format_data(self):
-        if self.split == "train":
-            samples = self.data["training"]
-        elif self.split == "val":
-            samples = self.data["validation"]
-        else:
-            raise ValueError(f"Invalid split name {self.split}")
-
-        formatted_data = []
-
-        if self.n_samples:
-            samples = samples[: self.n_samples]
-
-        for sample in samples:
-            embedding_path = self.get_embedding_path(sample["image"])
-
-            # Skip if embedding file doesn't exist
-            if not os.path.exists(embedding_path):
-                continue
-
-            # Use extractor to get all structured data
-            extracted_data = AMOSMMExtractor.extract_sample(sample)
-
-            item = {
-                "image_path": extracted_data["image_path"],
-                "embedding_path": embedding_path,
-                "embedding": None,
-                "questions": extracted_data["questions"],
-                "report": extracted_data["report"] if extracted_data["report"] else {},
-            }
-
-            # Process QA data using formatters
-            for qa_idx, qa_item in enumerate(extracted_data["qa_items"]):
-                formatted_qa, formatted_qa_prompt_only = format_into_message(
-                    qa_item["question"], qa_item["full_answer"], self.model_name, system_text=qa_item["system_text"]
-                )
-                extracted_data["qa_items"][qa_idx]["formatted_qa"] = formatted_qa
-                extracted_data["qa_items"][qa_idx]["formatted_qa_prompt_only"] = formatted_qa_prompt_only
-
-            item["item_qa"] = extracted_data["qa_items"]
-
-            # Skip samples with no report text or QA text
-            if len(item["item_qa"]) == 0:
-                continue
-
-            formatted_data.append(item)
-
-        self.structure_data = formatted_data
-
-        flattened_data = []
-
-        for item in formatted_data:
-            for qa_item in item["item_qa"]:
-                flat_item = {
-                    "image_path": item["image_path"],
-                    "embedding_path": item["embedding_path"],
-                    "embedding": item["embedding"],
-                    "question": qa_item["formatted_qa"],
-                    "report": item["report"],
-                    **qa_item,
-                }
-
-                flattened_data.append(flat_item)
-
-        return flattened_data
-
-    def verify(self):
-        """Test function to verify dataset loading"""
-        print(f"\nTotal number of samples: {len(self)}")
+    def extract_sample_list(self, samples):
+        """Extract sample list from raw data"""
+        extracted_samples = AMOSMMExtractor.extract_sample_list(samples)
+        return extracted_samples
 
 
 class LIDCDataset(MedicalImageDataset):
@@ -288,52 +275,7 @@ class LIDCDataset(MedicalImageDataset):
         base_name = series_uid.replace(".", "_")
         return str(Path(self.embeddings_path) / f"{base_name}_embedding.npz")
 
-    def format_data(self):
-        formatted_data = []
-        samples = self.data
-
-        if self.n_samples:
-            samples = samples[: self.n_samples]
-
-        for sample in samples:
-            embedding_path = self.get_embedding_path(sample["series_uid"])
-
-            # Skip if embedding file doesn't exist
-            if not os.path.exists(embedding_path):
-                continue
-
-            # Extract data using the LIDCExtractor
-            extracted_data = LIDCExtractor.extract_sample(sample)
-
-            # Format QA pairs
-            formatted_qa, formatted_qa_prompt_only = format_into_message(
-                extracted_data["item_qa"]["question"],
-                extracted_data["item_qa"]["full_answer"],
-                self.model_name,
-                system_text=extracted_data["item_qa"]["system_text"],
-            )
-
-            item = {
-                "series_uid": extracted_data["series_uid"],
-                "subject_id": extracted_data["subject_id"],
-                "scan_id": extracted_data["scan_id"],
-                "study_uid": extracted_data["study_uid"],
-                "embedding_path": embedding_path,
-                "embedding": None,
-                "formatted_qa": formatted_qa,
-                "formatted_qa_prompt_only": formatted_qa_prompt_only,
-                **extracted_data["item_qa"],
-            }
-
-            formatted_data.append(item)
-
-        return formatted_data
-
-    def verify(self):
-        """Test function to verify dataset loading"""
-        print(f"\nTotal number of samples: {len(self)}")
-        print("\nExample question:")
-        if len(self.samples) > 0:
-            sample = self.samples[0]
-            print(f"Series UID: {sample['series_uid']}")
-            print(f"Question: {sample['qa_text'][0]}")
+    def extract_sample_list(self, samples):
+        """Extract sample list from raw data"""
+        extracted_samples = LIDCExtractor.extract_sample_list(samples)
+        return extracted_samples
