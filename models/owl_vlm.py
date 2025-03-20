@@ -126,8 +126,8 @@ class OwlVLModel(AbstractVLMModel):
 
         for sample in batch:
 
-            messages = sample["qa_text"]
-            messages_prompt_only = sample["qa_text_prompt_only"]
+            messages = sample["formatted_qa"]
+            messages_prompt_only = sample["formatted_qa_prompt_only"]
 
             # Flatten and transpose dimensions
             img_tensor = sample["embedding_tensor"]
