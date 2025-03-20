@@ -87,6 +87,9 @@ class MedicalImageDataset(Dataset, ABC):
         self.samples = self.format_data()
         self.samples = self._filter_samples(self.samples)
 
+        if self.n_samples:
+            self.samples = self.samples[: self.n_samples]
+
         if self.tokenize_fn:
             self._tokenize_samples()
 
@@ -109,12 +112,7 @@ class MedicalImageDataset(Dataset, ABC):
         """Format raw data into structured samples"""
         formatted_data = []
 
-        samples = self.data
-
-        if self.n_samples:
-            samples = samples[: self.n_samples]
-
-        extracted_samples = self.extract_sample_list(samples)
+        extracted_samples = self.extract_sample_list(self.data)
 
         for sample in extracted_samples:
             embedding_path = self.get_embedding_path(sample["image_id"])
