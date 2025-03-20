@@ -6,6 +6,7 @@ from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 from .abstract_vlm import AbstractVLMModel
 from owl.model import OwnOwlModel
+from owl.modeling_mplugowl3 import mPLUGOwl3Model
 
 
 class OwlVLModel(AbstractVLMModel):
@@ -26,16 +27,18 @@ class OwlVLModel(AbstractVLMModel):
 
         # Apply BNB config if provided
         if bnb_config:
-            language_model = AutoModel.from_pretrained(
+            language_model = mPLUGOwl3Model.from_pretrained(
                 self.model_id,
+                config=config,
                 attn_implementation="sdpa",
                 trust_remote_code=True,
                 quantization_config=bnb_config,
                 device_map="auto",
             )
         else:
-            language_model = AutoModel.from_pretrained(
+            language_model = mPLUGOwl3Model.from_pretrained(
                 self.model_id,
+                config=config,
                 attn_implementation="sdpa",
                 trust_remote_code=True,
             )
