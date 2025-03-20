@@ -100,8 +100,11 @@ class UnifiedVLMTrainer:
         # Configure training arguments
         training_args = self.get_training_args()
 
-        # Create the callback
-        callback = PrintEvalBatchCallback(tokenizer=self.vlm_model.tokenizer, processor=self.vlm_model.processor)
+        # Create the callback TODO implement this also for Qwen?
+        if type(self.vlm_model).__name__ == "OwlVLModel":
+            callbacks = [PrintEvalBatchCallback(tokenizer=self.vlm_model.tokenizer, processor=self.vlm_model.processor)]
+        else:
+            callbacks = None
 
         # Initialize SFT trainer
         self.trainer = SFTTrainer(
@@ -110,7 +113,7 @@ class UnifiedVLMTrainer:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=self.vlm_model.collate_fn,
-            callbacks=[callback],
+            callbacks=callbacks,
             # No need to pass peft_config here, we've already applied it
         )
 
