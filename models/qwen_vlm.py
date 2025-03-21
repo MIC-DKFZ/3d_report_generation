@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 from peft import LoraConfig, get_peft_model
 from transformers import BitsAndBytesConfig, Qwen2VLForConditionalGeneration
+import transformers
 
 from qwenvl.processing_3d import Qwen2VLProcessor3D
 from qwenvl.Qwen3D import Qwen2VLForConditionalGeneration3D
@@ -87,10 +88,24 @@ class QwenVLModel(AbstractVLMModel):
             for example in examples
         ]
 
+        texts_prompt_only = [
+            self.processor.apply_chat_template(
+                example["formatted_qa_prompt_only"], tokenize=False
+            )
+            for example in examples
+        ]
+
         embeddings = [example["embedding"] for example in examples]
 
         batch = self.processor(
             text=texts, vision_embeddings=embeddings, return_tensors="pt", padding=True
+        )
+
+        batch_prompt_only = self.processor(
+            text=texts_prompt_only,
+            vision_embeddings=embeddings,
+            return_tensors="pt",
+            padding=True,
         )
 
         labels = batch["input_ids"].clone()
@@ -114,9 +129,19 @@ class QwenVLModel(AbstractVLMModel):
         for video_token_id in video_tokens:
             labels[labels == video_token_id] = -100
 
-        batch["labels"] = labels
+        batch_out = {
+            "input_ids": batch["input_ids"],
+            "input_ids_prompt_only": batch_prompt_only["input_ids"],
+            "attention_mask": batch["attention_mask"],
+            "attention_mask_prompt_only": batch_prompt_only["attention_mask"],
+            "labels": labels,
+            "pixel_values_videos": batch["pixel_values_videos"],
+            "video_grid_thw": batch["video_grid_thw"],
+            "batch_count": self.batch_count,
+        }
+        batch_out = transformers.BatchFeature(batch_out)
         self.batch_count += 1
-        return batch
+        return batch_out
 
     def get_trainable_params(self):
         """Return information about trainable parameters"""

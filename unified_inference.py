@@ -8,6 +8,7 @@ import yaml
 from data.datasets import AMOSMMDataset
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
+from utils import extract_batch_prompt_only
 
 
 class UnifiedVLMInference:
@@ -50,14 +51,32 @@ class UnifiedVLMInference:
         for param in model.parameters():
             param.requires_grad = False
 
+        results = []
         with torch.no_grad():
             # Iterate over the test dataset
             for i, inputs in enumerate(test_loader):
-                inputs = inputs.to("cuda")
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=256,  # Adjust max_new_tokens as needed
+                gt_text = self.vlm_model.tokenizer.batch_decode(
+                    inputs["input_ids"], skip_special_tokens=True
                 )
+                inputs = extract_batch_prompt_only(inputs)
+                inputs = inputs.to("cuda")
+                if "batch_count" in inputs:
+                    del inputs["batch_count"]
+                # image_embeds is only in inputs for owl model due to cross attn
+                if "image_embeds" in inputs:
+                    inputs["image_embeds"] = model.vision2text_model(
+                        inputs["image_embeds"]
+                    )
+                    outputs = model.language_model.generate(
+                        **inputs,
+                        max_new_tokens=256,  # Adjust max_new_tokens as needed
+                    )
+                # otherwise, image embeddings are already contained in input_ids
+                else:
+                    outputs = model.generate(
+                        **inputs,
+                        max_new_tokens=256,  # Adjust max_new_tokens as needed
+                    )
                 trimmed_generated_ids = [
                     out_ids[len(in_ids) :]
                     for in_ids, out_ids in zip(inputs["input_ids"], outputs)
@@ -65,15 +84,21 @@ class UnifiedVLMInference:
                 decoded_output = self.vlm_model.tokenizer.batch_decode(
                     trimmed_generated_ids, skip_special_tokens=True
                 )
-                decoded_output_non_trimmed = self.vlm_model.tokenizer.batch_decode(
-                    outputs, skip_special_tokens=True
-                )
                 input_text = self.vlm_model.tokenizer.batch_decode(
                     inputs["input_ids"], skip_special_tokens=True
                 )
-                print(decoded_output)
-                print(decoded_output_non_trimmed)
-                print(input_text)
+
+                results.append(
+                    {
+                        "input_text": input_text,
+                        "output_text": decoded_output,
+                        "gt_text": gt_text,
+                    }
+                )
+                if i == 10:
+                    break
+        with open(os.path.join(self.output_dir, "inference_results.json"), "w") as f:
+            json.dump(results, f, indent=4)
 
 
 def parse_args(default_config=None):

@@ -3,6 +3,8 @@ import torch
 import wandb
 from transformers import TrainerCallback, TrainerState, TrainerControl
 
+from utils import extract_batch_prompt_only
+
 
 class PrintEvalBatchCallback(TrainerCallback):
     def __init__(self, tokenizer=None, processor=None):
@@ -27,7 +29,16 @@ class PrintEvalBatchCallback(TrainerCallback):
 
         self.processor = processor
 
-    def on_evaluate(self, args, state, control, model=None, eval_dataloader=None, metrics=None, **kwargs):
+    def on_evaluate(
+        self,
+        args,
+        state,
+        control,
+        model=None,
+        eval_dataloader=None,
+        metrics=None,
+        **kwargs,
+    ):
         if state.epoch - self.last_epoch < self.max_diff:
             return
         self.last_epoch = state.epoch
@@ -51,23 +62,24 @@ class PrintEvalBatchCallback(TrainerCallback):
             for i, inputs in enumerate(eval_dataloader):
                 if i >= self.sample_count:  # Limit the number of samples to print
                     break
-
-                image_embeds = inputs["image_embeds"].to(args.device)
-                image_lin = model.vision2text_model(image_embeds)
-
-                new_input = inputs["input_ids_prompt_only"]
-                new_media_offset = inputs["media_offset"][:, : new_input.shape[1]]
-
+                inputs_prompt_only = extract_batch_prompt_only(inputs)
+                inputs_prompt_only = inputs_prompt_only.to(args.device)
+                del inputs_prompt_only["batch_count"]
+                inputs_prompt_only["image_embeds"] = model.vision2text_model(
+                    inputs_prompt_only["image_embeds"]
+                ).to(torch.float16)
                 outputs = model.language_model.generate(
-                    input_ids=new_input.to(args.device),
-                    image_embeds=image_lin,
-                    media_offset=new_media_offset.to(args.device),
-                    max_new_tokens=350,  # Adjust max_new_tokens as needed
+                    **inputs_prompt_only,
+                    max_new_tokens=256,  # Adjust max_new_tokens as needed
                 )
 
                 # Decode input and generated output
-                decoded_output = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-                decoded_gt = self.tokenizer.batch_decode(inputs["input_ids"], skip_special_tokens=True)
+                decoded_output = self.tokenizer.batch_decode(
+                    outputs, skip_special_tokens=True
+                )
+                decoded_gt = self.tokenizer.batch_decode(
+                    inputs["input_ids"], skip_special_tokens=True
+                )
 
                 m = re.search(r"The answer is (.)", decoded_output[0])
                 if m:
@@ -85,7 +97,12 @@ class PrintEvalBatchCallback(TrainerCallback):
                     n_correct_qa += 1
 
                 self.eval_table.add_data(
-                    state.epoch, i, str(decoded_output[0]), str(decoded_gt[0]), answer_pred, answer_gt
+                    state.epoch,
+                    i,
+                    str(decoded_output[0]),
+                    str(decoded_gt[0]),
+                    answer_pred,
+                    answer_gt,
                 )
 
         print(f"Correct QA: {n_correct_qa}/{self.sample_count}")
