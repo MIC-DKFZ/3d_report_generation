@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 
 
@@ -35,6 +36,7 @@ class QAItemDict(RequiredKeys):
             raise ValueError(f"Missing required keys: {missing_keys}")
 
         super().__init__(**data)  # Initialize TypedDict with the data
+
 
 class AMOSMMExtractor:
     """
@@ -83,13 +85,13 @@ class AMOSMMExtractor:
             text = ", ".join(text)
 
         question_prefix = "What are the findings in " if question_type == "FINDINGS" else "What is the impression of "
-        
+
         return {
             "region": region,
             f"{question_type.lower()}": text,
             "answer_type": "OPEN",
             "answer_subtype": question_type,
-            "user_text": f"{question_prefix} the {region} region of this CT scan?", # TODO add prompt variety
+            "user_text": f"{question_prefix} the {region} region of this CT scan?",  # TODO add prompt variety
             "question": f"{question_prefix} the {region} region of this CT scan?",
             "full_answer": text,
             "answer": text,
@@ -162,7 +164,7 @@ class AMOSMMExtractor:
 
         if "labels" in sample:
             if "report" in sample["labels"]:
-                report_dict = AMOSMMExtractor.extract_report(sample["labels"]["report"]) # TODO Throw out report here?
+                report_dict = AMOSMMExtractor.extract_report(sample["labels"]["report"])  # TODO Throw out report here?
                 extracted["report"]["raw"] = report_dict["raw"]
                 extracted["report"]["findings"] = report_dict["findings"]
                 extracted["report"]["impression"] = report_dict["impression"]
@@ -193,7 +195,7 @@ class AMOSMMExtractor:
         for sample in samples:
             extracted_sample = AMOSMMExtractor.extract_sample(sample)
             cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "qa_items"}
-            
+
             for qa_item in extracted_sample.get("qa_items", []):
                 flattened_sample = QAItemDict({**cleaned_sample, **qa_item})
                 samples_flattened.append(flattened_sample)
@@ -225,7 +227,7 @@ class LIDCExtractor:
         return {
             "question": qa_item["question"],
             "answer": answer,
-            "full_answer": answer, # TODO remove duplicate
+            "full_answer": answer,  # TODO remove duplicate
             "answer_type": qa_item["answer_type"],
             "answer_subtype": answer_subtype,
             "user_text": qa_item["question"],
@@ -261,9 +263,99 @@ class LIDCExtractor:
 
         for sample in samples:
             extracted_sample = LIDCExtractor.extract_sample(sample)
-            cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "item_qa"}     
+            cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "item_qa"}
             if "item_qa" in extracted_sample:
                 flattened_sample = QAItemDict({**cleaned_sample, **extracted_sample["item_qa"]})
                 extracted_samples.append(flattened_sample)
+
+        return extracted_samples
+
+
+class CTRATEExtractor:
+    """
+    Extractor for CT-RATE dataset
+
+    Processes CT-RATE dataset metadata for classification, report generation,
+    and diagnosis tasks.
+    """
+
+    CONDITIONS = [
+        "Arterial wall calcification",
+        "Cardiomegaly",
+        "Pericardial effusion",
+        "Coronary artery wall calcification",
+        "Hiatal hernia",
+        "Lymphadenopathy",
+        "Emphysema",
+        "Atelectasis",
+        "Lung nodule",
+        "Lung opacity",
+        "Pulmonary fibrotic sequela",
+        "Pleural effusion",
+        "Mosaic attenuation pattern",
+        "Peribronchial thickening",
+        "Consolidation",
+        "Bronchiectasis",
+        "Interlobular septal thickening",
+    ]
+
+    @staticmethod
+    def extract_sample_list(samples):
+        """Extract sample list from raw data"""
+        extracted_samples = []
+
+        for sample in samples:
+            # Classification samples for each condition
+            classifications = sample["tasks"]["classification"]
+            for condition in CTRATEExtractor.CONDITIONS:
+                if condition in classifications:
+                    value = classifications[condition]
+                    if value is not None:  # Skip conditions with no value
+                        extracted_samples.append(
+                            {
+                                "image_id": os.path.basename(sample["image_path"]).replace(".nrrd", ""),
+                                "image_path": sample["image_path"],
+                                "question": f"Is there evidence of {condition} in this CT scan?",
+                                "answer": "Yes" if value == 1 else "No",
+                                "full_answer": "Yes" if value == 1 else "No",
+                                # "full_answer": f"Based on my analysis of this CT scan, {'there is' if value == 1 else 'there is no'} evidence of {condition}.",
+                                "answer_type": "CHOICE",
+                                "answer_subtype": "BINARY",
+                                "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                            }
+                        )
+
+            # Report generation sample
+            if "report_gen" in sample["tasks"] and sample["tasks"]["report_gen"]:
+                extracted_samples.append(
+                    {
+                        "image_id": os.path.basename(sample["image_path"]).replace(".nrrd", ""),
+                        "image_path": sample["image_path"],
+                        "question": "Generate a detailed report for this CT scan.",
+                        "answer": sample["tasks"]["report_gen"],
+                        "full_answer": sample["tasks"]["report_gen"],
+                        "answer_type": "TEXT",
+                        "answer_subtype": "REPORT",
+                        "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                    }
+                )
+
+            # Diagnosis sample
+            if "diagnosis" in sample["tasks"] and sample["tasks"]["diagnosis"]:
+                extracted_samples.append(
+                    {
+                        "image_id": os.path.basename(sample["image_path"]).replace(".nrrd", ""),
+                        "image_path": sample["image_path"],
+                        "question": "What is the diagnosis for this CT scan?",
+                        "answer": sample["tasks"]["diagnosis"],
+                        "full_answer": sample["tasks"]["diagnosis"],
+                        "answer_type": "TEXT",
+                        "answer_subtype": "DIAGNOSIS",
+                        "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                    }
+                )
+
+        # convert to QAItemDict
+        extracted_samples = [QAItemDict(sample) for sample in extracted_samples]
 
         return extracted_samples

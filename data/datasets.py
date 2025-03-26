@@ -3,11 +3,12 @@ import os
 from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple
+import yaml
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from data.extractors import AMOSMMExtractor, LIDCExtractor
+from data.extractors import AMOSMMExtractor, LIDCExtractor, CTRATEExtractor
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
@@ -276,4 +277,85 @@ class LIDCDataset(MedicalImageDataset):
     def extract_sample_list(self, samples):
         """Extract sample list from raw data"""
         extracted_samples = LIDCExtractor.extract_sample_list(samples)
+        return extracted_samples
+
+
+class CTRATEDataset(MedicalImageDataset):
+    """
+    CT-RATE dataset class for CT scan analysis
+
+    Args:
+        dataset_path (str): Path to the CT-RATE dataset directory
+        model_name (str): Name of the VLM the dataset is used for
+        split (str): Split name ('train', 'val', or 'test')
+        embeddings_path (str | Path): Path to the vision embeddings directory
+        n_samples (int, optional): Number of samples to load (for debugging)
+        answer_types (tuple, optional): Types of answers to include
+    """
+
+    def __init__(
+        self,
+        dataset_path,
+        model_name,
+        split="train",
+        embeddings_path=None,
+        n_samples=None,
+        tokenize_fn=None,
+        answer_types=("CHOICE", "TEXT"),
+    ):
+        super().__init__(
+            dataset_path,
+            model_name,
+            split=split,
+            embeddings_path=embeddings_path,
+            n_samples=n_samples,
+            tokenize_fn=tokenize_fn,
+            answer_types=answer_types,
+        )
+
+    def _load_data(self, dataset_path):
+        metadata_dir = os.path.join(dataset_path, "metadata")
+        data_dir = os.path.join(dataset_path, "images")
+
+        metadata_files = [f for f in os.listdir(metadata_dir) if f.endswith(".yml")]
+
+        samples = []
+        for metadata_file in metadata_files:
+            metadata_path = os.path.join(metadata_dir, metadata_file)
+            data_path = os.path.join(data_dir, metadata_file.replace(".yml", ".nrrd"))
+
+            if not os.path.exists(data_path):
+                continue
+
+            with open(metadata_path, "r") as f:
+                metadata = yaml.safe_load(f)
+
+            if self.split == "train" and not metadata["metadata"].get("train_set", False):
+                continue
+            if self.split == "val" and metadata["metadata"].get("train_set", True):
+                continue
+
+            findings = metadata["metadata"]["Findings_EN"]
+            impressions = metadata["metadata"]["Impressions_EN"]
+            classifications = {c: metadata["metadata"].get(c) for c in CTRATEExtractor.CONDITIONS}
+
+            sample = {
+                "image_path": data_path,
+                "tasks": {
+                    "classification": classifications,
+                    "report_gen": findings,
+                    "diagnosis": impressions,
+                },
+            }
+            samples.append(sample)
+
+        return samples
+
+    def get_embedding_path(self, image_id):
+        """Convert image ID to embedding path"""
+        return str(Path(self.embeddings_path) / f"{image_id}_embedding.npz")
+
+    def extract_sample_list(self, samples):
+        """Extract sample list from raw data"""
+        extracted_samples = CTRATEExtractor.extract_sample_list(samples)
         return extracted_samples
