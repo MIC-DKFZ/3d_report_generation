@@ -1,4 +1,7 @@
-from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Type, TypeVar
+
+
+ExtractorType = TypeVar('ExtractorType', bound="AMOSMMExtractor")
 
 
 class RequiredKeys(TypedDict):
@@ -89,8 +92,8 @@ class AMOSMMExtractor:
             f"{question_type.lower()}": text,
             "answer_type": "OPEN",
             "answer_subtype": question_type,
-            "user_text": f"{question_prefix} the {region} region of this CT scan?", # TODO add prompt variety
-            "question": f"{question_prefix} the {region} region of this CT scan?",
+            "user_text": f"{question_prefix} the {region.replace('_', ' ')} region of this CT scan?", # TODO add prompt variety
+            "question": f"{question_prefix} the {region.replace('_', ' ')} region of this CT scan?",
             "full_answer": text,
             "answer": text,
             "system_text": "You are a medical imaging AI trained to analyze CT scans.",
@@ -183,15 +186,15 @@ class AMOSMMExtractor:
 
         return extracted
 
-    @staticmethod
-    def extract_sample_list(samples: List[Dict[str, Any]]) -> List[QAItemDict[str, Any]]:
+    @classmethod
+    def extract_sample_list(cls: Type[ExtractorType], samples: List[Dict[str, Any]]) -> List[QAItemDict[str, Any]]:
         """
         Extract all relevant information from a list of AMOS-MM samples.
         """
         samples_flattened = []
 
         for sample in samples:
-            extracted_sample = AMOSMMExtractor.extract_sample(sample)
+            extracted_sample = cls.extract_sample(sample)
             cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "qa_items"}
 
             for qa_item in extracted_sample.get("qa_items", []):
@@ -199,6 +202,32 @@ class AMOSMMExtractor:
                 samples_flattened.append(flattened_sample)
 
         return samples_flattened
+
+
+class AMOSMMRegionExtractor(AMOSMMExtractor):
+    """
+    Extractor for AMOS-MM dataset that separates data extraction from formatting.
+    """
+
+    @staticmethod
+    def extract_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract all relevant information from an AMOS-MM sample.
+        """
+        extracted = {
+            "image_path": sample["image"],
+            "image_id": sample["original_case"],
+            "qa_items": [],
+            "report": {}
+        }
+
+        if "labels" in sample:
+            findings = sample["labels"]
+            extracted["report"]["findings"] = findings
+
+            extracted["qa_items"].append(AMOSMMExtractor.extract_finding_question(sample['region'], findings))
+
+        return extracted
 
 
 class LIDCExtractor:

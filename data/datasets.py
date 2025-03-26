@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from data.extractors import AMOSMMExtractor, LIDCExtractor
+from data.extractors import AMOSMMExtractor, AMOSMMRegionExtractor, LIDCExtractor
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
@@ -240,6 +240,56 @@ class AMOSMMDataset(MedicalImageDataset):
     def extract_sample_list(self, samples):
         """Extract sample list from raw data"""
         extracted_samples = AMOSMMExtractor.extract_sample_list(samples)
+        return extracted_samples
+
+
+class AMOSMMRegionDataset(AMOSMMDataset):
+    """
+    AMOS-MM Region based dataset class
+
+    Args:
+        dataset_json_path (str): Path to the dataset JSON file
+        model_name (str): Name of the VLM the dataset is used for
+        split (str): Split name ('train' or 'val')
+        embeddings_path (str | Path): Root path to the vision embeddings directory
+        n_samples (int, optional): Number of samples to load (for debugging)
+    """
+    def format_data(self):
+        """Format raw data into structured samples"""
+        formatted_data = []
+
+        extracted_samples = self.extract_sample_list(self.data)
+
+        for sample in extracted_samples:
+            embedding_path = self.get_embedding_path(sample["image_id"], sample["region"])
+
+            # Skip if embedding file doesn't exist
+            if not os.path.exists(embedding_path):
+                continue
+
+            sample["embedding_path"] = embedding_path
+
+            formatted_qa, formatted_qa_prompt_only = format_into_message(
+                sample["question"], sample["full_answer"], self.model_name, system_text=sample["system_text"]
+            )
+
+            sample["formatted_qa"] = formatted_qa
+            sample["formatted_qa_prompt_only"] = formatted_qa_prompt_only
+
+            formatted_data.append(sample)
+
+        return formatted_data
+
+    def get_embedding_path(self, image_path, region):
+        """Convert image path to embedding path"""
+        base_name = image_path.replace(".nii.gz", "")
+        return str(os.path.join(self.embeddings_path, f"{base_name}_{region}_embedding.npz"))
+
+    def extract_sample_list(self, samples):
+        """Extract sample list from raw data"""
+        # TODO: Currently this class could be implemented in the ABC class as well.
+        # The extractor class is then defined in the init of the class
+        extracted_samples = AMOSMMRegionExtractor.extract_sample_list(samples)
         return extracted_samples
 
 
