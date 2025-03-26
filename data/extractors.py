@@ -82,8 +82,8 @@ class AMOSMMExtractor:
         if isinstance(text, list):
             text = ", ".join(text)
 
-        question_prefix = "What are the findings in " if question_type == "FINDINGS" else "What is the impression of "
-        
+        question_prefix = "What are the findings in" if question_type == "FINDINGS" else "What is the impression of "
+
         return {
             "region": region,
             f"{question_type.lower()}": text,
@@ -193,7 +193,7 @@ class AMOSMMExtractor:
         for sample in samples:
             extracted_sample = AMOSMMExtractor.extract_sample(sample)
             cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "qa_items"}
-            
+
             for qa_item in extracted_sample.get("qa_items", []):
                 flattened_sample = QAItemDict({**cleaned_sample, **qa_item})
                 samples_flattened.append(flattened_sample)
@@ -261,7 +261,7 @@ class LIDCExtractor:
 
         for sample in samples:
             extracted_sample = LIDCExtractor.extract_sample(sample)
-            cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "item_qa"}     
+            cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "item_qa"}
             if "item_qa" in extracted_sample:
                 flattened_sample = QAItemDict({**cleaned_sample, **extracted_sample["item_qa"]})
                 extracted_samples.append(flattened_sample)
