@@ -96,14 +96,15 @@ class OwlVLModel(AbstractVLMModel):
     def pad_inputs(self, input_ids_list, input_ids_list_prompt_only, media_offset_list):
         """Helper function to pad inputs for Owl model"""
         # Pad text inputs using the tokenizer
-        padded = self.tokenizer.pad({"input_ids": input_ids_list}, return_tensors="pt", padding="do_not_pad")
+        padded = self.tokenizer.pad({"input_ids": input_ids_list}, return_tensors="pt", padding="longest")
         padded_prompt_only = self.tokenizer.pad(
-            {"input_ids": input_ids_list_prompt_only}, return_tensors="pt", padding="do_not_pad"
+            {"input_ids": input_ids_list_prompt_only}, return_tensors="pt", padding="longest"
         )
-        pad_shape = padded["input_ids"].shape
+        pad_shape = padded["input_ids"].shape  # (batch_size, max_seq_len)
 
         padded_media_offsets = []
         for media_offset in media_offset_list:
+            # Remove the batch dimension
             media_offset = media_offset.squeeze(0).to(torch.int32)
             # If the media offset is shorter than the pad width, pad it with the last row
             if media_offset.shape[0] < pad_shape[1]:
