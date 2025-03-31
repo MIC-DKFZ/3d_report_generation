@@ -1,25 +1,24 @@
-from transformers import BitsAndBytesConfig
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import torch
-from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+from torch import nn
+from torch.nn.utils.rnn import pad_sequence
+
 from datasets import load_dataset
-from qwen_vl_utils import process_vision_info
+
 from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig, get_peft_model
 
-import gc
-import time
-from typing import Any, Dict, List, Optional, Tuple, Union
-
-from torch import nn
+from transformers import BitsAndBytesConfig
+from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
 
 from transformers.activations import QuickGELUActivation
 
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLCausalLMOutputWithPast, QWEN2_VL_INPUTS_DOCSTRING, _CONFIG_FOR_DOC
-
-
 from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionMlp
 from transformers.models.qwen2_vl.modeling_qwen2_vl import ACT2FN
 
+from qwen_vl_utils import process_vision_info
 
 
 '''
@@ -77,13 +76,8 @@ class VisionAdapterReduceBlocks(nn.Module):
         x = x.to(torch.bfloat16)
 
         # Input shape is (batch_size, embedding_dim, sequence_length)
-        batch_size, embedding_dim, seq_length = x.shape
+        batch_size, embedding_dim, _ = x.shape
 
-        # E.g for 13824 video tokens, reshape to 24x24x24
-        # TODO: instead of + 1 use np.round and then int
-        cube_size = int(seq_length ** (1/3)) + 1
-        # x = x.reshape(batch_size, embedding_dim, cube_size, cube_size, cube_size)
-        # x = torch.randn(batch_size, embedding_dim, cube_size, cube_size, cube_size, device=x.device, dtype=x.dtype)
         # TODO how to handle cases where each image has different size i.e. video_grid_thw has size (B, 3) and this only works for B==1?
         x = x.reshape(batch_size, embedding_dim, *video_grid_thw[0])
 
@@ -94,13 +88,167 @@ class VisionAdapterReduceBlocks(nn.Module):
 
         # Reshape to combine all reduce_block
         x = x.permute(0, 2, 3, 4, 1, 5, 6, 7)  # Move embedding_dim after spatial dims
+        # (B, T', H', W', C, rT, rH, rW) -> (B, T'*H'*W', C*rT*rH*rW)
         x = x.reshape(batch_size, -1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
 
         # Process through adapter
-        x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
+        # x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
         x = self.adapter(x)
 
         return x
+
+
+class VisionAdapterHeterogeneous(nn.Module):
+    """
+    Vision Adapter that handles heterogeneous input sequence lengths within a batch.
+
+    Processes 3D feature maps (flattened into sequences) of varying sizes,
+    reduces them using unfolding, maps them to the language model embedding
+    space, and returns a padded batch with an attention mask.
+    """
+    def __init__(self, embedding_dim: int, embed_dim: int, reduce_block: Tuple[int, int, int] = (2, 2, 2)):
+        """
+        Args:
+            embedding_dim (int): Dimension of the input vision embeddings (channel dim).
+            embed_dim (int): Target embedding dimension (language model's embedding dim).
+            reduce_block (Tuple[int, int, int]): Factors to reduce each spatial dimension (H, W, D) by.
+                                                 Defines the size of the 3D patch to combine.
+        """
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.embed_dim = embed_dim
+        self.reduce_block = reduce_block
+        self.reduce_factor = reduce_block[0] * reduce_block[1] * reduce_block[2]
+        self.combined_input_dim = embedding_dim * self.reduce_factor
+
+        # The adapter MLP
+        self.adapter = nn.Sequential(
+            nn.Linear(self.combined_input_dim, 5120),
+            QuickGELUActivation(),
+            nn.Linear(5120, embed_dim),
+        )
+
+    def forward(self, x: torch.Tensor, video_grid_thw: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Forward pass for heterogeneous batch.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, embedding_dim, seq_length).
+                              seq_length can vary across the batch.
+            video_grid_thw (torch.Tensor): Tensor of shape (batch_size, 3) containing the
+                                           original [T, H, W] dimensions for each item.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]:
+                - padded_output (torch.Tensor): The processed embeddings, padded to the maximum
+                                                reduced sequence length in the batch.
+                                                Shape: (batch_size, max_reduced_len, embed_dim).
+                - attention_mask (torch.Tensor): Boolean mask indicating valid (True) vs padded (False)
+                                                 tokens. Shape: (batch_size, max_reduced_len).
+        """
+        # Ensure input is float (bfloat16 used here as in original code)
+        x = x.to(torch.bfloat16)
+        batch_size = x.shape[0]
+
+        processed_sequences = []
+        output_lengths = []
+
+        # --- 1. Iterate through batch ---
+        for i in range(batch_size):
+            x_item = x[i]  # Shape: (embedding_dim, seq_length_i)
+            grid_thw = video_grid_thw[i].tolist() # List [T_i, H_i, W_i]
+            seq_length_i = x_item.shape[1]
+
+            # --- Sanity Check ---
+            expected_seq_length = grid_thw[0] * grid_thw[1] * grid_thw[2]
+            if seq_length_i != expected_seq_length:
+                raise ValueError(f"Batch item {i}: seq_length {seq_length_i} does not match grid {grid_thw} product {expected_seq_length}")
+
+            # --- 2. Isolate & Reshape to 5D ---
+            # Reshape to (1, C, T, H, W) for unfold compatibility
+            try:
+                x_item_5d = x_item.reshape(1, self.embedding_dim, *grid_thw)
+            except RuntimeError as e:
+                 raise RuntimeError(f"Error reshaping batch item {i} with embedding_dim {self.embedding_dim}, seq_len {seq_length_i} to grid {grid_thw}. Error: {e}")
+
+            # --- 3. Pad Spatially if Dimensions are not multiples of reduce_block ---
+            current_t, current_h, current_w = grid_thw
+            rb_t, rb_h, rb_w = self.reduce_block
+
+            # Calculate padding needed for T, H, W dimensions
+            # If dimension is already a multiple, padding is 0.
+            # Otherwise, calculate padding to reach the next multiple.
+            pad_t = (rb_t - current_t % rb_t) % rb_t
+            pad_h = (rb_h - current_h % rb_h) % rb_h
+            pad_w = (rb_w - current_w % rb_w) % rb_w
+
+            x_item_5d_padded = x_item_5d # Start assuming no padding needed
+            if pad_t > 0 or pad_h > 0 or pad_w > 0:
+                # PyTorch's F.pad expects padding amounts in reverse order of dimensions:
+                # (pad_last_dim_left, pad_last_dim_right, pad_penultimate_dim_top, pad_penultimate_dim_bottom, ...)
+                # For (N, C, T, H, W), the order is (W_left, W_right, H_top, H_bottom, T_front, T_back)
+                # We pad only at the 'end' (right/bottom/back)
+                paddings = (0, pad_w, 0, pad_h, 0, pad_t)
+                x_item_5d_padded = F.pad(x_item_5d, paddings, mode='constant', value=0.0)
+                # print(f"Item {i}: Original grid {grid_thw}, Padding applied ({pad_t}, {pad_h}, {pad_w}), New shape {x_item_5d_padded.shape}") # Optional debug print
+
+            # Store the new, potentially padded dimensions
+            padded_grid_thw = [current_t + pad_t, current_h + pad_h, current_w + pad_w]
+
+            # Calculate the output grid size after reduction (based on padded dimensions)
+            # Division will now be exact.
+            out_grid = [g // r for g, r in zip(padded_grid_thw, self.reduce_block)]
+
+
+
+            # --- 4. Unfold & Reduce ---
+            try:
+                # Unfold along T, H, W dimensions
+                unfolded_x = x_item_5d.unfold(2, self.reduce_block[0], self.reduce_block[0]) # Dim T
+                unfolded_x = unfolded_x.unfold(3, self.reduce_block[1], self.reduce_block[1]) # Dim H
+                unfolded_x = unfolded_x.unfold(4, self.reduce_block[2], self.reduce_block[2]) # Dim W
+                # Current shape: (1, C, T', H', W', rT, rH, rW)
+                # where T' = T / rT (or floor), etc.
+
+                # Permute to group reduction dims with channel dim: (1, T', H', W', C, rT, rH, rW)
+                permuted_x = unfolded_x.permute(0, 2, 3, 4, 1, 5, 6, 7)
+
+                # Reshape to (1, T'*H'*W', C*rT*rH*rW) = (1, num_reduced_tokens_i, combined_input_dim)
+                num_reduced_tokens_i = out_grid[0] * out_grid[1] * out_grid[2]
+                # Use view or reshape. View is generally preferred if possible.
+                # We calculated combined_input_dim in __init__
+                reduced_x = permuted_x.reshape(1, num_reduced_tokens_i, self.combined_input_dim)
+
+                # Remove the batch dimension (was 1 anyway): (num_reduced_tokens_i, combined_input_dim)
+                reduced_x = reduced_x.squeeze(0)
+
+            except RuntimeError as e:
+                raise RuntimeError(f"Error during unfold/reshape for batch item {i} with grid {grid_thw}, reduce_block {self.reduce_block}. Shape after reshape: {x_item_5d.shape}. Error: {e}")
+
+            # --- 5. Adapt ---
+            # Pass through the adapter
+            mapped_x = self.adapter(reduced_x) # Shape: (num_reduced_tokens_i, embed_dim)
+
+            # --- 6. Collect ---
+            processed_sequences.append(mapped_x)
+            output_lengths.append(mapped_x.shape[0]) # Store the length *after* reduction
+
+        # --- 6. Pad & Mask ---
+        # Use pad_sequence to handle padding. It expects a list of tensors (L_i, *dims).
+        # batch_first=True gives output shape (B, L_max, *dims)
+        padded_output = pad_sequence(processed_sequences, batch_first=True, padding_value=0.0)
+        # Shape: (batch_size, max_reduced_len, embed_dim)
+
+        # Create the attention mask
+        max_len = padded_output.shape[1]
+        # Create a tensor of indices [0, 1, ..., max_len-1]
+        indices = torch.arange(max_len, device=padded_output.device)
+        # Create the mask by comparing indices with actual lengths
+        # Shape: (batch_size, max_len). True for valid tokens, False for padding.
+        attention_mask = indices[None, :] < torch.tensor(output_lengths, device=padded_output.device)[:, None]
+
+        return padded_output, attention_mask
+
 
 from torch.nn import CrossEntropyLoss
 from transformers.utils import add_start_docstrings_to_model_forward, replace_return_docstrings
@@ -111,6 +259,7 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
 
             self.reduce_block = reduce_block
             self.vision_adapter = VisionAdapterReduceBlocks(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
+            # self.vision_adapter = VisionAdapterHeterogeneous(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
 
     @add_start_docstrings_to_model_forward(QWEN2_VL_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=Qwen2VLCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
@@ -130,6 +279,7 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
         pixel_values_videos: Optional[torch.FloatTensor] = None,
         image_grid_thw: Optional[torch.LongTensor] = None,
         video_grid_thw: Optional[torch.LongTensor] = None,
+
         rope_deltas: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
     ) -> Union[Tuple, Qwen2VLCausalLMOutputWithPast]:
@@ -206,7 +356,7 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
                 video_embeds = self.vision_adapter(pixel_values_videos, video_grid_thw)
 
                 n_video_tokens = (input_ids == self.config.video_token_id).sum().item()
-                n_video_features = video_embeds.shape[0]
+                n_video_features = video_embeds.shape[0] * video_embeds.shape[1]
                 if n_video_tokens != n_video_features:
                     raise ValueError(
                         f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"

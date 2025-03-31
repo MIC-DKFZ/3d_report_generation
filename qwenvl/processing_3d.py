@@ -47,7 +47,7 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
     def __call__(
         self,
         images: ImageInput = None,
-        vision_embeddings: List[str] = None,
+        vision_embeddings: List[torch.Tensor] = None,
         text: Union[TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]] = None,
         videos: VideoInput = None,
         **kwargs: Unpack[Qwen2VLProcessorKwargs],
@@ -111,17 +111,26 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
 
 
         if vision_embeddings:
-            videos_input_embeddings = torch.tensor(vision_embeddings[0])
-
-            video_grid_thw = torch.tensor([videos_input_embeddings.shape[-3:]]).int()
-
-            videos_input_embeddings = videos_input_embeddings.view(videos_input_embeddings.size(0), videos_input_embeddings.size(1), -1)
+            # Put the shape of each vision embedding in tensor
+            video_grid_thw = torch.tensor([v_e.shape[-3:] for v_e in vision_embeddings]).int()
+            # Flatten vision embeddings to [B, C, H*W*D] delete the batch dimension and transpose to [H*W*D, C]
+            list_of_vision_embeddings = [
+                torch.tensor(v_e).view(v_e.shape[0], v_e.shape[1], -1).squeeze(0).transpose(1, 0)
+                for v_e in vision_embeddings]
+            len_of_vision_embeddings = [v_e.size(0) for v_e in list_of_vision_embeddings]
+            # Pad the vision embeddings to the same length and stack them in a tensor,
+            # then transpose to [B, C, H*W*D]
+            videos_input_embeddings = torch.nn.utils.rnn.pad_sequence(
+                list_of_vision_embeddings, batch_first=True, padding_value=0).transpose(2, 1)
+            # # Create padding mask for the vision embeddings for later reconstruction
+            # padding_mask = torch.nn.utils.rnn.pad_sequence([torch.ones(l) for l in len_of_vision_embeddings], batch_first=True, padding_value=0)
 
             videos_inputs = {
                 "pixel_values_videos": videos_input_embeddings,
                 # TODO: do we need this self.reduce_block. Further maybe we need ceil instead of // (floor).
                 # "video_grid_thw": torch.tensor((video_grid_thw // torch.tensor(self.reduce_block)).tolist())
-                "video_grid_thw": torch.tensor((video_grid_thw).tolist())
+                "video_grid_thw": torch.tensor((video_grid_thw).tolist()),
+                # "padding_mask_vision_embeddings": padding_mask
             }
 
         else:
