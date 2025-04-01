@@ -1,13 +1,12 @@
-import os
 import torch
-import re
-import random
-from transformers import AutoConfig, AutoModel, AutoTokenizer
 import transformers
+from transformers import AutoConfig, AutoModel, AutoTokenizer
 
-from .abstract_vlm import AbstractVLMModel
 from owl.model import OwnOwlModel
 from owl.modeling_mplugowl3 import mPLUGOwl3Model
+from utils import extract_raw_samples_from_batch
+
+from .abstract_vlm import AbstractVLMModel
 
 
 class OwlVLModel(AbstractVLMModel):
@@ -178,9 +177,12 @@ class OwlVLModel(AbstractVLMModel):
         labels = padded["input_ids"].clone()
         labels[labels == self.tokenizer.pad_token_id] = -100
 
+        # TODO: does this work for batch size > 1?
         media_offsets_prompt_only = media_offsets[
             :, : padded_prompt_only["input_ids"].shape[1]
         ]
+
+        raw_samples = extract_raw_samples_from_batch(batch)
         batch_out = {
             "image_embeds": images,
             "input_ids": padded["input_ids"],
@@ -191,6 +193,7 @@ class OwlVLModel(AbstractVLMModel):
             "media_offset": media_offsets,
             "media_offset_prompt_only": media_offsets_prompt_only,
             "batch_count": self.batch_count,
+            "raw_samples": raw_samples,
         }
         batch_out = transformers.BatchFeature(batch_out)
         self.batch_count += 1

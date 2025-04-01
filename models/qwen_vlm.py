@@ -3,12 +3,13 @@ import random
 from pathlib import Path
 
 import torch
+import transformers
 from peft import LoraConfig, get_peft_model
 from transformers import BitsAndBytesConfig, Qwen2VLForConditionalGeneration
-import transformers
 
 from qwenvl.processing_3d import Qwen2VLProcessor3D
 from qwenvl.Qwen3D import Qwen2VLForConditionalGeneration3D
+from utils import extract_raw_samples_from_batch
 
 from .abstract_vlm import AbstractVLMModel
 
@@ -129,6 +130,7 @@ class QwenVLModel(AbstractVLMModel):
         for video_token_id in video_tokens:
             labels[labels == video_token_id] = -100
 
+        raw_samples = extract_raw_samples_from_batch(examples)
         batch_out = {
             "input_ids": batch["input_ids"],
             "input_ids_prompt_only": batch_prompt_only["input_ids"],
@@ -138,6 +140,7 @@ class QwenVLModel(AbstractVLMModel):
             "pixel_values_videos": batch["pixel_values_videos"],
             "video_grid_thw": batch["video_grid_thw"],
             "batch_count": self.batch_count,
+            "raw_samples": raw_samples,
         }
         batch_out = transformers.BatchFeature(batch_out)
         self.batch_count += 1

@@ -4,6 +4,7 @@ import os
 
 import torch
 import yaml
+from tqdm import tqdm
 
 from data.datasets import AMOSMMDataset
 from models.owl_vlm import OwlVLModel
@@ -54,10 +55,9 @@ class UnifiedVLMInference:
         results = []
         with torch.no_grad():
             # Iterate over the test dataset
-            for i, inputs in enumerate(test_loader):
-                gt_text = self.vlm_model.tokenizer.batch_decode(
-                    inputs["input_ids"], skip_special_tokens=True
-                )
+            for i, inputs in tqdm(enumerate(test_loader), total=len(test_loader)):
+                raw_samples = inputs["raw_samples"]
+                del inputs["raw_samples"]
                 inputs = extract_batch_prompt_only(inputs)
                 inputs = inputs.to("cuda")
                 if "batch_count" in inputs:
@@ -84,19 +84,16 @@ class UnifiedVLMInference:
                 decoded_output = self.vlm_model.tokenizer.batch_decode(
                     trimmed_generated_ids, skip_special_tokens=True
                 )
-                input_text = self.vlm_model.tokenizer.batch_decode(
-                    inputs["input_ids"], skip_special_tokens=True
-                )
 
-                results.append(
-                    {
-                        "input_text": input_text,
-                        "output_text": decoded_output,
-                        "gt_text": gt_text,
-                    }
+                results.extend(
+                    [
+                        {
+                            **{key: value[i] for key, value in raw_samples.items()},
+                            "output_text": do,
+                        }
+                        for i, do in enumerate(decoded_output)
+                    ]
                 )
-                if i == 10:
-                    break
         with open(os.path.join(self.output_dir, "inference_results.json"), "w") as f:
             json.dump(results, f, indent=4)
 
