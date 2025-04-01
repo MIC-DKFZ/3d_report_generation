@@ -120,7 +120,7 @@ def parse_args(default_config=None):
     general_parser.add_argument(
         "--output_dir",
         type=str,
-        default="vlm_inference",
+        default="output/vlm_inference",
         help="Directory to save model outputs",
     )
     general_parser.add_argument(
