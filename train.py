@@ -22,7 +22,13 @@ from utils.helper import seed_everything
 
 
 class UnifiedVLMTrainer:
-    def __init__(self, vlm_model, output_dir="vlm_output", config_file_path: str = None, sft_trainer_config: dict = None):
+    def __init__(
+        self,
+        vlm_model,
+        output_dir="vlm_output",
+        config_file_path: str = None,
+        sft_trainer_config: dict = None,
+    ):
         """
         Initialize the unified VLM trainer.
 
@@ -98,14 +104,23 @@ class UnifiedVLMTrainer:
         is_main_process = os.environ.get("LOCAL_RANK", "0") == "0"
         if is_main_process:
             # Initialize wandb
-            wandb.init(project="vlm_unified", name=f"{type(self.vlm_model).__name__}_run", reinit=True)
+            wandb.init(
+                project="vlm_unified",
+                name=f"{type(self.vlm_model).__name__}_run",
+                reinit=True,
+            )
 
         # Configure training arguments
         training_args = self.get_training_args()
 
         # Create the callback TODO implement this also for Qwen?
         if type(self.vlm_model).__name__ == "OwlVLModel":
-            callbacks = [PrintEvalBatchCallback(tokenizer=self.vlm_model.tokenizer, processor=self.vlm_model.processor)]
+            callbacks = [
+                PrintEvalBatchCallback(
+                    tokenizer=self.vlm_model.tokenizer,
+                    processor=self.vlm_model.processor,
+                )
+            ]
         else:
             callbacks = None
 
@@ -138,7 +153,9 @@ class UnifiedVLMTrainer:
 def parse_args(default_config=None):
     if default_config is None:
         default_config = {}
-    general_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
+    general_parser = argparse.ArgumentParser(
+        description="Train a Vision Language Model"
+    )
     general_parser.add_argument(
         "--model_type",
         type=str,
@@ -146,27 +163,47 @@ def parse_args(default_config=None):
         required=True,
         help="Type of VLM model to train (owl or qwen)",
     )
-    general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
-    general_parser.add_argument("--dataset_path", type=str, required=True, help="Path to the dataset JSON file")
-    general_parser.add_argument("--output_dir", type=str, default="vlm_output", help="Directory to save model outputs")
-    general_parser.add_argument("--embeddings_path", type=str, required=True, help="Path to the vision embeddings")
     general_parser.add_argument(
-        "--train_only_vision_adapter", action="store_true", help="Train only the vision adapter (Qwen only)"
+        "--model_id", type=str, required=False, help="Model ID or path"
     )
-    general_parser.add_argument('--train_config', type=str, help='Path to config file (YAML or JSON)')
+    general_parser.add_argument(
+        "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
+    )
+    general_parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="output/vlm_output",
+        help="Directory to save model outputs",
+    )
+    general_parser.add_argument(
+        "--embeddings_path",
+        type=str,
+        required=True,
+        help="Path to the vision embeddings",
+    )
+    general_parser.add_argument(
+        "--train_only_vision_adapter",
+        action="store_true",
+        help="Train only the vision adapter (Qwen only)",
+    )
+    general_parser.add_argument(
+        "--train_config", type=str, help="Path to config file (YAML or JSON)"
+    )
 
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
 
-    sft_trainer_parser = argparse.ArgumentParser(description="SFTTrainer args which overwrite the train_config file.")
+    sft_trainer_parser = argparse.ArgumentParser(
+        description="SFTTrainer args which overwrite the train_config file."
+    )
 
     # Load config file if provided
     if general_args.train_config and os.path.exists(general_args.train_config):
         file_ext = os.path.splitext(general_args.train_config)[1].lower()
-        with open(general_args.train_config, 'r') as file:
-            if file_ext == '.yaml' or file_ext == '.yml':
+        with open(general_args.train_config, "r") as file:
+            if file_ext == ".yaml" or file_ext == ".yml":
                 file_config = yaml.safe_load(file)
-            elif file_ext == '.json':
+            elif file_ext == ".json":
                 file_config = json.load(file)
             else:
                 raise ValueError(f"Unsupported config file format: {file_ext}")
@@ -180,14 +217,25 @@ def parse_args(default_config=None):
         if arg_type == bool:
             # Handle boolean values with store_true/store_false
             if value:
-                sft_trainer_parser.add_argument(f'--no-{key}', action='store_false', dest=key,
-                                    help=f'Disable {key} (default: enabled)')
+                sft_trainer_parser.add_argument(
+                    f"--no-{key}",
+                    action="store_false",
+                    dest=key,
+                    help=f"Disable {key} (default: enabled)",
+                )
             else:
-                sft_trainer_parser.add_argument(f'--{key}', action='store_true',
-                                    help=f'Enable {key} (default: disabled)')
+                sft_trainer_parser.add_argument(
+                    f"--{key}",
+                    action="store_true",
+                    help=f"Enable {key} (default: disabled)",
+                )
         else:
-            sft_trainer_parser.add_argument(f'--{key}', type=arg_type, default=value,
-                                help=f'Set {key} (default: {value})')
+            sft_trainer_parser.add_argument(
+                f"--{key}",
+                type=arg_type,
+                default=value,
+                help=f"Set {key} (default: {value})",
+            )
 
     sft_trainer_parsed, _ = sft_trainer_parser.parse_known_args()
     return general_args, sft_trainer_parsed
@@ -258,10 +306,16 @@ def main():
         n_samples=50,  # Limit the validation set size
     )
 
-    print(f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples")
+    print(
+        f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
+    )
 
     # Create the trainer and train the model
-    trainer = UnifiedVLMTrainer(vlm_model, output_dir=general_args.output_dir, sft_trainer_config = vars(sft_trainer_args))
+    trainer = UnifiedVLMTrainer(
+        vlm_model,
+        output_dir=general_args.output_dir,
+        sft_trainer_config=vars(sft_trainer_args),
+    )
     trainer.train(train_dataset, val_dataset)
 
 
