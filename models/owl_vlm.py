@@ -1,16 +1,23 @@
-import os
 import torch
-import re
-import random
+import transformers
 from transformers import AutoConfig, AutoModel, AutoTokenizer
 
-from .abstract_vlm import AbstractVLMModel
 from owl.model import OwnOwlModel
 from owl.modeling_mplugowl3 import mPLUGOwl3Model
+from utils import extract_raw_samples_from_batch
+
+from .abstract_vlm import AbstractVLMModel
 
 
 class OwlVLModel(AbstractVLMModel):
-    def __init__(self, model_id, train_only_vision_adapter: bool, output_dir="owl-vlm", vision_dim=864, embed_dim=896):
+    def __init__(
+        self,
+        model_id,
+        train_only_vision_adapter: bool,
+        output_dir="owl-vlm",
+        vision_dim=864,
+        embed_dim=896,
+    ):
         super().__init__(model_id, train_only_vision_adapter)
         self.output_dir = output_dir
         self.vision_dim = vision_dim
@@ -88,17 +95,25 @@ class OwlVLModel(AbstractVLMModel):
 
         # Print trainable parameters summary
         total_params = sum(p.numel() for p in self.model.parameters())
-        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        trainable_params = sum(
+            p.numel() for p in self.model.parameters() if p.requires_grad
+        )
         print(f"Total parameters: {total_params:,}")
         print(f"Trainable parameters: {trainable_params:,}")
-        print(f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%")
+        print(
+            f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%"
+        )
 
     def pad_inputs(self, input_ids_list, input_ids_list_prompt_only, media_offset_list):
         """Helper function to pad inputs for Owl model"""
         # Pad text inputs using the tokenizer
-        padded = self.tokenizer.pad({"input_ids": input_ids_list}, return_tensors="pt", padding="longest")
+        padded = self.tokenizer.pad(
+            {"input_ids": input_ids_list}, return_tensors="pt", padding="longest"
+        )
         padded_prompt_only = self.tokenizer.pad(
-            {"input_ids": input_ids_list_prompt_only}, return_tensors="pt", padding="longest"
+            {"input_ids": input_ids_list_prompt_only},
+            return_tensors="pt",
+            padding="longest",
         )
         pad_shape = padded["input_ids"].shape  # (batch_size, max_seq_len)
 
@@ -136,15 +151,21 @@ class OwlVLModel(AbstractVLMModel):
 
             if "tokenized_qa_text_tokens" in sample:
                 model_inputs = sample["tokenized_qa_text_tokens"]
-                model_inputs_prompt_only = sample["tokenized_qa_text_prompt_only_tokens"]
+                model_inputs_prompt_only = sample[
+                    "tokenized_qa_text_prompt_only_tokens"
+                ]
             else:
-                model_inputs = self.processor.encode_text_sft(self.processor.build_text_qwen(messages))
+                model_inputs = self.processor.encode_text_sft(
+                    self.processor.build_text_qwen(messages)
+                )
                 model_inputs_prompt_only = self.processor.encode_text_sft(
                     self.processor.build_text_qwen(messages_prompt_only)
                 )
 
             input_ids_list.append(model_inputs["input_ids"].squeeze(0))
-            input_ids_list_prompt_only.append(model_inputs_prompt_only["input_ids"].squeeze(0))
+            input_ids_list_prompt_only.append(
+                model_inputs_prompt_only["input_ids"].squeeze(0)
+            )
             media_offset_list.append(model_inputs["media_offset"])
 
         images = torch.cat(image_tensors, dim=0)
@@ -157,16 +178,25 @@ class OwlVLModel(AbstractVLMModel):
         labels = padded["input_ids"].clone()
         labels[labels == self.tokenizer.pad_token_id] = -100
 
+        # TODO: does this work for batch size > 1?
+        media_offsets_prompt_only = media_offsets[
+            :, : padded_prompt_only["input_ids"].shape[1]
+        ]
+
+        raw_samples = extract_raw_samples_from_batch(batch)
         batch_out = {
             "image_embeds": images,
             "input_ids": padded["input_ids"],
+            "input_ids_prompt_only": padded_prompt_only["input_ids"],
             "attention_mask": padded["attention_mask"],
+            "attention_mask_prompt_only": padded_prompt_only["attention_mask"],
             "labels": labels,
             "media_offset": media_offsets,
+            "media_offset_prompt_only": media_offsets_prompt_only,
             "batch_count": self.batch_count,
-            "input_ids_prompt_only": padded_prompt_only["input_ids"],
+            "raw_samples": raw_samples,
         }
-
+        batch_out = transformers.BatchFeature(batch_out)
         self.batch_count += 1
 
         return batch_out

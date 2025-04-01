@@ -1,27 +1,28 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.nn.functional as F
+from datasets import load_dataset
+from peft import LoraConfig, get_peft_model
+from qwen_vl_utils import process_vision_info
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
-
-from datasets import load_dataset
-
-from trl import SFTConfig, SFTTrainer
-from peft import LoraConfig, get_peft_model
-
-from transformers import BitsAndBytesConfig
-from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
-
+from transformers import (
+    BitsAndBytesConfig,
+    Qwen2VLForConditionalGeneration,
+    Qwen2VLProcessor,
+)
 from transformers.activations import QuickGELUActivation
+from transformers.models.qwen2_vl.modeling_qwen2_vl import (
+    _CONFIG_FOR_DOC,
+    ACT2FN,
+    QWEN2_VL_INPUTS_DOCSTRING,
+    Qwen2VLCausalLMOutputWithPast,
+    VisionMlp,
+)
+from trl import SFTConfig, SFTTrainer
 
-from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLCausalLMOutputWithPast, QWEN2_VL_INPUTS_DOCSTRING, _CONFIG_FOR_DOC
-from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionMlp
-from transformers.models.qwen2_vl.modeling_qwen2_vl import ACT2FN
-
-from qwen_vl_utils import process_vision_info
-
-
-'''
+"""
 
     def __init__(self, embedding_dim: int, embed_dim: int):
         super().__init__()
@@ -30,7 +31,8 @@ from qwen_vl_utils import process_vision_info
             hidden_dim=embed_dim,  # 1536
             hidden_act="quick_gelu"
         )
-'''
+"""
+
 
 class VisionAdapter(nn.Module):
     def __init__(self, embedding_dim: int, embed_dim: int):
@@ -56,17 +58,27 @@ class VisionAdapter(nn.Module):
         x = self.adapter(x)  # -> (batch_size * sequence_length, 1536)
 
         # Reshape back
-        x = x.reshape(batch_size * seq_len, -1)  # -> (batch_size * sequence_length, 1536)
+        x = x.reshape(
+            batch_size * seq_len, -1
+        )  # -> (batch_size * sequence_length, 1536)
 
         return x
 
 
 class VisionAdapterReduceBlocks(nn.Module):
-    def __init__(self, embedding_dim: int, embed_dim: int, reduce_block: Tuple[int, int, int] = [2, 2, 2]):
+    def __init__(
+        self,
+        embedding_dim: int,
+        embed_dim: int,
+        reduce_block: Tuple[int, int, int] = [2, 2, 2],
+    ):
         super().__init__()
         self.reduce_block = reduce_block
         self.adapter = nn.Sequential(
-            nn.Linear(embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2], 5120),
+            nn.Linear(
+                embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2],
+                5120,
+            ),
             QuickGELUActivation(),
             nn.Linear(5120, embed_dim),
         )
@@ -89,7 +101,14 @@ class VisionAdapterReduceBlocks(nn.Module):
         # Reshape to combine all reduce_block
         x = x.permute(0, 2, 3, 4, 1, 5, 6, 7)  # Move embedding_dim after spatial dims
         # (B, T', H', W', C, rT, rH, rW) -> (B, T'*H'*W', C*rT*rH*rW)
-        x = x.reshape(batch_size, -1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
+        x = x.reshape(
+            batch_size,
+            -1,
+            embedding_dim
+            * self.reduce_block[0]
+            * self.reduce_block[1]
+            * self.reduce_block[2],
+        )
 
         # Process through adapter
         # x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
@@ -106,7 +125,13 @@ class VisionAdapterHeterogeneous(nn.Module):
     reduces them using unfolding, maps them to the language model embedding
     space, and returns a padded batch with an attention mask.
     """
-    def __init__(self, embedding_dim: int, embed_dim: int, reduce_block: Tuple[int, int, int] = (2, 2, 2)):
+
+    def __init__(
+        self,
+        embedding_dim: int,
+        embed_dim: int,
+        reduce_block: Tuple[int, int, int] = (2, 2, 2),
+    ):
         """
         Args:
             embedding_dim (int): Dimension of the input vision embeddings (channel dim).
@@ -128,7 +153,9 @@ class VisionAdapterHeterogeneous(nn.Module):
             nn.Linear(5120, embed_dim),
         )
 
-    def forward(self, x: torch.Tensor, video_grid_thw: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor, video_grid_thw: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass for heterogeneous batch.
 
@@ -156,20 +183,24 @@ class VisionAdapterHeterogeneous(nn.Module):
         # --- 1. Iterate through batch ---
         for i in range(batch_size):
             x_item = x[i]  # Shape: (embedding_dim, seq_length_i)
-            grid_thw = video_grid_thw[i].tolist() # List [T_i, H_i, W_i]
+            grid_thw = video_grid_thw[i].tolist()  # List [T_i, H_i, W_i]
             seq_length_i = x_item.shape[1]
 
             # --- Sanity Check ---
             expected_seq_length = grid_thw[0] * grid_thw[1] * grid_thw[2]
             if seq_length_i != expected_seq_length:
-                raise ValueError(f"Batch item {i}: seq_length {seq_length_i} does not match grid {grid_thw} product {expected_seq_length}")
+                raise ValueError(
+                    f"Batch item {i}: seq_length {seq_length_i} does not match grid {grid_thw} product {expected_seq_length}"
+                )
 
             # --- 2. Isolate & Reshape to 5D ---
             # Reshape to (1, C, T, H, W) for unfold compatibility
             try:
                 x_item_5d = x_item.reshape(1, self.embedding_dim, *grid_thw)
             except RuntimeError as e:
-                 raise RuntimeError(f"Error reshaping batch item {i} with embedding_dim {self.embedding_dim}, seq_len {seq_length_i} to grid {grid_thw}. Error: {e}")
+                raise RuntimeError(
+                    f"Error reshaping batch item {i} with embedding_dim {self.embedding_dim}, seq_len {seq_length_i} to grid {grid_thw}. Error: {e}"
+                )
 
             # --- 3. Pad Spatially if Dimensions are not multiples of reduce_block ---
             current_t, current_h, current_w = grid_thw
@@ -182,14 +213,16 @@ class VisionAdapterHeterogeneous(nn.Module):
             pad_h = (rb_h - current_h % rb_h) % rb_h
             pad_w = (rb_w - current_w % rb_w) % rb_w
 
-            x_item_5d_padded = x_item_5d # Start assuming no padding needed
+            x_item_5d_padded = x_item_5d  # Start assuming no padding needed
             if pad_t > 0 or pad_h > 0 or pad_w > 0:
                 # PyTorch's F.pad expects padding amounts in reverse order of dimensions:
                 # (pad_last_dim_left, pad_last_dim_right, pad_penultimate_dim_top, pad_penultimate_dim_bottom, ...)
                 # For (N, C, T, H, W), the order is (W_left, W_right, H_top, H_bottom, T_front, T_back)
                 # We pad only at the 'end' (right/bottom/back)
                 paddings = (0, pad_w, 0, pad_h, 0, pad_t)
-                x_item_5d_padded = F.pad(x_item_5d, paddings, mode='constant', value=0.0)
+                x_item_5d_padded = F.pad(
+                    x_item_5d, paddings, mode="constant", value=0.0
+                )
                 # print(f"Item {i}: Original grid {grid_thw}, Padding applied ({pad_t}, {pad_h}, {pad_w}), New shape {x_item_5d_padded.shape}") # Optional debug print
 
             # Store the new, potentially padded dimensions
@@ -199,14 +232,18 @@ class VisionAdapterHeterogeneous(nn.Module):
             # Division will now be exact.
             out_grid = [g // r for g, r in zip(padded_grid_thw, self.reduce_block)]
 
-
-
             # --- 4. Unfold & Reduce ---
             try:
                 # Unfold along T, H, W dimensions
-                unfolded_x = x_item_5d.unfold(2, self.reduce_block[0], self.reduce_block[0]) # Dim T
-                unfolded_x = unfolded_x.unfold(3, self.reduce_block[1], self.reduce_block[1]) # Dim H
-                unfolded_x = unfolded_x.unfold(4, self.reduce_block[2], self.reduce_block[2]) # Dim W
+                unfolded_x = x_item_5d.unfold(
+                    2, self.reduce_block[0], self.reduce_block[0]
+                )  # Dim T
+                unfolded_x = unfolded_x.unfold(
+                    3, self.reduce_block[1], self.reduce_block[1]
+                )  # Dim H
+                unfolded_x = unfolded_x.unfold(
+                    4, self.reduce_block[2], self.reduce_block[2]
+                )  # Dim W
                 # Current shape: (1, C, T', H', W', rT, rH, rW)
                 # where T' = T / rT (or floor), etc.
 
@@ -217,26 +254,36 @@ class VisionAdapterHeterogeneous(nn.Module):
                 num_reduced_tokens_i = out_grid[0] * out_grid[1] * out_grid[2]
                 # Use view or reshape. View is generally preferred if possible.
                 # We calculated combined_input_dim in __init__
-                reduced_x = permuted_x.reshape(1, num_reduced_tokens_i, self.combined_input_dim)
+                reduced_x = permuted_x.reshape(
+                    1, num_reduced_tokens_i, self.combined_input_dim
+                )
 
                 # Remove the batch dimension (was 1 anyway): (num_reduced_tokens_i, combined_input_dim)
                 reduced_x = reduced_x.squeeze(0)
 
             except RuntimeError as e:
-                raise RuntimeError(f"Error during unfold/reshape for batch item {i} with grid {grid_thw}, reduce_block {self.reduce_block}. Shape after reshape: {x_item_5d.shape}. Error: {e}")
+                raise RuntimeError(
+                    f"Error during unfold/reshape for batch item {i} with grid {grid_thw}, reduce_block {self.reduce_block}. Shape after reshape: {x_item_5d.shape}. Error: {e}"
+                )
 
             # --- 5. Adapt ---
             # Pass through the adapter
-            mapped_x = self.adapter(reduced_x) # Shape: (num_reduced_tokens_i, embed_dim)
+            mapped_x = self.adapter(
+                reduced_x
+            )  # Shape: (num_reduced_tokens_i, embed_dim)
 
             # --- 6. Collect ---
             processed_sequences.append(mapped_x)
-            output_lengths.append(mapped_x.shape[0]) # Store the length *after* reduction
+            output_lengths.append(
+                mapped_x.shape[0]
+            )  # Store the length *after* reduction
 
         # --- 6. Pad & Mask ---
         # Use pad_sequence to handle padding. It expects a list of tensors (L_i, *dims).
         # batch_first=True gives output shape (B, L_max, *dims)
-        padded_output = pad_sequence(processed_sequences, batch_first=True, padding_value=0.0)
+        padded_output = pad_sequence(
+            processed_sequences, batch_first=True, padding_value=0.0
+        )
         # Shape: (batch_size, max_reduced_len, embed_dim)
 
         # Create the attention mask
@@ -245,24 +292,35 @@ class VisionAdapterHeterogeneous(nn.Module):
         indices = torch.arange(max_len, device=padded_output.device)
         # Create the mask by comparing indices with actual lengths
         # Shape: (batch_size, max_len). True for valid tokens, False for padding.
-        attention_mask = indices[None, :] < torch.tensor(output_lengths, device=padded_output.device)[:, None]
+        attention_mask = (
+            indices[None, :]
+            < torch.tensor(output_lengths, device=padded_output.device)[:, None]
+        )
 
         return padded_output, attention_mask
 
 
 from torch.nn import CrossEntropyLoss
-from transformers.utils import add_start_docstrings_to_model_forward, replace_return_docstrings
+from transformers.utils import (
+    add_start_docstrings_to_model_forward,
+    replace_return_docstrings,
+)
+
 
 class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
-    def __init__(self, config, reduce_block = [2, 2, 2]):
-            super().__init__(config)
+    def __init__(self, config, reduce_block=[2, 2, 2]):
+        super().__init__(config)
 
-            self.reduce_block = reduce_block
-            self.vision_adapter = VisionAdapterReduceBlocks(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
-            # self.vision_adapter = VisionAdapterHeterogeneous(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
+        self.reduce_block = reduce_block
+        self.vision_adapter = VisionAdapterReduceBlocks(
+            embedding_dim=864, embed_dim=1536, reduce_block=reduce_block
+        )
+        # self.vision_adapter = VisionAdapterHeterogeneous(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
 
     @add_start_docstrings_to_model_forward(QWEN2_VL_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=Qwen2VLCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
+    @replace_return_docstrings(
+        output_type=Qwen2VLCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
+    )
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -279,9 +337,9 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
         pixel_values_videos: Optional[torch.FloatTensor] = None,
         image_grid_thw: Optional[torch.LongTensor] = None,
         video_grid_thw: Optional[torch.LongTensor] = None,
-
         rope_deltas: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        **kwargs,
     ) -> Union[Tuple, Qwen2VLCausalLMOutputWithPast]:
         r"""
         Args:
@@ -323,11 +381,19 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
         "The image shows a street scene with a red stop sign in the foreground. In the background, there is a large red gate with Chinese characters ..."
         ```"""
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         if inputs_embeds is None:
             inputs_embeds = self.model.embed_tokens(input_ids)
@@ -346,13 +412,17 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
                     .expand_as(inputs_embeds)
                     .to(inputs_embeds.device)
                 )
-                image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+                image_embeds = image_embeds.to(
+                    inputs_embeds.device, inputs_embeds.dtype
+                )
                 inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
             if pixel_values_videos is not None:
-                #pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
-                #video_embeds = self.vision_adapter(pixel_values_videos) # The only line that has changed so far (and the added adapter above)
-                pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
+                # pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
+                # video_embeds = self.vision_adapter(pixel_values_videos) # The only line that has changed so far (and the added adapter above)
+                pixel_values_videos = pixel_values_videos.to(
+                    self.vision_adapter.adapter[0].weight.dtype
+                )
                 video_embeds = self.vision_adapter(pixel_values_videos, video_grid_thw)
 
                 n_video_tokens = (input_ids == self.config.video_token_id).sum().item()
@@ -367,14 +437,18 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
                     .expand_as(inputs_embeds)
                     .to(inputs_embeds.device)
                 )
-                video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+                video_embeds = video_embeds.to(
+                    inputs_embeds.device, inputs_embeds.dtype
+                )
                 inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
 
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
 
         # if we get 4D attention mask we cannot calculate rope deltas anymore. TODO @raushan fixme
-        if position_ids is None and (attention_mask is None or attention_mask.ndim == 2):
+        if position_ids is None and (
+            attention_mask is None or attention_mask.ndim == 2
+        ):
             # calculate RoPE index once per generation in the pre-fill stage only
             if (
                 (cache_position is not None and cache_position[0] == 0)
@@ -391,7 +465,11 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
             # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
-                delta = cache_position[0] + self.rope_deltas if cache_position is not None else 0
+                delta = (
+                    cache_position[0] + self.rope_deltas
+                    if cache_position is not None
+                    else 0
+                )
                 position_ids = torch.arange(seq_length, device=inputs_embeds.device)
                 position_ids = position_ids.view(1, -1).expand(batch_size, -1)
                 if cache_position is not None:  # otherwise `deltas` is an int `0`
