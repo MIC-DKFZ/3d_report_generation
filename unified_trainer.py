@@ -18,6 +18,7 @@ import wandb
 from data.datasets import AMOSMMDataset
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
+from utils.helper import seed_everything
 
 
 class UnifiedVLMTrainer:
@@ -94,8 +95,10 @@ class UnifiedVLMTrainer:
         else:
             model_to_train = self.vlm_model.model
 
-        # Initialize wandb
-        wandb.init(project="vlm_unified", name=f"{type(self.vlm_model).__name__}_run", reinit=True)
+        is_main_process = os.environ.get("LOCAL_RANK", "0") == "0"
+        if is_main_process:
+            # Initialize wandb
+            wandb.init(project="vlm_unified", name=f"{type(self.vlm_model).__name__}_run", reinit=True)
 
         # Configure training arguments
         training_args = self.get_training_args()
@@ -127,8 +130,9 @@ class UnifiedVLMTrainer:
         self.vlm_model.clear_memory()
         del self.trainer
 
-        # Finish wandb run
-        wandb.finish()
+        if is_main_process and wandb.run is not None:
+            # Finish wandb run
+            wandb.finish()
 
 
 def parse_args(default_config=None):
@@ -229,6 +233,8 @@ def main():
         vlm_model_class = QwenVLModel
     else:
         raise ValueError(f"Unknown model type: {general_args.model_type}")
+
+    seed_everything(42)  # Set a random seed for reproducibility
 
     vlm_model = vlm_model_class(
         model_id=general_args.model_id,
