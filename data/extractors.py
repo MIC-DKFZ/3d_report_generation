@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Type, TypeVar
 
 
-ExtractorType = TypeVar('ExtractorType', bound="AMOSMMExtractor")
+ExtractorType = TypeVar("ExtractorType", bound="AMOSMMExtractor")
 
 
 class RequiredKeys(TypedDict):
@@ -39,6 +39,7 @@ class QAItemDict(RequiredKeys):
 
         super().__init__(**data)  # Initialize TypedDict with the data
 
+
 class AMOSMMExtractor:
     """
     Extractor for AMOS-MM dataset that separates data extraction from formatting.
@@ -50,13 +51,17 @@ class AMOSMMExtractor:
         Extract all information from an AMOS-MM QA pair.
         """
         # Extract basic data
-        options_text = "\n".join([f"{key}. {value}" for key, value in qa_pair["options"].items()])
+        options_text = "\n".join(
+            [f"{key}. {value}" for key, value in qa_pair["options"].items()]
+        )
         correct_option_text = qa_pair["options"][qa_pair["answer"]]
         reasoning = qa_pair.get("reasoning", "")
 
         # Generate formatted texts
         user_text = f"{qa_pair['question']}\n\n{options_text}"
-        full_answer = f"The answer is {qa_pair['answer']}. {correct_option_text}. {reasoning}"
+        full_answer = (
+            f"The answer is {qa_pair['answer']}. {correct_option_text}. {reasoning}"
+        )
 
         return {
             "qa_question": qa_pair["question"],
@@ -75,7 +80,9 @@ class AMOSMMExtractor:
         }
 
     @staticmethod
-    def _extract_region_question(region: str, text: str, question_type: str) -> Dict[str, Any]:
+    def _extract_region_question(
+        region: str, text: str, question_type: str
+    ) -> Dict[str, Any] | None:
         """
         Helper method to extract formatted texts for region questions.
         """
@@ -85,14 +92,18 @@ class AMOSMMExtractor:
         if isinstance(text, list):
             text = ", ".join(text)
 
-        question_prefix = "What are the findings in" if question_type == "FINDINGS" else "What is the impression of "
+        question_prefix = (
+            "What are the findings in"
+            if question_type == "FINDINGS"
+            else "What is the impression of "
+        )
 
         return {
             "region": region,
             f"{question_type.lower()}": text,
             "answer_type": "OPEN",
             "answer_subtype": question_type,
-            "user_text": f"{question_prefix} the {region.replace('_', ' ')} region of this CT scan?", # TODO add prompt variety
+            "user_text": f"{question_prefix} the {region.replace('_', ' ')} region of this CT scan?",  # TODO add prompt variety
             "question": f"{question_prefix} the {region.replace('_', ' ')} region of this CT scan?",
             "full_answer": text,
             "answer": text,
@@ -100,18 +111,22 @@ class AMOSMMExtractor:
         }
 
     @staticmethod
-    def extract_finding_question(region: str, findings: str) -> Dict[str, Any]:
+    def extract_finding_question(region: str, findings: str) -> Dict[str, Any] | None:
         """
         Extract formatted texts for region questions.
         """
         return AMOSMMExtractor._extract_region_question(region, findings, "FINDINGS")
 
     @staticmethod
-    def extract_impressions_question(region: str, impressions: str) -> Dict[str, Any]:
+    def extract_impressions_question(
+        region: str, impressions: str
+    ) -> Dict[str, Any] | None:
         """
         Extract formatted texts for impression questions.
         """
-        return AMOSMMExtractor._extract_region_question(region, impressions, "IMPRESSIONS")
+        return AMOSMMExtractor._extract_region_question(
+            region, impressions, "IMPRESSIONS"
+        )
 
     @staticmethod
     def extract_report(report: Dict[str, Any]) -> Dict[str, Any]:
@@ -133,8 +148,10 @@ class AMOSMMExtractor:
 
                 # Create formatted region question
                 if region_findings:
-                    extracted_report["finding_questions"][region] = AMOSMMExtractor.extract_finding_question(
-                        region, region_findings
+                    extracted_report["finding_questions"][region] = (
+                        AMOSMMExtractor.extract_finding_question(
+                            region, region_findings
+                        )
                     )
 
         # Extract impression and create impression question
@@ -144,8 +161,10 @@ class AMOSMMExtractor:
 
                 # Create formatted impression question
                 if region_impressions:
-                    extracted_report["impression_question"][region] = AMOSMMExtractor.extract_impressions_question(
-                        region, region_impressions
+                    extracted_report["impression_question"][region] = (
+                        AMOSMMExtractor.extract_impressions_question(
+                            region, region_impressions
+                        )
                     )
 
         return extracted_report
@@ -165,17 +184,23 @@ class AMOSMMExtractor:
 
         if "labels" in sample:
             if "report" in sample["labels"]:
-                report_dict = AMOSMMExtractor.extract_report(sample["labels"]["report"]) # TODO Throw out report here?
+                report_dict = AMOSMMExtractor.extract_report(
+                    sample["labels"]["report"]
+                )  # TODO Throw out report here?
                 extracted["report"]["raw"] = report_dict["raw"]
                 extracted["report"]["findings"] = report_dict["findings"]
                 extracted["report"]["impression"] = report_dict["impression"]
 
                 # Add finding questions
-                for region, finding_questions in report_dict["finding_questions"].items():
+                for region, finding_questions in report_dict[
+                    "finding_questions"
+                ].items():
                     extracted["qa_items"].append(finding_questions)
 
                 # Add impression question
-                for region, impression_question in report_dict["impression_question"].items():
+                for region, impression_question in report_dict[
+                    "impression_question"
+                ].items():
                     extracted["qa_items"].append(impression_question)
 
             if "qa" in sample["labels"]:
@@ -187,7 +212,9 @@ class AMOSMMExtractor:
         return extracted
 
     @classmethod
-    def extract_sample_list(cls: Type[ExtractorType], samples: List[Dict[str, Any]]) -> List[QAItemDict[str, Any]]:
+    def extract_sample_list(
+        cls: Type[ExtractorType], samples: List[Dict[str, Any]]
+    ) -> List[QAItemDict]:
         """
         Extract all relevant information from a list of AMOS-MM samples.
         """
@@ -195,7 +222,9 @@ class AMOSMMExtractor:
 
         for sample in samples:
             extracted_sample = cls.extract_sample(sample)
-            cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "qa_items"}
+            cleaned_sample = {
+                k: v for k, v in extracted_sample.items() if k != "qa_items"
+            }
 
             for qa_item in extracted_sample.get("qa_items", []):
                 flattened_sample = QAItemDict({**cleaned_sample, **qa_item})
@@ -218,14 +247,16 @@ class AMOSMMRegionExtractor(AMOSMMExtractor):
             "image_path": sample["image"],
             "image_id": sample["original_case"],
             "qa_items": [],
-            "report": {}
+            "report": {},
         }
 
         if "labels" in sample:
             findings = sample["labels"]
             extracted["report"]["findings"] = findings
 
-            extracted["qa_items"].append(AMOSMMExtractor.extract_finding_question(sample['region'], findings))
+            extracted["qa_items"].append(
+                AMOSMMExtractor.extract_finding_question(sample["region"], findings)
+            )
 
         return extracted
 
@@ -254,7 +285,7 @@ class LIDCExtractor:
         return {
             "question": qa_item["question"],
             "answer": answer,
-            "full_answer": answer, # TODO remove duplicate
+            "full_answer": answer,  # TODO remove duplicate
             "answer_type": qa_item["answer_type"],
             "answer_subtype": answer_subtype,
             "user_text": qa_item["question"],
@@ -282,7 +313,7 @@ class LIDCExtractor:
         }
 
     @staticmethod
-    def extract_sample_list(samples: List[Dict[str, Any]]) -> List[QAItemDict[str, Any]]:
+    def extract_sample_list(samples: List[Dict[str, Any]]) -> List[QAItemDict]:
         """
         Extract all relevant information from a list of LIDC samples.
         """
@@ -290,9 +321,13 @@ class LIDCExtractor:
 
         for sample in samples:
             extracted_sample = LIDCExtractor.extract_sample(sample)
-            cleaned_sample = {k: v for k, v in extracted_sample.items() if k != "item_qa"}
+            cleaned_sample = {
+                k: v for k, v in extracted_sample.items() if k != "item_qa"
+            }
             if "item_qa" in extracted_sample:
-                flattened_sample = QAItemDict({**cleaned_sample, **extracted_sample["item_qa"]})
+                flattened_sample = QAItemDict(
+                    {**cleaned_sample, **extracted_sample["item_qa"]}
+                )
                 extracted_samples.append(flattened_sample)
 
         return extracted_samples
