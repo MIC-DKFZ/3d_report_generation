@@ -4,7 +4,7 @@ from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 from owl.model import OwnOwlModel
 from owl.modeling_mplugowl3 import mPLUGOwl3Model
-from utils import extract_raw_samples_from_batch
+from utils.filter_batch import extract_raw_samples_from_batch
 
 from .abstract_vlm import AbstractVLMModel
 

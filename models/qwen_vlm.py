@@ -9,7 +9,7 @@ from transformers import BitsAndBytesConfig, Qwen2VLForConditionalGeneration
 
 from qwenvl.processing_3d import Qwen2VLProcessor3D
 from qwenvl.Qwen3D import Qwen2VLForConditionalGeneration3D
-from utils import extract_raw_samples_from_batch
+from utils.filter_batch import extract_raw_samples_from_batch
 
 from .abstract_vlm import AbstractVLMModel
 

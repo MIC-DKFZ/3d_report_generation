@@ -1,9 +1,10 @@
 import re
-import torch
-import wandb
-from transformers import TrainerCallback, TrainerState, TrainerControl
 
-from utils import extract_batch_prompt_only
+import torch
+from transformers import TrainerCallback, TrainerControl, TrainerState
+
+import wandb
+from utils.filter_batch import extract_batch_prompt_only
 
 
 class PrintEvalBatchCallback(TrainerCallback):

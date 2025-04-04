@@ -9,7 +9,7 @@ from tqdm import tqdm
 from data.datasets import AMOSMMDataset
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
-from utils import extract_batch_prompt_only
+from utils.filter_batch import extract_batch_prompt_only
 
 
 class UnifiedVLMInference:
