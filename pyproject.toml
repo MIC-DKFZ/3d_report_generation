@@ -5,16 +5,21 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "accelerate==0.34.2",
     "bert-score>=0.3.13",
+    "bitsandbytes>=0.45.5",
     "einops>=0.8.1",
     "evaluate>=0.4.3",
-    "green-score==0.0.8",
     "icecream>=2.1.4",
     "medspacy>=1.3.1",
     "numpy<2.0",
+    "peft==0.10.0",
+    "qwen-vl-utils>=0.0.10",
     "ratescore>=0.5.0",
     "rouge-score>=0.1.2",
     "torch>=2.2.2",
+    "torchvision>=0.21.0",
+    "transformers==4.49.0",
     "trl>=0.11.4",
     "wandb>=0.19.8",
 ]
