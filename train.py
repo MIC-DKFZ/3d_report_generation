@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 from transformers import BitsAndBytesConfig
 from peft import LoraConfig, get_peft_model
-from owl.callbacks import PrintEvalBatchCallback
+from owl.callbacks import PrintEvalBatchCallback, LossLoggingCallback
 from transformers import TrainerCallback
 from trl import SFTConfig, SFTTrainer
 
@@ -119,10 +119,11 @@ class UnifiedVLMTrainer:
                 PrintEvalBatchCallback(
                     tokenizer=self.vlm_model.tokenizer,
                     processor=self.vlm_model.processor,
-                )
+                ),
+                LossLoggingCallback()
             ]
         else:
-            callbacks = None
+            callbacks = [LossLoggingCallback()]
 
         # Initialize SFT trainer
         self.trainer = SFTTrainer(
