@@ -63,6 +63,7 @@ reportFunctionMemberAccess= "warning"
 reportAttributeAccessIssue = "warning"
 reportIncompatibleMethodOverride = "warning"
 reportPrivateImportUsage = "warning"
+reportIndexIssue = "warning"
 
 [tool.pylint]
 extension-pkg-allow-list = [
