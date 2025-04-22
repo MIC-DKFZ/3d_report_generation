@@ -1,7 +1,8 @@
 import re
+import logging
 
 import torch
-from transformers import TrainerCallback, TrainerControl, TrainerState
+from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
 import wandb
 from utils.filter_batch import extract_batch_prompt_only
@@ -40,6 +41,7 @@ class PrintEvalBatchCallback(TrainerCallback):
         metrics=None,
         **kwargs,
     ):
+        # TODO: for DDP check something like trainer.is_world_process_zero() here
         if state.epoch - self.last_epoch < self.max_diff:
             return
         self.last_epoch = state.epoch
@@ -112,3 +114,72 @@ class PrintEvalBatchCallback(TrainerCallback):
         wandb.log({"correct_qa": n_correct_qa})
 
         model.train()  # Ensure model is back in training mode
+
+
+class LossLoggingCallback(TrainerCallback):
+    """A custom callback that logs the training loss"""
+    def __init__(self, logfile=None):
+        """
+        Args:
+            logfile (str): Path to the log file where loss will be saved.
+        """
+        if logfile is None:
+            logfile = "training_loss.log"
+
+        self.logfile = logfile
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            handlers=[
+                logging.FileHandler(self.logfile, mode='w') if self.logfile else None,  # Write mode ('w') to overwrite run with same name
+                # logging.StreamHandler()
+            ]
+        )
+
+        self.callback_logger = logging.getLogger(self.__class__.__name__)
+
+
+    def on_log(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, logs=None, **kwargs):
+        """
+        Event called by Trainer when logging metrics.
+        """
+        if state.is_world_process_zero and logs is not None:
+            # Check if 'loss' is in the logs dictionary (it should be during training)
+            if 'loss' in logs:
+                loss = logs['loss']
+                global_step = state.global_step
+                # print(f"Step: {global_step} | Training Loss: {loss:.4f}")
+                self.callback_logger.info(f"Step: {global_step} | Training Loss: {loss:.5f}")
+
+            # You could also check for 'eval_loss' here if you wanted to log validation loss
+            # elif 'eval_loss' in logs:
+            #     eval_loss = logs['eval_loss']
+            #     global_step = state.global_step
+            #     print(f"Step: {global_step} | Validation Loss: {eval_loss:.4f}")
+
+            # --- Add your custom logging logic here ---
+            # Example: Append to a custom file
+            # with open("custom_loss_log.txt", "a") as f:
+            #     if 'loss' in logs:
+            #         f.write(f"{global_step},{logs['loss']}\n")
+
+
+class WandbCustomLoggingCallback(TrainerCallback):
+    """
+    A custom callback to log specific metrics to WandB.
+    NOTE: Only needed if you want logging beyond the default Trainer integration.
+    """
+    def on_log(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, logs=None, **kwargs):
+        # Check if WandB run has been initialized
+        # (Trainer usually handles init if 'wandb' is in report_to)
+        if state.is_world_process_zero and wandb.run is not None:
+            if logs is not None and 'loss' in logs:
+                loss = logs['loss']
+                step = state.global_step
+
+                # Log custom metric(s) to WandB
+                wandb.log({
+                    "custom_details/train_loss_per_log_step": loss,
+                    # Add any other custom metrics you want here
+                    # "custom_details/some_other_value": calculate_something()
+                }, step=step) # IMPORTANT: Use state.global_step for the x-axis
