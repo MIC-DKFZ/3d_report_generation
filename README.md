@@ -9,7 +9,7 @@ pip install -e .
 
 ### Datasets
 * AMOS-MM dataset: ``E132-Projekte/Projects/2024_MICCAI24_AMOS-MM``
-* LIDC-IDRI dataset: ``E132-Projekte/Projects/2025_MIC_Rocket_VLM/LIDC-IDRI``
+* LIDC-IDRI dataset: ``E132-Projekte/Projects/2025_MIC_Rocket_VLM/LIDC-IDRI``. For information how to generate this VQA dataset, see [here](data/lidc/README.md)
 
 ### Embeddings
 * All image embeddings are located in ``E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings``
