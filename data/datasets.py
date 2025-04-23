@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple
+from tqdm import tqdm
 import yaml
 
 import numpy as np
@@ -285,7 +286,7 @@ class CTRATEDataset(MedicalImageDataset):
     CT-RATE dataset class for CT scan analysis
 
     Args:
-        dataset_path (str): Path to the CT-RATE dataset directory
+        dataset_json_path (str): Path to the CT-RATE dataset directory
         model_name (str): Name of the VLM the dataset is used for
         split (str): Split name ('train', 'val', or 'test')
         embeddings_path (str | Path): Path to the vision embeddings directory
@@ -293,42 +294,58 @@ class CTRATEDataset(MedicalImageDataset):
         answer_types (tuple, optional): Types of answers to include
     """
 
-    def __init__(
-        self,
-        dataset_path,
-        model_name,
-        split="train",
-        embeddings_path=None,
-        n_samples=None,
-        tokenize_fn=None,
-        answer_types=("CHOICE", "TEXT"),
-    ):
-        super().__init__(
-            dataset_path,
-            model_name,
-            split=split,
-            embeddings_path=embeddings_path,
-            n_samples=n_samples,
-            tokenize_fn=tokenize_fn,
-            answer_types=answer_types,
-        )
+    # def __init__(
+    #     self,
+    #     dataset_path,
+    #     model_name,
+    #     split="train",
+    #     embeddings_path=None,
+    #     n_samples=None,
+    #     tokenize_fn=None,
+    #     answer_types=("CHOICE", "TEXT"),
+    # ):
+    #     super().__init__(
+    #         dataset_path,
+    #         model_name,
+    #         split=split,
+    #         embeddings_path=embeddings_path,
+    #         n_samples=n_samples,
+    #         tokenize_fn=tokenize_fn,
+    #         answer_types=answer_types,
+    #     )
 
     def _load_data(self, dataset_path):
+
+        self.embedding_dict = {}
+
+        for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
+            for fl in fls_:
+                if fl.endswith(".npy") or fl.endswith(".npz"):
+                    image_id = fl.split("_embedding")[0]
+                    self.embedding_dict[image_id] = os.path.join(flr_, fl)
+
         metadata_dir = os.path.join(dataset_path, "metadata")
         data_dir = os.path.join(dataset_path, "images")
 
         metadata_files = [f for f in os.listdir(metadata_dir) if f.endswith(".yml")]
 
         samples = []
-        for metadata_file in metadata_files:
+        for metadata_file in tqdm(metadata_files):
             metadata_path = os.path.join(metadata_dir, metadata_file)
-            data_path = os.path.join(data_dir, metadata_file.replace(".yml", ".nrrd"))
+            # data_path = os.path.join(data_dir, metadata_file.replace(".yml", ".nrrd"))
 
-            if not os.path.exists(data_path):
-                continue
+            # if not os.path.exists(data_path):
+            #     continue
 
             with open(metadata_path, "r") as f:
                 metadata = yaml.safe_load(f)
+
+            image_id = metadata["image_id"]
+
+            embedding_path = self.embedding_dict.get(image_id)
+
+            if embedding_path is None:
+                continue
 
             if self.split == "train" and not metadata["metadata"].get("train_set", False):
                 continue
@@ -340,7 +357,8 @@ class CTRATEDataset(MedicalImageDataset):
             classifications = {c: metadata["metadata"].get(c) for c in CTRATEExtractor.CONDITIONS}
 
             sample = {
-                "image_path": data_path,
+                "image_id": metadata["image_id"],
+                "embedding_path": embedding_path,
                 "tasks": {
                     "classification": classifications,
                     "report_gen": findings,
@@ -351,9 +369,9 @@ class CTRATEDataset(MedicalImageDataset):
 
         return samples
 
-    def get_embedding_path(self, image_id):
+    def get_embedding_path(self, embedding_path):
         """Convert image ID to embedding path"""
-        return str(Path(self.embeddings_path) / f"{image_id}_embedding.npz")
+        return os.path.join(self.embeddings_path, embedding_path + "_embedding.npz")
 
     def extract_sample_list(self, samples):
         """Extract sample list from raw data"""

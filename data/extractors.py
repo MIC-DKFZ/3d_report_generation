@@ -313,8 +313,8 @@ class CTRATEExtractor:
                     if value is not None:  # Skip conditions with no value
                         extracted_samples.append(
                             {
-                                "image_id": os.path.basename(sample["image_path"]).replace(".nrrd", ""),
-                                "image_path": sample["image_path"],
+                                "image_id": sample["image_id"],
+                                "image_path": sample["embedding_path"],
                                 "question": f"Is there evidence of {condition} in this CT scan?",
                                 "answer": "Yes" if value == 1 else "No",
                                 "full_answer": "Yes" if value == 1 else "No",
@@ -329,8 +329,8 @@ class CTRATEExtractor:
             if "report_gen" in sample["tasks"] and sample["tasks"]["report_gen"]:
                 extracted_samples.append(
                     {
-                        "image_id": os.path.basename(sample["image_path"]).replace(".nrrd", ""),
-                        "image_path": sample["image_path"],
+                        "image_id": sample["image_id"],
+                        "image_path": sample["embedding_path"],
                         "question": "Generate a detailed report for this CT scan.",
                         "answer": sample["tasks"]["report_gen"],
                         "full_answer": sample["tasks"]["report_gen"],
@@ -344,8 +344,8 @@ class CTRATEExtractor:
             if "diagnosis" in sample["tasks"] and sample["tasks"]["diagnosis"]:
                 extracted_samples.append(
                     {
-                        "image_id": os.path.basename(sample["image_path"]).replace(".nrrd", ""),
-                        "image_path": sample["image_path"],
+                        "image_id": sample["image_id"],
+                        "image_path": sample["embedding_path"],
                         "question": "What is the diagnosis for this CT scan?",
                         "answer": sample["tasks"]["diagnosis"],
                         "full_answer": sample["tasks"]["diagnosis"],
