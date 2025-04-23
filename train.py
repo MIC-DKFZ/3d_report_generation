@@ -47,9 +47,13 @@ class UnifiedVLMTrainer:
 
     def get_training_args(self):
         """Configure standard training arguments"""
+        num_cores = os.cpu_count()
+        num_workers = num_cores // 2 if num_cores > 4 else 1
         base_args = {
             "output_dir": self.output_dir,
             "run_name": f"{type(self.vlm_model).__name__}_training",
+            "dataloader_num_workers": num_workers,
+            "dataloader_pin_memory": True,
         }
         base_args.update(self.sft_trainer_config)
 
