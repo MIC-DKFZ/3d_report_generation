@@ -120,10 +120,10 @@ class UnifiedVLMTrainer:
                     tokenizer=self.vlm_model.tokenizer,
                     processor=self.vlm_model.processor,
                 ),
-                LossLoggingCallback()
+                LossLoggingCallback(self.output_dir)
             ]
         else:
-            callbacks = [LossLoggingCallback()]
+            callbacks = [LossLoggingCallback(self.output_dir)]
 
         # Initialize SFT trainer
         self.trainer = SFTTrainer(
