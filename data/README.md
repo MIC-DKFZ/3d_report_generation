@@ -47,3 +47,11 @@ Added in `__getitem__`:
 The extractor class handles the sample extraction independently of the question formatting in the dataset classes.  
 Each dataset has its own Extractor class. This usually implements a function like `extract_sample_list`, which iterates over all samples (typically loaded from a `dataset.json` in the dataset class) and brings them into an appropriate format, e.g. based on the type of question.  
 Note that each sample should have some minimum required keys. These are defined in `RequiredKeys`. To make sure that each sample contains the required keys, the samples should be a `QAItemDict`, which checks at initialization that all required keys are present.
+
+## Adding a new dataset
+
+**1. Implement an extractor**  
+As described [above](#extractors), implement an extractor that takes in a list of the raw sample dicts and transforms them in a way that they are of type `QAItemDict` with the [necessary keys](#fields-to-be-at-least-expected-after-retrieving-sample-with-getitem).
+
+**2. Implement a dataset class**  
+This class should inheret from `MedicalImageDataset`. In the `extract_sample_list` method, the extractor from step 1 will be used.
