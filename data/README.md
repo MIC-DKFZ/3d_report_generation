@@ -43,3 +43,7 @@ Added in `__getitem__`:
 
 
 ## Extractors
+
+The extractor class handles the sample extraction independently of the question formatting in the dataset classes.  
+Each dataset has its own Extractor class. This usually implements a function like `extract_sample_list`, which iterates over all samples (typically loaded from a `dataset.json` in the dataset class) and brings them into an appropriate format, e.g. based on the type of question.  
+Note that each sample should have some minimum required keys. These are defined in `RequiredKeys`. To make sure that each sample contains the required keys, the samples should be a `QAItemDict`, which checks at initialization that all required keys are present.
