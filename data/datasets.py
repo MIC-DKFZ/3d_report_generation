@@ -1,28 +1,38 @@
 import json
 import os
-from pathlib import Path
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+
 from data.extractors import AMOSMMExtractor, AMOSMMRegionExtractor, LIDCExtractor
+from utils import logger
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
 
-def format_into_message(question, answer, model_name, system_text=SYSTEM_TEXT, embedding_path=None):
+def format_into_message(
+    question, answer, model_name, system_text=SYSTEM_TEXT, embedding_path=None
+):
 
     system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
 
     if model_name == "qwen":
         user_message = {
             "role": "user",
-            "content": [{"type": "image", "embedding_path": embedding_path}, {"type": "text", "text": question}],
+            "content": [
+                {"type": "image", "embedding_path": embedding_path},
+                {"type": "text", "text": question},
+            ],
         }
     elif model_name == "owl":
-        user_message = {"role": "user", "content": [{"type": "text", "text": f"<|image|>\n{question}"}]}
+        user_message = {
+            "role": "user",
+            "content": [{"type": "text", "text": f"<|image|>\n{question}"}],
+        }
     else:
         raise ValueError(f"Unsupported model name: {model_name}")
 
@@ -63,12 +73,16 @@ class MedicalImageDataset(Dataset, ABC):
 
         self.model_name = model_name
         self.split = split
-        self.embeddings_path = Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
+        self.embeddings_path = (
+            Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
+        )
         self.n_samples = n_samples
         self.tokenize_fn = tokenize_fn
 
         if isinstance(answer_types, str):
-            answer_types = [answer_types]  # Convert single string to list of strings for consistency
+            answer_types = [
+                answer_types
+            ]  # Convert single string to list of strings for consistency
 
         self.answer_type_dict = {}
         for answer_type in answer_types:
@@ -124,7 +138,10 @@ class MedicalImageDataset(Dataset, ABC):
             sample["embedding_path"] = embedding_path
 
             formatted_qa, formatted_qa_prompt_only = format_into_message(
-                sample["question"], sample["full_answer"], self.model_name, system_text=sample["system_text"]
+                sample["question"],
+                sample["full_answer"],
+                self.model_name,
+                system_text=sample["system_text"],
             )
 
             sample["formatted_qa"] = formatted_qa
@@ -138,7 +155,9 @@ class MedicalImageDataset(Dataset, ABC):
         for sample in self.samples:
             # sample["tokenized"] = {}
             sample["tokenized_qa_text_tokens"] = self.tokenize_fn(sample["formatted_qa"])
-            sample["tokenized_qa_text_prompt_only_tokens"] = self.tokenize_fn(sample["formatted_qa_prompt_only"])
+            sample["tokenized_qa_text_prompt_only_tokens"] = self.tokenize_fn(
+                sample["formatted_qa_prompt_only"]
+            )
 
     def _filter_samples(self, samples):
         """Filter samples based on answer type"""
@@ -195,15 +214,15 @@ class MedicalImageDataset(Dataset, ABC):
 
     def verify(self):
         """Test function to verify dataset loading"""
-        print(f"\nTotal number of samples: {len(self)}")
-        print("\nExample question:")
+        logger.info(f"\nTotal number of samples: {len(self)}")
+        logger.info("\nExample question:")
         if len(self.samples) > 0:
             sample = self.samples[0]
-            print(f"Image ID: {sample['image_id']}")
-            print(f"Question: {sample['question']}")
-            print(f"Answer: {sample['full_answer']}")
-            print(f"Answer Type: {sample['answer_type']}")
-            print(f"Answer Subtype: {sample['answer_subtype']}")
+            logger.info(f"Image ID: {sample['image_id']}")
+            logger.info(f"Question: {sample['question']}")
+            logger.info(f"Answer: {sample['full_answer']}")
+            logger.info(f"Answer Type: {sample['answer_type']}")
+            logger.info(f"Answer Subtype: {sample['answer_subtype']}")
 
 
 class AMOSMMDataset(MedicalImageDataset):
@@ -254,6 +273,7 @@ class AMOSMMRegionDataset(AMOSMMDataset):
         embeddings_path (str | Path): Root path to the vision embeddings directory
         n_samples (int, optional): Number of samples to load (for debugging)
     """
+
     def format_data(self):
         """Format raw data into structured samples"""
         formatted_data = []
@@ -270,7 +290,10 @@ class AMOSMMRegionDataset(AMOSMMDataset):
             sample["embedding_path"] = embedding_path
 
             formatted_qa, formatted_qa_prompt_only = format_into_message(
-                sample["question"], sample["full_answer"], self.model_name, system_text=sample["system_text"]
+                sample["question"],
+                sample["full_answer"],
+                self.model_name,
+                system_text=sample["system_text"],
             )
 
             sample["formatted_qa"] = formatted_qa

@@ -49,13 +49,16 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from .configuration_hyper_qwen2 import HyperQwen2Config
+from utils import logger
 
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
 
-    _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
+    _flash_supports_window_size = "window_size" in list(
+        inspect.signature(flash_attn_func).parameters
+    )
 from .x_sdpa import ScaleDotProductAttention
 
 try:
@@ -63,10 +66,10 @@ try:
     from einops import rearrange
 
     use_flash_rotary = True
-    print("use flash_attn rotary")
+    logger.info("use flash_attn rotary")
 except ImportError:
     use_flash_rotary = False
-    print("import flash_attn rotary fail")
+    logger.warning("import flash_attn rotary fail")
 
 logger = logging.get_logger(__name__)
 
@@ -114,17 +117,24 @@ class Qwen2RotaryEmbedding(nn.Module):
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float().to(device) / self.dim))
+        inv_freq = 1.0 / (
+            self.base
+            ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float().to(device) / self.dim)
+        )
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
         # Build here to make `torch.jit.trace` work.
         self._set_cos_sin_cache(
-            seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
+            seq_len=max_position_embeddings,
+            device=self.inv_freq.device,
+            dtype=torch.get_default_dtype(),
         )
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
-        t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.int64).type_as(self.inv_freq)
+        t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.int64).type_as(
+            self.inv_freq
+        )
 
         freqs = torch.outer(t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
@@ -165,7 +175,8 @@ class RotaryEmbedding(torch.nn.Module):
         if seqlen > self._seq_len_cached or ntk_alpha != self._ntk_alpha_cached:
             base = self.base * ntk_alpha ** (self.dim / (self.dim - 2))
             self.inv_freq = 1.0 / (
-                base ** (torch.arange(0, self.dim, 2, device=self.inv_freq.device).float() / self.dim)
+                base
+                ** (torch.arange(0, self.dim, 2, device=self.inv_freq.device).float() / self.dim)
             )
             self._seq_len_cached = seqlen
             self._ntk_alpha_cached = ntk_alpha
@@ -250,7 +261,9 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    hidden_states = hidden_states[:, :, None, :, :].expand(
+        batch, num_key_value_heads, n_rep, slen, head_dim
+    )
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
@@ -270,7 +283,10 @@ def select_query(media_offset, num_queries=None):
     query_indices = query_indices.nonzero()
     ptr = 0
     while ptr < query_indices.shape[0]:
-        first_query_index, last_query_index = query_indices[ptr], query_indices[ptr + num_queries - 1]
+        first_query_index, last_query_index = (
+            query_indices[ptr],
+            query_indices[ptr + num_queries - 1],
+        )
         assert (last_query_index[1] - first_query_index[1] + 1).item() == num_queries
         assert last_query_index[0].item() == first_query_index[0].item()
         batch_id, begin_i, end_i = (
@@ -334,7 +350,9 @@ class HyperQwen2Attention(nn.Module):
     and "Generating Long Sequences with Sparse Transformers".
     """
 
-    def __init__(self, config: HyperQwen2Config, layer_idx: Optional[int] = None, is_hyper_enabed=False):
+    def __init__(
+        self, config: HyperQwen2Config, layer_idx: Optional[int] = None, is_hyper_enabed=False
+    ):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -361,8 +379,12 @@ class HyperQwen2Attention(nn.Module):
                 f" and `num_heads`: {self.num_heads})."
             )
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=True)
-        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True)
-        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True)
+        self.k_proj = nn.Linear(
+            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True
+        )
+        self.v_proj = nn.Linear(
+            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True
+        )
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
         self.rotary_emb = Qwen2RotaryEmbedding(
@@ -376,7 +398,9 @@ class HyperQwen2Attention(nn.Module):
         # Hyper Attention Modules
         self.is_hyper_enabed = is_hyper_enabed
         if self.is_hyper_enabed:
-            self.v_kv_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim * 2, bias=True)
+            self.v_kv_proj = nn.Linear(
+                self.hidden_size, self.num_key_value_heads * self.head_dim * 2, bias=True
+            )
 
             self.gate = nn.Parameter(torch.zeros(self.hidden_size))
             self.v_core_attention_sdpa = ScaleDotProductAttention(
@@ -404,9 +428,13 @@ class HyperQwen2Attention(nn.Module):
             # ic(key_layer.shape, k_pos_emb.shape)
 
             image_pos = (media_offset_line[1:] - media_offset_line[:-1]).nonzero().squeeze(1) + 1
-            k_pos_emb = repeat(k_pos_emb[image_pos], "N_img b h d -> (N_img L) b h d", L=length_each_img)  # N_img, dim
+            k_pos_emb = repeat(
+                k_pos_emb[image_pos], "N_img b h d -> (N_img L) b h d", L=length_each_img
+            )  # N_img, dim
 
-            key_layer = apply_rotary_pos_emb_core(key_layer, k_pos_emb, use_fp32=True)  # TODO difference
+            key_layer = apply_rotary_pos_emb_core(
+                key_layer, k_pos_emb, use_fp32=True
+            )  # TODO difference
         key_layer = rearrange(key_layer, "s b h d -> b h s d")
         return key_layer
 
@@ -448,7 +476,9 @@ class HyperQwen2Attention(nn.Module):
             if not completion_flag:
                 # 对于生成模式 query对视觉可见性应该是全部
                 # v2t mask只对prefill阶段有效
-                re_to_zero_media_offset = (media_offset[batch_id, :, 1] - curr_offset[0]).to(query_layer.device)
+                re_to_zero_media_offset = (media_offset[batch_id, :, 1] - curr_offset[0]).to(
+                    query_layer.device
+                )
                 if len(re_to_zero_media_offset.nonzero()) == 0:
                     query_shift = 0
                 else:
@@ -457,14 +487,18 @@ class HyperQwen2Attention(nn.Module):
                     re_to_zero_media_offset[query_shift:],  # 取end表示最多能看几张图
                     num_images=curr_offset[1] - curr_offset[0],
                 )
-                curr_mask = repeat(curr_mask, "s_q s_k -> B H s_q (s_k img_l)", B=1, H=1, img_l=length_each_img)
+                curr_mask = repeat(
+                    curr_mask, "s_q s_k -> B H s_q (s_k img_l)", B=1, H=1, img_l=length_each_img
+                )
 
                 # print_rank_0(query_shift)
             else:
                 curr_mask = None
                 query_shift = 0
 
-            curr_query_tokens = query_layer[batch_id, :, query_shift:].unsqueeze(0).clone().contiguous()
+            curr_query_tokens = (
+                query_layer[batch_id, :, query_shift:].unsqueeze(0).clone().contiguous()
+            )
 
             assert curr_offset[0] < vision_features.shape[0]
             assert curr_offset[1] <= vision_features.shape[0]
@@ -482,7 +516,8 @@ class HyperQwen2Attention(nn.Module):
             # Apply MI-Rope
             key_layer = self.apply_mi_rope(
                 key_layer,
-                media_offset_line=self.visual_cache["media_offset"][batch_id, :, 1] - curr_offset[0],
+                media_offset_line=self.visual_cache["media_offset"][batch_id, :, 1]
+                - curr_offset[0],
                 length_each_img=length_each_img,
             )
 
@@ -495,7 +530,8 @@ class HyperQwen2Attention(nn.Module):
 
             # Apply dynamic gate
             context_layer_clone[query_shift:, batch_id] = (
-                context_layer[query_shift:, batch_id].clone() * (1 - gate_value) + v_context_layer * gate_value
+                context_layer[query_shift:, batch_id].clone() * (1 - gate_value)
+                + v_context_layer * gate_value
             )
 
         return context_layer_clone
@@ -521,8 +557,12 @@ class HyperQwen2Attention(nn.Module):
         value_states = self.v_proj(hidden_states)
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
+        value_states = value_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
@@ -534,17 +574,23 @@ class HyperQwen2Attention(nn.Module):
                 )
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        query_states, key_states = apply_rotary_pos_emb(
+            query_states, key_states, cos, sin, position_ids
+        )
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
 
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(
+            self.head_dim
+        )
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
@@ -561,8 +607,12 @@ class HyperQwen2Attention(nn.Module):
             attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
+            query_states.dtype
+        )
+        attn_weights = nn.functional.dropout(
+            attn_weights, p=self.attention_dropout, training=self.training
+        )
         attn_output = torch.matmul(attn_weights, value_states)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
@@ -576,7 +626,10 @@ class HyperQwen2Attention(nn.Module):
 
         # Hyper Attention
         attn_output = self.crossattention(
-            query_states.permute(1, 0, 1, 3), image_embeds, media_offset, attn_output.permute(1, 0, 2)
+            query_states.permute(1, 0, 1, 3),
+            image_embeds,
+            media_offset,
+            attn_output.permute(1, 0, 2),
         )
         attn_output = attn_output.permute(1, 0, 2)
         #### End of Hyper Attention
@@ -625,8 +678,12 @@ class HyperQwen2FlashAttention2(HyperQwen2Attention):
         value_states = self.v_proj(hidden_states)
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
+        value_states = value_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
@@ -642,7 +699,9 @@ class HyperQwen2FlashAttention2(HyperQwen2Attention):
         rotary_seq_len = max(kv_seq_len, position_ids[:, -1].max().item()) + 1
         cos, sin = self.rotary_emb(value_states, seq_len=rotary_seq_len)
 
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        query_states, key_states = apply_rotary_pos_emb(
+            query_states, key_states, cos, sin, position_ids
+        )
 
         use_sliding_windows = (
             _flash_supports_window_size
@@ -681,10 +740,14 @@ class HyperQwen2FlashAttention2(HyperQwen2Attention):
 
                 if attention_mask is not None:
                     attention_mask = attention_mask[:, slicing_tokens:]
-                    attention_mask = torch.cat([attention_mask, torch.ones_like(attention_mask[:, -1:])], dim=-1)
+                    attention_mask = torch.cat(
+                        [attention_mask, torch.ones_like(attention_mask[:, -1:])], dim=-1
+                    )
 
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
 
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
@@ -734,7 +797,10 @@ class HyperQwen2FlashAttention2(HyperQwen2Attention):
         # Hyper Attention
         # (batch_size, seqlen, nheads, headdim) -> [s b h d]
         attn_output = self.crossattention(
-            query_states.permute(1, 0, 2, 3), image_embeds, media_offset, attn_output.permute(1, 0, 2)
+            query_states.permute(1, 0, 2, 3),
+            image_embeds,
+            media_offset,
+            attn_output.permute(1, 0, 2),
         )
         attn_output = attn_output.permute(1, 0, 2)
         #### End of Hyper Attention
@@ -791,8 +857,10 @@ class HyperQwen2FlashAttention2(HyperQwen2Attention):
         # Contains at least one padding token in the sequence
         if attention_mask is not None:
             batch_size = query_states.shape[0]
-            query_states, key_states, value_states, indices_q, cu_seq_lens, max_seq_lens = self._upad_input(
-                query_states, key_states, value_states, attention_mask, query_length
+            query_states, key_states, value_states, indices_q, cu_seq_lens, max_seq_lens = (
+                self._upad_input(
+                    query_states, key_states, value_states, attention_mask, query_length
+                )
             )
 
             cu_seqlens_q, cu_seqlens_k = cu_seq_lens
@@ -862,8 +930,12 @@ class HyperQwen2FlashAttention2(HyperQwen2Attention):
 
         indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(attention_mask)
 
-        key_layer = index_first_axis(key_layer.reshape(batch_size * kv_seq_len, num_heads, head_dim), indices_k)
-        value_layer = index_first_axis(value_layer.reshape(batch_size * kv_seq_len, num_heads, head_dim), indices_k)
+        key_layer = index_first_axis(
+            key_layer.reshape(batch_size * kv_seq_len, num_heads, head_dim), indices_k
+        )
+        value_layer = index_first_axis(
+            value_layer.reshape(batch_size * kv_seq_len, num_heads, head_dim), indices_k
+        )
 
         if query_length == kv_seq_len:
             query_layer = index_first_axis(
@@ -882,7 +954,9 @@ class HyperQwen2FlashAttention2(HyperQwen2Attention):
         else:
             # The -q_len: slice assumes left padding.
             attention_mask = attention_mask[:, -query_length:]
-            query_layer, indices_q, cu_seqlens_q, max_seqlen_in_batch_q = unpad_input(query_layer, attention_mask)
+            query_layer, indices_q, cu_seqlens_q, max_seqlen_in_batch_q = unpad_input(
+                query_layer, attention_mask
+            )
 
         return (
             query_layer,
@@ -936,19 +1010,27 @@ class HyperQwen2SdpaAttention(HyperQwen2Attention):
         value_states = self.v_proj(hidden_states)
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
+        value_states = value_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
 
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        query_states, key_states = apply_rotary_pos_emb(
+            query_states, key_states, cos, sin, position_ids
+        )
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
@@ -981,7 +1063,10 @@ class HyperQwen2SdpaAttention(HyperQwen2Attention):
 
         # Hyper Attention
         attn_output = self.crossattention(
-            query_states.permute(2, 0, 1, 3), image_embeds, media_offset, attn_output.permute(1, 0, 2)
+            query_states.permute(2, 0, 1, 3),
+            image_embeds,
+            media_offset,
+            attn_output.permute(1, 0, 2),
         )
         attn_output = attn_output.permute(1, 0, 2)
         #### End of Hyper Attention
@@ -1213,7 +1298,10 @@ class HyperQwen2Model(Qwen2PreTrainedModel):
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList(
-            [HyperQwen2DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [
+                HyperQwen2DecoderLayer(config, layer_idx)
+                for layer_idx in range(config.num_hidden_layers)
+            ]
         )
         self._attn_implementation = config._attn_implementation
         self.norm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -1243,9 +1331,13 @@ class HyperQwen2Model(Qwen2PreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
+        )
         output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
 
@@ -1253,13 +1345,17 @@ class HyperQwen2Model(Qwen2PreTrainedModel):
 
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
+            raise ValueError(
+                "You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time"
+            )
         elif input_ids is not None:
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
             batch_size, seq_length, _ = inputs_embeds.shape
         else:
-            raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
+            raise ValueError(
+                "You have to specify either decoder_input_ids or decoder_inputs_embeds"
+            )
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -1279,7 +1375,10 @@ class HyperQwen2Model(Qwen2PreTrainedModel):
         if position_ids is None:
             device = input_ids.device if input_ids is not None else inputs_embeds.device
             position_ids = torch.arange(
-                past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
+                past_key_values_length,
+                seq_length + past_key_values_length,
+                dtype=torch.long,
+                device=device,
             )
             position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
         else:
@@ -1288,7 +1387,11 @@ class HyperQwen2Model(Qwen2PreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
-        if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
+        if (
+            attention_mask is not None
+            and self._attn_implementation == "flash_attention_2"
+            and use_cache
+        ):
             is_padding_right = attention_mask[:, -1].sum().item() != batch_size
             if is_padding_right:
                 raise ValueError(
@@ -1299,7 +1402,9 @@ class HyperQwen2Model(Qwen2PreTrainedModel):
 
         if self._attn_implementation == "flash_attention_2":
             # 2d mask is passed through the layers
-            attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
+            attention_mask = (
+                attention_mask if (attention_mask is not None and 0 in attention_mask) else None
+            )
         elif self._attn_implementation == "sdpa" and not output_attentions:
             # output_attentions=True can not be supported when using SDPA, and we fall back on
             # the manual implementation that requires a 4D causal mask in all cases.
@@ -1371,10 +1476,16 @@ class HyperQwen2Model(Qwen2PreTrainedModel):
 
         next_cache = None
         if use_cache:
-            next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
+            next_cache = (
+                next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
+            )
 
         if not return_dict:
-            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
+            return tuple(
+                v
+                for v in [hidden_states, next_cache, all_hidden_states, all_self_attns]
+                if v is not None
+            )
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=next_cache,
@@ -1456,9 +1567,13 @@ class HyperQwen2ForCausalLM(Qwen2PreTrainedModel):
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
+        )
         output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -1514,7 +1629,7 @@ class HyperQwen2ForCausalLM(Qwen2PreTrainedModel):
             if isinstance(past_key_values, Cache):
                 cache_length = past_key_values.get_seq_length()
                 past_length = past_key_values.seen_tokens
-                max_cache_length = None # past_key_values.get_max_length()
+                max_cache_length = None  # past_key_values.get_max_length()
             else:
                 cache_length = past_length = past_key_values[0][0].shape[2]
                 max_cache_length = None
@@ -1570,6 +1685,9 @@ class HyperQwen2ForCausalLM(Qwen2PreTrainedModel):
         reordered_past = ()
         for layer_past in past_key_values:
             reordered_past += (
-                tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past),
+                tuple(
+                    past_state.index_select(0, beam_idx.to(past_state.device))
+                    for past_state in layer_past
+                ),
             )
         return reordered_past
