@@ -137,7 +137,7 @@ class LossLoggingCallback(TrainerCallback):
                 loss = logs["loss"]
                 global_step = state.global_step
                 # print(f"Step: {global_step} | Training Loss: {loss:.4f}")
-                logger.info(f"Step: {global_step} | Training Loss: {loss:.5f}")
+                logger.log("LOSS", f"Step: {global_step} | Training Loss: {loss:.5f}")
 
             # You could also check for 'eval_loss' here if you wanted to log validation loss
             # elif 'eval_loss' in logs:

@@ -4,6 +4,12 @@ from types import FrameType
 
 from loguru import logger
 
+logger.level(
+    "LOSS",
+    no=21,
+    color="<magenta><b>",
+)
+
 
 class InterceptHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
