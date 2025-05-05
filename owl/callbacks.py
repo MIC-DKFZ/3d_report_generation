@@ -69,6 +69,7 @@ class PrintEvalBatchCallback(TrainerCallback):
                     break
                 inputs_prompt_only = extract_batch_prompt_only(inputs)
                 inputs_prompt_only = inputs_prompt_only.to(args.device)
+                del inputs_prompt_only["raw_samples"]
                 del inputs_prompt_only["batch_count"]
                 inputs_prompt_only["image_embeds"] = model.vision2text_model(
                     inputs_prompt_only["image_embeds"]
