@@ -56,3 +56,16 @@ python inference.py --model_type <model_type> --dataset_path <path_to_dataset> -
     },
 "flake8.args": ["--max-line-length=99"],
 ```
+
+## Logging
+* Logging is done with loguru
+* Add logging statements into the code like this
+    ```
+    from utils import logger
+    logger.info("This is an info")
+    ```
+* For training and inference, the logs are saved to the `output_dir` as `<yyy>-<mm>-<dd>_<HH>-<MM>-<SS>_train_<uid>.log` (`inference` respectively) 
+* For logging the loss, a separate logging level is introduced
+    ```
+    logger.log("LOSS", f"Step: {global_step} | Training Loss: {loss:.5f}")
+    ```
