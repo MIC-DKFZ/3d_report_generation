@@ -1,23 +1,25 @@
 import argparse
 import gc
+import json
 import os
 import random
 import time
-import json
-import yaml
+from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 import torch
-from transformers import BitsAndBytesConfig
+import yaml
 from peft import LoraConfig, get_peft_model
-from owl.callbacks import PrintEvalBatchCallback, LossLoggingCallback
-from transformers import TrainerCallback
+from transformers import BitsAndBytesConfig, TrainerCallback
 from trl import SFTConfig, SFTTrainer
 
 import wandb
 from data.datasets import AMOSMMDataset
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
+from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
+from utils import logger
 from utils.helper import seed_everything
 
 
@@ -124,10 +126,10 @@ class UnifiedVLMTrainer:
                     tokenizer=self.vlm_model.tokenizer,
                     processor=self.vlm_model.processor,
                 ),
-                LossLoggingCallback(self.output_dir)
+                LossLoggingCallback(),
             ]
         else:
-            callbacks = [LossLoggingCallback(self.output_dir)]
+            callbacks = [LossLoggingCallback()]
 
         # Initialize SFT trainer
         self.trainer = SFTTrainer(
@@ -158,9 +160,7 @@ class UnifiedVLMTrainer:
 def parse_args(default_config=None):
     if default_config is None:
         default_config = {}
-    general_parser = argparse.ArgumentParser(
-        description="Train a Vision Language Model"
-    )
+    general_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
     general_parser.add_argument(
         "--model_type",
         type=str,
@@ -168,9 +168,7 @@ def parse_args(default_config=None):
         required=True,
         help="Type of VLM model to train (owl or qwen)",
     )
-    general_parser.add_argument(
-        "--model_id", type=str, required=False, help="Model ID or path"
-    )
+    general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
     general_parser.add_argument(
         "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
     )
@@ -273,6 +271,12 @@ def main():
         "report_to": ["wandb"],
     }
     general_args, sft_trainer_args = parse_args(default_sft_trainer_config)
+
+    log_file = os.path.join(
+        general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}.log")
+    )
+    logger.add(log_file)
+
     if general_args.model_id is None:
         if general_args.model_type == "owl":
             general_args.model_id = "mPLUG/mPLUG-Owl3-1B-241014"
@@ -310,8 +314,7 @@ def main():
         embeddings_path=general_args.embeddings_path,
         n_samples=50,  # Limit the validation set size
     )
-
-    print(
+    logger.info(
         f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
     )
 

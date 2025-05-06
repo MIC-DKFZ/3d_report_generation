@@ -4,6 +4,7 @@ from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 from owl.model import OwnOwlModel
 from owl.modeling_mplugowl3 import mPLUGOwl3Model
+from utils import logger
 from utils.filter_batch import extract_raw_samples_from_batch
 
 from .abstract_vlm import AbstractVLMModel
@@ -95,12 +96,10 @@ class OwlVLModel(AbstractVLMModel):
 
         # Print trainable parameters summary
         total_params = sum(p.numel() for p in self.model.parameters())
-        trainable_params = sum(
-            p.numel() for p in self.model.parameters() if p.requires_grad
-        )
-        print(f"Total parameters: {total_params:,}")
-        print(f"Trainable parameters: {trainable_params:,}")
-        print(
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        logger.info(f"Total parameters: {total_params:,}")
+        logger.info(f"Trainable parameters: {trainable_params:,}")
+        logger.info(
             f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%"
         )
 
@@ -151,9 +150,7 @@ class OwlVLModel(AbstractVLMModel):
 
             if "tokenized_qa_text_tokens" in sample:
                 model_inputs = sample["tokenized_qa_text_tokens"]
-                model_inputs_prompt_only = sample[
-                    "tokenized_qa_text_prompt_only_tokens"
-                ]
+                model_inputs_prompt_only = sample["tokenized_qa_text_prompt_only_tokens"]
             else:
                 model_inputs = self.processor.encode_text_sft(
                     self.processor.build_text_qwen(messages)
@@ -163,9 +160,7 @@ class OwlVLModel(AbstractVLMModel):
                 )
 
             input_ids_list.append(model_inputs["input_ids"].squeeze(0))
-            input_ids_list_prompt_only.append(
-                model_inputs_prompt_only["input_ids"].squeeze(0)
-            )
+            input_ids_list_prompt_only.append(model_inputs_prompt_only["input_ids"].squeeze(0))
             media_offset_list.append(model_inputs["media_offset"])
 
         images = torch.cat(image_tensors, dim=0)
@@ -179,9 +174,7 @@ class OwlVLModel(AbstractVLMModel):
         labels[labels == self.tokenizer.pad_token_id] = -100
 
         # TODO: does this work for batch size > 1?
-        media_offsets_prompt_only = media_offsets[
-            :, : padded_prompt_only["input_ids"].shape[1]
-        ]
+        media_offsets_prompt_only = media_offsets[:, : padded_prompt_only["input_ids"].shape[1]]
 
         raw_samples = extract_raw_samples_from_batch(batch)
         batch_out = {

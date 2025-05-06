@@ -1,6 +1,8 @@
 import argparse
 import json
 import os
+from datetime import datetime
+from uuid import uuid4
 
 import torch
 import yaml
@@ -9,13 +11,12 @@ from tqdm import tqdm
 from data.datasets import AMOSMMDataset
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
+from utils import logger
 from utils.filter_batch import extract_batch_prompt_only
 
 
 class UnifiedVLMInference:
-    def __init__(
-        self, vlm_model, output_dir="vlm_inference", config_file_path: str = None
-    ):
+    def __init__(self, vlm_model, output_dir="vlm_inference", config_file_path: str = None):
         """
         Initialize the unified VLM inference."
         Args:
@@ -35,7 +36,7 @@ class UnifiedVLMInference:
         Args:
             test_dataset: Test dataset
         """
-        print("Running inference...")
+        logger.info("Running inference...")
         model = self.vlm_model.setup_model()
         model.eval().cuda()
 
@@ -64,9 +65,7 @@ class UnifiedVLMInference:
                     del inputs["batch_count"]
                 # image_embeds is only in inputs for owl model due to cross attn
                 if "image_embeds" in inputs:
-                    inputs["image_embeds"] = model.vision2text_model(
-                        inputs["image_embeds"]
-                    )
+                    inputs["image_embeds"] = model.vision2text_model(inputs["image_embeds"])
                     outputs = model.language_model.generate(
                         **inputs,
                         max_new_tokens=256,  # Adjust max_new_tokens as needed
@@ -78,8 +77,7 @@ class UnifiedVLMInference:
                         max_new_tokens=256,  # Adjust max_new_tokens as needed
                     )
                 trimmed_generated_ids = [
-                    out_ids[len(in_ids) :]
-                    for in_ids, out_ids in zip(inputs["input_ids"], outputs)
+                    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], outputs)
                 ]
                 decoded_output = self.vlm_model.tokenizer.batch_decode(
                     trimmed_generated_ids, skip_special_tokens=True
@@ -101,9 +99,7 @@ class UnifiedVLMInference:
 def parse_args(default_config=None):
     if default_config is None:
         default_config = {}
-    general_parser = argparse.ArgumentParser(
-        description="Train a Vision Language Model"
-    )
+    general_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
     general_parser.add_argument(
         "--model_type",
         type=str,
@@ -111,9 +107,7 @@ def parse_args(default_config=None):
         required=True,
         help="Type of VLM model to train (owl or qwen)",
     )
-    general_parser.add_argument(
-        "--model_id", type=str, required=False, help="Model ID or path"
-    )
+    general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
     general_parser.add_argument(
         "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
     )
@@ -154,6 +148,10 @@ def parse_args(default_config=None):
 
 def main():
     args = parse_args()
+    log_file = os.path.join(
+        args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_inference_{uuid4()}.log")
+    )
+    logger.add(log_file)
     if args.model_id is None:
         if args.model_type == "owl":
             args.model_id = "mPLUG/mPLUG-Owl3-1B-241014"
@@ -180,7 +178,7 @@ def main():
         split="val",
         embeddings_path=args.embeddings_path,
     )
-    print(f"Loaded {len(test_dataset)} test samples")
+    logger.info(f"Loaded {len(test_dataset)} test samples")
 
     # Create inference object and run inference
     inference = UnifiedVLMInference(vlm_model, output_dir=args.output_dir)

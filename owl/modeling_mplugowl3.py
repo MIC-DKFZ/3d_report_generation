@@ -7,7 +7,12 @@ import torchvision
 from threading import Thread
 from copy import deepcopy
 from PIL import Image
-from transformers import AutoProcessor, Qwen2PreTrainedModel, Qwen2ForCausalLM, TextIteratorStreamer
+from transformers import (
+    AutoProcessor,
+    Qwen2PreTrainedModel,
+    Qwen2ForCausalLM,
+    TextIteratorStreamer,
+)
 from .processing_mplugowl3 import mPLUGOwl3Processor
 from .image_processing_mplugowl3 import mPLUGOwl3ImageProcessor
 from .configuration_mplugowl3 import mPLUGOwl3Config
@@ -17,6 +22,7 @@ from transformers.models.siglip.modeling_siglip import SiglipVisionTransformer
 from .x_sdpa import ScaleDotProductAttention
 from .modeling_hyper_qwen2 import HyperQwen2ForCausalLM
 from torch import nn
+from utils import logger
 
 
 class mPLUGOwl3PreTrainedModel(Qwen2PreTrainedModel):
@@ -37,7 +43,9 @@ class mPLUGOwl3Model(mPLUGOwl3PreTrainedModel):
 
     def init_vision_module(self):
 
-        self.config.vision_config._attn_implementation = self.config.vision_config._attn_implementation
+        self.config.vision_config._attn_implementation = (
+            self.config.vision_config._attn_implementation
+        )
         model = SiglipVisionTransformer(self.config.vision_config)
 
         setattr(model, "embed_dim", model.embeddings.embed_dim)
@@ -67,7 +75,9 @@ class mPLUGOwl3Model(mPLUGOwl3PreTrainedModel):
             return None
         dtype = self.language_model.model.embed_tokens.weight.dtype
         with torch.inference_mode():
-            image_embeds = self.vision_model(pixel_values.to(dtype), output_hidden_states=True).hidden_states[-2]
+            image_embeds = self.vision_model(
+                pixel_values.to(dtype), output_hidden_states=True
+            ).hidden_states[-2]
 
         if self.vision2text_model is not None:
             image_embeds = self.vision2text_model(image_embeds)
@@ -81,7 +91,16 @@ class mPLUGOwl3Model(mPLUGOwl3PreTrainedModel):
 
         return self.language_model(image_embeds=image_embeds, **kwargs)
 
-    def _decode(self, input_ids, image_embeds, media_offset, tokenizer, attention_mask, decode_text=False, **kwargs):
+    def _decode(
+        self,
+        input_ids,
+        image_embeds,
+        media_offset,
+        tokenizer,
+        attention_mask,
+        decode_text=False,
+        **kwargs,
+    ):
         terminators = [tokenizer.convert_tokens_to_ids(i) for i in self.terminators]
         output = self.language_model.generate(
             input_ids=input_ids,
@@ -90,7 +109,7 @@ class mPLUGOwl3Model(mPLUGOwl3PreTrainedModel):
             pad_token_id=0,
             eos_token_id=terminators,
             attention_mask=attention_mask,
-            **kwargs
+            **kwargs,
         )
 
         output = output[:, input_ids.shape[1] :]
@@ -141,14 +160,14 @@ class mPLUGOwl3Model(mPLUGOwl3PreTrainedModel):
         tokenizer=None,
         stream=False,
         decode_text=False,
-        **kwargs
+        **kwargs,
     ):
         assert input_ids is not None
 
         with torch.inference_mode():
             image_embeds = self.forward_image(pixel_values)
 
-            print(image_embeds.shape)
+            logger.info(f"Image embedding shape: {image_embeds.shape}")
 
             if stream:
                 result = self._decode_stream(
@@ -156,7 +175,7 @@ class mPLUGOwl3Model(mPLUGOwl3PreTrainedModel):
                     image_embeds=image_embeds,
                     media_offset=media_offset,
                     tokenizer=tokenizer,
-                    **kwargs
+                    **kwargs,
                 )
             else:
                 result = self._decode(
@@ -166,7 +185,7 @@ class mPLUGOwl3Model(mPLUGOwl3PreTrainedModel):
                     tokenizer=tokenizer,
                     attention_mask=attention_mask,
                     decode_text=decode_text,
-                    **kwargs
+                    **kwargs,
                 )
 
         return result
@@ -186,7 +205,7 @@ class mPLUGOwl3Model(mPLUGOwl3PreTrainedModel):
         stream=False,
         max_slice_nums=None,
         use_image_id=None,
-        **kwargs
+        **kwargs,
     ):
         cut_flag = kwargs.get("kwargs", True)
         if processor is None:

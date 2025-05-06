@@ -1,8 +1,11 @@
-from abc import ABC, abstractmethod
-import torch
 import gc
-from pathlib import Path
 import os
+from abc import ABC, abstractmethod
+from pathlib import Path
+
+import torch
+
+from utils import logger
 
 
 class AbstractVLMModel(ABC):
@@ -10,9 +13,7 @@ class AbstractVLMModel(ABC):
         self.model_id = model_id
         # TODO: Make a default argument since its not needed for inference
         self.train_only_vision_adapter = train_only_vision_adapter
-        self.device = device or torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
         self.tokenizer = None
         self.processor = None
@@ -71,5 +72,5 @@ class AbstractVLMModel(ABC):
 
         torch.cuda.empty_cache()
         gc.collect()
-        print(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
-        print(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+        logger.info(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+        logger.info(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")

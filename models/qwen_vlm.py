@@ -12,12 +12,11 @@ from qwenvl.Qwen3D import Qwen2VLForConditionalGeneration3D
 from utils.filter_batch import extract_raw_samples_from_batch
 
 from .abstract_vlm import AbstractVLMModel
+from utils import logger
 
 
 class QwenVLModel(AbstractVLMModel):
-    def __init__(
-        self, model_id, output_dir="qwen2-vlm", train_only_vision_adapter=False
-    ):
+    def __init__(self, model_id, output_dir="qwen2-vlm", train_only_vision_adapter=False):
         super().__init__(model_id, train_only_vision_adapter)
         self.output_dir = output_dir
         self.batch_count = 0
@@ -62,22 +61,18 @@ class QwenVLModel(AbstractVLMModel):
         if self.train_only_vision_adapter:
             # Freeze all parameters
             for name, param in self.model.named_parameters():
-                if (
-                    "vision_adapter" not in name
-                ):  # Freeze everything except vision adapter
+                if "vision_adapter" not in name:  # Freeze everything except vision adapter
                     param.requires_grad = False
                 else:
                     param.requires_grad = True
-                    print(f"Unfreezing: {name}")
+                    logger.debug(f"Unfreezing: {name}")
 
             # Print trainable parameters
             total_params = sum(p.numel() for p in self.model.parameters())
-            trainable_params = sum(
-                p.numel() for p in self.model.parameters() if p.requires_grad
-            )
-            print(f"Total parameters: {total_params:,}")
-            print(f"Trainable parameters: {trainable_params:,}")
-            print(
+            trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            logger.info(f"Total parameters: {total_params:,}")
+            logger.info(f"Trainable parameters: {trainable_params:,}")
+            logger.info(
                 f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%"
             )
 
@@ -90,9 +85,7 @@ class QwenVLModel(AbstractVLMModel):
         ]
 
         texts_prompt_only = [
-            self.processor.apply_chat_template(
-                example["formatted_qa_prompt_only"], tokenize=False
-            )
+            self.processor.apply_chat_template(example["formatted_qa_prompt_only"], tokenize=False)
             for example in examples
         ]
 
@@ -116,17 +109,13 @@ class QwenVLModel(AbstractVLMModel):
             image_tokens = [151652, 151653, 151655]
         else:
             image_tokens = [
-                self.processor.tokenizer.convert_tokens_to_ids(
-                    self.processor.image_token
-                )
+                self.processor.tokenizer.convert_tokens_to_ids(self.processor.image_token)
             ]
 
         for image_token_id in image_tokens:
             labels[labels == image_token_id] = -100
 
-        video_tokens = [
-            self.processor.tokenizer.convert_tokens_to_ids(self.processor.video_token)
-        ]
+        video_tokens = [self.processor.tokenizer.convert_tokens_to_ids(self.processor.video_token)]
         for video_token_id in video_tokens:
             labels[labels == video_token_id] = -100
 

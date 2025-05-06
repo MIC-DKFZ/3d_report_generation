@@ -5,10 +5,13 @@ from torch.nn import CrossEntropyLoss
 from transformers import (
     Qwen2PreTrainedModel,
 )
+from utils import logger
 
 
 class OwnOwlModel(Qwen2PreTrainedModel):
-    def __init__(self, config, language_model, vision_dim=1152, embed_dim=896, tokenizer=None, debug=False):
+    def __init__(
+        self, config, language_model, vision_dim=1152, embed_dim=896, tokenizer=None, debug=False
+    ):
         super().__init__(config)
         self.language_model = language_model
 
@@ -53,7 +56,9 @@ class OwnOwlModel(Qwen2PreTrainedModel):
 
         return image_embeds
 
-    def forward(self, image_embeds, input_ids, media_offset, attention_mask=None, labels=None, **kwargs):
+    def forward(
+        self, image_embeds, input_ids, media_offset, attention_mask=None, labels=None, **kwargs
+    ):
         image_embeds_proj = self.forward_image(image_embeds)
 
         model_returns = self.language_model(
@@ -91,6 +96,6 @@ class OwnOwlModel(Qwen2PreTrainedModel):
             outputs = model_returns["logits"]
             output_tokens = outputs.argmax(-1)
             decoded_output = self.tokenizer.batch_decode(output_tokens, skip_special_tokens=True)
-            print(decoded_output)
+            logger.info(decoded_output)
 
         return model_returns
