@@ -1,14 +1,18 @@
 import argparse
+
+from datetime import datetime
 import os
 import json
 from pathlib import Path
+from uuid import uuid4
 
+from utils import logger
 import yaml
 from tqdm import tqdm
 
 from Eval.metrics import BERTScore, RateScore, BleuScoreHF, ROUGEScore, METEORScore #, GREENScore
 
-def get_scores_individual(inference_results_file, eval_dir):
+def get_scores(inference_results_file, eval_dir):
     '''
     This function loads the inference results from a JSON file and calculates various evaluation metrics for each sample and their average.
     The metrics include RateScore, BLEU score, BERT score, ROUGE score, and METEOR score.
@@ -23,6 +27,8 @@ def get_scores_individual(inference_results_file, eval_dir):
         inference_results_file (str): Path to the JSON file containing inference results.
         eval_dir (str): Directory to save evaluation results.
     '''
+    logger.info("Running evaluation...")
+
     # Load inference results from JSON file
     input_data = []
     with open(inference_results_file, 'r') as json_file: # TODO: maybe support other formats later
@@ -76,9 +82,11 @@ def get_scores_individual(inference_results_file, eval_dir):
     
     # add the average results to the top of the results list
     results.insert(0, average_results)
+    logger.info("All scores are calculated.")
 
     eval_file = os.path.join(eval_dir, "eval_results.json")
     if eval_file is not None:
+        logger.info(f"Saving evaluation results to {eval_file}")
         # save evaluation as JSON
         if not Path(eval_file).parent.is_dir():
             os.makedirs(Path(eval_file).parent)
@@ -126,14 +134,12 @@ def parse_args(default_config=None):
 
 def main():
     args = parse_args() # TODO: Add loggers
-    # log_file = os.path.join(
-    #     args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_inference_{uuid4()}.log")
-    # )
-    # logger.add(log_file)
+    log_file = os.path.join(
+        args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_evaluation_{uuid4()}.log")
+    )
+    logger.add(log_file)
 
-    # set_seed(seed)
-    get_scores_individual(inference_results_file=args.results_dir, eval_dir=args.output_dir)
-    get_scores_avg(inference_results_file=args.results_dir, eval_dir=args.output_dir)
+    get_scores(inference_results_file=args.results_dir, eval_dir=args.output_dir)
 
 
 if __name__ == '__main__':
