@@ -24,6 +24,9 @@ dependencies = [
     "wandb>=0.19.8",
 ]
 
+[tool.setuptools]
+py-modules = []
+
 [project.optional-dependencies]
 dev = [
   "pytest",
