@@ -44,7 +44,7 @@ def get_scores(inference_results_file, eval_dir):
     }
     for sample in tqdm(input_data):
         pred = sample['output_text']
-        gt = sample['gt_text']
+        gt = sample['answer']
 
         rate_score = RateScore([pred], [gt])
         bleu_score = BleuScoreHF([pred], [gt])
@@ -54,10 +54,12 @@ def get_scores(inference_results_file, eval_dir):
         meteor_score = METEORScore([pred], [gt])
         results.append(
             {   
-                'img_path': sample['img_path'],
-                'input_text': sample['input_text'],
-                "prediction": pred,
-                "gt": gt,
+                'image_id': sample['image_id'],
+                'question': sample['question'],
+                'answer': sample['answer'],
+                'answer_type': sample['answer_type'],
+                'answer_subtype': sample['answer_subtype'],
+                'output_text': sample['output_text'],
                 'rate_score': rate_score[0],
                 "bleu_score_hf": bleu_score['bleu'],
                 "bert_score": bert_score['f1'][0],
