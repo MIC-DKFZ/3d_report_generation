@@ -5,13 +5,16 @@ from datetime import datetime
 from uuid import uuid4
 
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 import yaml
 from tqdm import tqdm
 
 from data.datasets import AMOSMMDataset
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
-from utils import logger
+from utils import logger, rank_zero_filter
 from utils.filter_batch import extract_batch_prompt_only
 
 
@@ -30,6 +33,24 @@ class UnifiedVLMInference:
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
 
+        # TODO optionally load those member variables from config file
+        self.num_dataloader_workers = 4
+        self.per_device_eval_batch_size = 1
+
+        self.ddp_available = dist.is_available() and dist.is_initialized()
+        if self.ddp_available:
+            print("Distributed training is available and initialized.")
+            self.local_rank = int(os.environ["LOCAL_RANK"])
+            self.world_size = int(os.environ["WORLD_SIZE"])
+            self.global_rank = int(os.environ["RANK"])
+            torch.cuda.set_device(self.local_rank)
+            self.device = torch.device("cuda", self.local_rank)
+        else:
+            print("Distributed training is not available or not initialized.")
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.local_rank = 0 # or handle as single process
+            self.world_size = 1
+
     def inference(self, test_dataset):
         """
         Main inference function that runs inference on the VLM model.
@@ -40,12 +61,27 @@ class UnifiedVLMInference:
         model = self.vlm_model.setup_model()
         model.eval().cuda()
 
+        if self.ddp_available:
+            # Wrap the model with DDP
+            print(f"Wrapping model with DDP on rank {self.local_rank}")
+            model = DDP(model, device_ids=[self.local_rank], output_device=self.local_rank, find_unused_parameters=False)
+
+            sampler = DistributedSampler(
+                test_dataset,
+                num_replicas=self.world_size,
+                rank=self.global_rank,
+                shuffle=False # Usually False for evaluation/testing
+            )
+        else:
+            sampler = None
+
         # Create dataloader
         test_loader = torch.utils.data.DataLoader(
             test_dataset,
             batch_size=1,
             shuffle=False,
             num_workers=0,
+            sampler=sampler,
             collate_fn=self.vlm_model.collate_fn,
         )
 
@@ -61,21 +97,37 @@ class UnifiedVLMInference:
                 del inputs["raw_samples"]
                 inputs = extract_batch_prompt_only(inputs)
                 inputs = inputs.to("cuda")
+
                 if "batch_count" in inputs:
                     del inputs["batch_count"]
+
                 # image_embeds is only in inputs for owl model due to cross attn
                 if "image_embeds" in inputs:
-                    inputs["image_embeds"] = model.vision2text_model(inputs["image_embeds"])
-                    outputs = model.language_model.generate(
-                        **inputs,
-                        max_new_tokens=256,  # Adjust max_new_tokens as needed
-                    )
+                    if self.ddp_available:
+                        inputs["image_embeds"] = model.module.vision2text_model(inputs["image_embeds"])
+                        outputs = model.module.language_model.generate(
+                            **inputs,
+                            max_new_tokens=256,  # Adjust max_new_tokens as needed
+                        )
+                    else:
+                        inputs["image_embeds"] = model.vision2text_model(inputs["image_embeds"])
+                        outputs = model.language_model.generate(
+                            **inputs,
+                            max_new_tokens=256,  # Adjust max_new_tokens as needed
+                        )
+
                 # otherwise, image embeddings are already contained in input_ids
                 else:
-                    outputs = model.generate(
-                        **inputs,
-                        max_new_tokens=256,  # Adjust max_new_tokens as needed
-                    )
+                    if self.ddp_available:
+                        outputs = model.module.generate(
+                            **inputs,
+                            max_new_tokens=256,  # Adjust max_new_tokens as needed
+                        )
+                    else:
+                        outputs = model.generate(
+                            **inputs,
+                            max_new_tokens=256,  # Adjust max_new_tokens as needed
+                        )
                 trimmed_generated_ids = [
                     out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], outputs)
                 ]
@@ -126,6 +178,9 @@ def parse_args(default_config=None):
     general_parser.add_argument(
         "--inference_config", type=str, help="Path to config file (YAML or JSON)"
     )
+    general_parser.add_argument(
+        "--num_gpus", type=str, help="Number of GPUs to use for inference", default=1
+    )
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
 
@@ -148,10 +203,19 @@ def parse_args(default_config=None):
 
 def main():
     args = parse_args()
-    log_file = os.path.join(
-        args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_inference_{uuid4()}.log")
-    )
-    logger.add(log_file)
+
+    local_rank = 0
+    if int(args.num_gpus) > 1:
+        local_rank = int(os.environ["LOCAL_RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
+
+    slurm_job_id = os.environ.get("SLURM_JOB_ID", None)
+    unique_id = str(uuid4()) if not slurm_job_id else slurm_job_id
+    log_file_name = datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_inference_{unique_id}.log")
+    log_file = os.path.join(args.output_dir, log_file_name)
+    if local_rank == 0:
+        logger.add(log_file, filter=rank_zero_filter)
     if args.model_id is None:
         if args.model_type == "owl":
             args.model_id = "mPLUG/mPLUG-Owl3-1B-241014"

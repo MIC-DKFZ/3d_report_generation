@@ -1,8 +1,24 @@
+import os
 import inspect
 import logging
 from types import FrameType
+import torch.distributed as dist
 
 from loguru import logger
+
+logger.remove()
+
+
+def rank_zero_filter(record):
+    try:
+        ddp_available = dist.is_available() and dist.is_initialized()
+        if ddp_available:
+            return int(os.environ["RANK"]) == 0
+        else:
+            return True
+    except Exception: # Fallback for non-DDP or uninitialized DDP
+        return True
+
 
 logger.level(
     "LOSS",
