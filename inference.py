@@ -39,14 +39,14 @@ class UnifiedVLMInference:
 
         self.ddp_available = dist.is_available() and dist.is_initialized()
         if self.ddp_available:
-            print("Distributed training is available and initialized.")
+            logger.info("Distributed training is available and initialized.")
             self.local_rank = int(os.environ["LOCAL_RANK"])
             self.world_size = int(os.environ["WORLD_SIZE"])
             self.global_rank = int(os.environ["RANK"])
             torch.cuda.set_device(self.local_rank)
             self.device = torch.device("cuda", self.local_rank)
         else:
-            print("Distributed training is not available or not initialized.")
+            logger.info("Distributed training is not available or not initialized.")
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.local_rank = 0 # or handle as single process
             self.world_size = 1
@@ -63,7 +63,7 @@ class UnifiedVLMInference:
 
         if self.ddp_available:
             # Wrap the model with DDP
-            print(f"Wrapping model with DDP on rank {self.local_rank}")
+            logger.info(f"Wrapping model with DDP on rank {self.local_rank}")
             model = DDP(model, device_ids=[self.local_rank], output_device=self.local_rank, find_unused_parameters=False)
 
             sampler = DistributedSampler(
