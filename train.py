@@ -92,7 +92,7 @@ class UnifiedVLMTrainer:
         trainable_params = self.vlm_model.get_trainable_params()
 
         # Create quantization config if needed (not for vision adapter only training)
-        if trainable_params.get("train_only_vision_adapter", False) == False:
+        if trainable_params.get("train_only_vision_adapter", False) == True:
             bnb_config = self.get_quantization_config()
         else:
             bnb_config = None
@@ -107,14 +107,12 @@ class UnifiedVLMTrainer:
         else:
             model_to_train = self.vlm_model.model
 
-        is_main_process = os.environ.get("LOCAL_RANK", "0") == "0"
-        if is_main_process:
-            # Initialize wandb
-            wandb.init(
-                project="vlm_unified",
-                name=f"{type(self.vlm_model).__name__}_run",
-                reinit=True,
-            )
+        wandb.init(
+            project="mic-rocket-vlm",
+            name=f"{type(self.vlm_model).__name__}_run",
+            reinit=True,
+            group=f"{type(self.vlm_model).__name__}_run_{uuid4()}",
+        )
 
         # Configure training arguments
         training_args = self.get_training_args()
@@ -152,9 +150,7 @@ class UnifiedVLMTrainer:
         self.vlm_model.clear_memory()
         del self.trainer
 
-        if is_main_process and wandb.run is not None:
-            # Finish wandb run
-            wandb.finish()
+        wandb.finish()
 
 
 def parse_args(default_config=None):
