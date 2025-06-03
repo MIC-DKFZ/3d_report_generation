@@ -41,7 +41,6 @@ class OwlVLModel(AbstractVLMModel):
                 attn_implementation="sdpa",
                 trust_remote_code=True,
                 quantization_config=bnb_config,
-                device_map="auto",
             )
         else:
             language_model = mPLUGOwl3Model.from_pretrained(

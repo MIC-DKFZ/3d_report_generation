@@ -34,7 +34,7 @@ class QwenVLModel(AbstractVLMModel):
         if self.train_only_vision_adapter:
             # For adapter-only training, don't use quantization for the adapter
             self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
-                self.model_id, device_map="auto", torch_dtype=torch.bfloat16
+                self.model_id, torch_dtype=torch.bfloat16
             )
 
             # Freeze all parameters except vision adapter
@@ -45,13 +45,12 @@ class QwenVLModel(AbstractVLMModel):
             if bnb_config:
                 self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
                     self.model_id,
-                    device_map="auto",
                     torch_dtype=torch.bfloat16,
                     quantization_config=bnb_config,
                 )
             else:
                 self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
-                    self.model_id, device_map="auto", torch_dtype=torch.bfloat16
+                    self.model_id, torch_dtype=torch.bfloat16
                 )
 
             return self.model
