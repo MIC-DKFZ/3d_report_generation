@@ -3,20 +3,20 @@ import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Tuple
+from tqdm import tqdm
+import yaml
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from data.extractors import AMOSMMExtractor, AMOSMMRegionExtractor, LIDCExtractor
+from data.extractors import AMOSMMExtractor, AMOSMMRegionExtractor, LIDCExtractor, CTRATEExtractor
 from utils import logger
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
 
-def format_into_message(
-    question, answer, model_name, system_text=SYSTEM_TEXT, embedding_path=None
-):
+def format_into_message(question, answer, model_name, system_text=SYSTEM_TEXT, embedding_path=None):
 
     system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
 
@@ -73,16 +73,12 @@ class MedicalImageDataset(Dataset, ABC):
 
         self.model_name = model_name
         self.split = split
-        self.embeddings_path = (
-            Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
-        )
+        self.embeddings_path = Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
         self.n_samples = n_samples
         self.tokenize_fn = tokenize_fn
 
         if isinstance(answer_types, str):
-            answer_types = [
-                answer_types
-            ]  # Convert single string to list of strings for consistency
+            answer_types = [answer_types]  # Convert single string to list of strings for consistency
 
         self.answer_type_dict = {}
         for answer_type in answer_types:
@@ -155,9 +151,7 @@ class MedicalImageDataset(Dataset, ABC):
         for sample in self.samples:
             # sample["tokenized"] = {}
             sample["tokenized_qa_text_tokens"] = self.tokenize_fn(sample["formatted_qa"])
-            sample["tokenized_qa_text_prompt_only_tokens"] = self.tokenize_fn(
-                sample["formatted_qa_prompt_only"]
-            )
+            sample["tokenized_qa_text_prompt_only_tokens"] = self.tokenize_fn(sample["formatted_qa_prompt_only"])
 
     def _filter_samples(self, samples):
         """Filter samples based on answer type"""
@@ -349,4 +343,102 @@ class LIDCDataset(MedicalImageDataset):
     def extract_sample_list(self, samples):
         """Extract sample list from raw data"""
         extracted_samples = LIDCExtractor.extract_sample_list(samples)
+        return extracted_samples
+
+
+class CTRATEDataset(MedicalImageDataset):
+    """
+    CT-RATE dataset class for CT scan analysis
+
+    Args:
+        dataset_json_path (str): Path to the CT-RATE dataset directory
+        model_name (str): Name of the VLM the dataset is used for
+        split (str): Split name ('train', 'val', or 'test')
+        embeddings_path (str | Path): Path to the vision embeddings directory
+        n_samples (int, optional): Number of samples to load (for debugging)
+        answer_types (tuple, optional): Types of answers to include
+    """
+
+    # def __init__(
+    #     self,
+    #     dataset_path,
+    #     model_name,
+    #     split="train",
+    #     embeddings_path=None,
+    #     n_samples=None,
+    #     tokenize_fn=None,
+    #     answer_types=("CHOICE", "TEXT"),
+    # ):
+    #     super().__init__(
+    #         dataset_path,
+    #         model_name,
+    #         split=split,
+    #         embeddings_path=embeddings_path,
+    #         n_samples=n_samples,
+    #         tokenize_fn=tokenize_fn,
+    #         answer_types=answer_types,
+    #     )
+
+    def _load_data(self, dataset_path):
+
+        self.embedding_dict = {}
+
+        for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
+            for fl in fls_:
+                if fl.endswith(".npy") or fl.endswith(".npz"):
+                    image_id = fl.split("_embedding")[0]
+                    self.embedding_dict[image_id] = os.path.join(flr_, fl)
+
+        metadata_dir = os.path.join(dataset_path, "metadata")
+        data_dir = os.path.join(dataset_path, "images")
+
+        metadata_files = [f for f in os.listdir(metadata_dir) if f.endswith(".yml")]
+
+        samples = []
+        for metadata_file in tqdm(metadata_files):
+            metadata_path = os.path.join(metadata_dir, metadata_file)
+            # data_path = os.path.join(data_dir, metadata_file.replace(".yml", ".nrrd"))
+
+            # if not os.path.exists(data_path):
+            #     continue
+
+            with open(metadata_path, "r") as f:
+                metadata = yaml.safe_load(f)
+
+            image_id = metadata["image_id"]
+
+            embedding_path = self.embedding_dict.get(image_id)
+
+            if embedding_path is None:
+                continue
+
+            if self.split == "train" and not metadata["metadata"].get("train_set", False):
+                continue
+            if self.split == "val" and metadata["metadata"].get("train_set", True):
+                continue
+
+            findings = metadata["metadata"]["Findings_EN"]
+            impressions = metadata["metadata"]["Impressions_EN"]
+            classifications = {c: metadata["metadata"].get(c) for c in CTRATEExtractor.CONDITIONS}
+
+            sample = {
+                "image_id": metadata["image_id"],
+                "embedding_path": embedding_path,
+                "tasks": {
+                    "classification": classifications,
+                    "report_gen": findings,
+                    "diagnosis": impressions,
+                },
+            }
+            samples.append(sample)
+
+        return samples
+
+    def get_embedding_path(self, embedding_path):
+        """Convert image ID to embedding path"""
+        return os.path.join(self.embeddings_path, embedding_path + "_embedding.npz")
+
+    def extract_sample_list(self, samples):
+        """Extract sample list from raw data"""
+        extracted_samples = CTRATEExtractor.extract_sample_list(samples)
         return extracted_samples
