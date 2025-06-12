@@ -65,6 +65,8 @@ class MedicalImageDataset(Dataset, ABC):
         n_samples=None,
         tokenize_fn=None,
         answer_types=("CHOICE",),
+        split_files=None,
+        return_embedding=True,
     ):
         super().__init__()
 
@@ -76,6 +78,8 @@ class MedicalImageDataset(Dataset, ABC):
         self.embeddings_path = Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
         self.n_samples = n_samples
         self.tokenize_fn = tokenize_fn
+        self.split_files = split_files
+        self.return_embedding = return_embedding
 
         if isinstance(answer_types, str):
             answer_types = [answer_types]  # Convert single string to list of strings for consistency
@@ -124,7 +128,7 @@ class MedicalImageDataset(Dataset, ABC):
 
         extracted_samples = self.extract_sample_list(self.data)
 
-        for sample in extracted_samples:
+        for sample in tqdm(extracted_samples, desc="Formatting samples"):
             embedding_path = self.get_embedding_path(sample["image_id"])
 
             # Skip if embedding file doesn't exist
@@ -148,7 +152,7 @@ class MedicalImageDataset(Dataset, ABC):
         return formatted_data
 
     def _tokenize_samples(self):
-        for sample in self.samples:
+        for sample in tqdm(self.samples, desc="Tokenizing samples"):
             # sample["tokenized"] = {}
             sample["tokenized_qa_text_tokens"] = self.tokenize_fn(sample["formatted_qa"])
             sample["tokenized_qa_text_prompt_only_tokens"] = self.tokenize_fn(sample["formatted_qa_prompt_only"])
@@ -198,8 +202,13 @@ class MedicalImageDataset(Dataset, ABC):
 
         # Create a new dictionary instead of modifying the stored one
         result = dict(sample)
-        result["embedding"] = self._load_embedding(sample["embedding_path"])
-        result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
+
+        if self.return_embedding:
+            # Load embedding and convert to tensor
+            if "embedding_path" not in sample:
+                raise ValueError(f"Sample {index} does not have an embedding path.")
+            result["embedding"] = self._load_embedding(sample["embedding_path"])
+            result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
 
         return result
 
@@ -394,8 +403,25 @@ class CTRATEDataset(MedicalImageDataset):
 
         metadata_files = [f for f in os.listdir(metadata_dir) if f.endswith(".yml")]
 
+        x_val_split_data = None
+        if self.split_files:
+            if os.path.exists(self.split_files):
+                with open(self.split_files, "r") as f:
+                    x_val_split_data = json.load(f)
+
+        if x_val_split_data is not None and "_" in self.split:
+            fold_num = int(self.split.split("_")[1])
+            train_ids = x_val_split_data[f"fold_{fold_num}"]["train_ids"]
+            val_ids = x_val_split_data[f"fold_{fold_num}"]["val_ids"]
+
+            if self.split.startswith("val"):
+                # If the split is a validation split, filter metadata files to only include validation IDs
+                metadata_files = [f for f in metadata_files if f.replace(".yml", "") in val_ids]
+            else:
+                metadata_files = [f for f in metadata_files if f.replace(".yml", "") in train_ids]
+
         samples = []
-        for metadata_file in tqdm(metadata_files):
+        for metadata_file in tqdm(metadata_files, desc="Loading metadata files"):
             metadata_path = os.path.join(metadata_dir, metadata_file)
             # data_path = os.path.join(data_dir, metadata_file.replace(".yml", ".nrrd"))
 
@@ -414,7 +440,7 @@ class CTRATEDataset(MedicalImageDataset):
 
             if self.split == "train" and not metadata["metadata"].get("train_set", False):
                 continue
-            if self.split == "val" and metadata["metadata"].get("train_set", True):
+            elif self.split == "val" and metadata["metadata"].get("train_set", True):
                 continue
 
             findings = metadata["metadata"]["Findings_EN"]
