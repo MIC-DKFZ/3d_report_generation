@@ -178,19 +178,29 @@ class MedicalImageDataset(Dataset, ABC):
 
     def _load_embedding(self, embedding_path):
         """Load embedding from file"""
-        if embedding_path.endswith(".npy"):
-            return np.load(embedding_path)
-        elif embedding_path.endswith(".npz"):
-            npz_file = np.load(embedding_path)
-            # Attempt to load the "embeddings" key if it exists, otherwise load the first array
-            if "embedding" in npz_file:
-                return npz_file["embeddings"]
+        try:
+            if embedding_path.endswith(".npy"):
+                return np.load(embedding_path)
+            elif embedding_path.endswith(".npz"):
+                npz_file = np.load(embedding_path)
+                # Attempt to load the "embeddings" key if it exists, otherwise load the first array
+                if "embedding" in npz_file:
+                    return npz_file["embeddings"]
+                else:
+                    return npz_file[npz_file.files[0]]
             else:
-                return npz_file[npz_file.files[0]]
-        else:
-            raise ValueError(f"Unsupported embedding file format: {embedding_path}")
+                raise ValueError(f"Unsupported embedding file format: {embedding_path}")
+        except Exception as e:
+            logger.error(f"Error loading embedding from {embedding_path}: {e}")
+            return None
 
     def _embedding_2_tensor(self, embedding):
+        """Convert embedding to tensor"""
+
+        if embedding is None:
+            logger.error("Embedding is None, cannot convert to tensor.")
+            return None
+
         np_img_flat = embedding.reshape(embedding.shape[0], embedding.shape[1], -1)
         np_img_flat = np_img_flat.transpose(0, 2, 1)
         img_tensor = torch.tensor(np_img_flat)
@@ -411,8 +421,8 @@ class CTRATEDataset(MedicalImageDataset):
 
         if x_val_split_data is not None and "_" in self.split:
             fold_num = int(self.split.split("_")[1])
-            train_ids = x_val_split_data[f"fold_{fold_num}"]["train_ids"]
-            val_ids = x_val_split_data[f"fold_{fold_num}"]["val_ids"]
+            train_ids = set(x_val_split_data[f"fold_{fold_num}"]["train_ids"])
+            val_ids = set(x_val_split_data[f"fold_{fold_num}"]["val_ids"])
 
             if self.split.startswith("val"):
                 # If the split is a validation split, filter metadata files to only include validation IDs

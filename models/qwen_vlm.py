@@ -33,9 +33,7 @@ class QwenVLModel(AbstractVLMModel):
 
         if self.train_only_vision_adapter:
             # For adapter-only training, don't use quantization for the adapter
-            self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
-                self.model_id, torch_dtype=torch.bfloat16
-            )
+            self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(self.model_id, torch_dtype=torch.bfloat16)
 
             # Freeze all parameters except vision adapter
             self._set_trainable_params()
@@ -71,28 +69,23 @@ class QwenVLModel(AbstractVLMModel):
             trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
             logger.info(f"Total parameters: {total_params:,}")
             logger.info(f"Trainable parameters: {trainable_params:,}")
-            logger.info(
-                f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%"
-            )
+            logger.info(f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%")
 
     def collate_fn(self, examples):
         """Custom collate function for Qwen model"""
         # Get the texts and images, and apply the chat template
-        texts = [
-            self.processor.apply_chat_template(example["formatted_qa"], tokenize=False)
-            for example in examples
-        ]
+        texts = [self.processor.apply_chat_template(example["formatted_qa"], tokenize=False) for example in examples]
 
         texts_prompt_only = [
             self.processor.apply_chat_template(example["formatted_qa_prompt_only"], tokenize=False)
             for example in examples
         ]
 
-        embeddings = [example["embedding"] for example in examples]
+        embeddings = [
+            example["embedding"] for example in examples if "embedding" in example and example["embedding"] is not None
+        ]
 
-        batch = self.processor(
-            text=texts, vision_embeddings=embeddings, return_tensors="pt", padding=True
-        )
+        batch = self.processor(text=texts, vision_embeddings=embeddings, return_tensors="pt", padding=True)
 
         batch_prompt_only = self.processor(
             text=texts_prompt_only,
@@ -107,9 +100,7 @@ class QwenVLModel(AbstractVLMModel):
         if isinstance(self.processor, Qwen2VLProcessor3D):
             image_tokens = [151652, 151653, 151655]
         else:
-            image_tokens = [
-                self.processor.tokenizer.convert_tokens_to_ids(self.processor.image_token)
-            ]
+            image_tokens = [self.processor.tokenizer.convert_tokens_to_ids(self.processor.image_token)]
 
         for image_token_id in image_tokens:
             labels[labels == image_token_id] = -100

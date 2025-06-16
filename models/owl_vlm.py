@@ -98,16 +98,12 @@ class OwlVLModel(AbstractVLMModel):
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         logger.info(f"Total parameters: {total_params:,}")
         logger.info(f"Trainable parameters: {trainable_params:,}")
-        logger.info(
-            f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%"
-        )
+        logger.info(f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%")
 
     def pad_inputs(self, input_ids_list, input_ids_list_prompt_only, media_offset_list):
         """Helper function to pad inputs for Owl model"""
         # Pad text inputs using the tokenizer
-        padded = self.tokenizer.pad(
-            {"input_ids": input_ids_list}, return_tensors="pt", padding="longest"
-        )
+        padded = self.tokenizer.pad({"input_ids": input_ids_list}, return_tensors="pt", padding="longest")
         padded_prompt_only = self.tokenizer.pad(
             {"input_ids": input_ids_list_prompt_only},
             return_tensors="pt",
@@ -145,15 +141,15 @@ class OwlVLModel(AbstractVLMModel):
 
             # Flatten and transpose dimensions
             img_tensor = sample["embedding_tensor"]
-            image_tensors.append(img_tensor)
+
+            if img_tensor is not None:
+                image_tensors.append(img_tensor)
 
             if "tokenized_qa_text_tokens" in sample:
                 model_inputs = sample["tokenized_qa_text_tokens"]
                 model_inputs_prompt_only = sample["tokenized_qa_text_prompt_only_tokens"]
             else:
-                model_inputs = self.processor.encode_text_sft(
-                    self.processor.build_text_qwen(messages)
-                )
+                model_inputs = self.processor.encode_text_sft(self.processor.build_text_qwen(messages))
                 model_inputs_prompt_only = self.processor.encode_text_sft(
                     self.processor.build_text_qwen(messages_prompt_only)
                 )
@@ -162,7 +158,12 @@ class OwlVLModel(AbstractVLMModel):
             input_ids_list_prompt_only.append(model_inputs_prompt_only["input_ids"].squeeze(0))
             media_offset_list.append(model_inputs["media_offset"])
 
-        images = torch.cat(image_tensors, dim=0)
+        if image_tensors is None or len(image_tensors) == 0:
+            logger.error("No image tensors found in the batch. Ensure images are provided.")
+            # images = torch.empty(0, self.vision_dim, dtype=torch.float32)
+            images = None
+        else:
+            images = torch.cat(image_tensors, dim=0)
 
         padded, padded_prompt_only, media_offsets = self.pad_inputs(
             input_ids_list, input_ids_list_prompt_only, media_offset_list
