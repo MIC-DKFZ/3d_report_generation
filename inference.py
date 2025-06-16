@@ -6,9 +6,9 @@ from uuid import uuid4
 
 import torch
 import torch.distributed as dist
+import yaml
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
-import yaml
 from tqdm import tqdm
 
 from data.datasets import AMOSMMDataset
@@ -48,7 +48,7 @@ class UnifiedVLMInference:
         else:
             logger.info("Distributed training is not available or not initialized.")
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.local_rank = 0 # or handle as single process
+            self.local_rank = 0  # or handle as single process
             self.world_size = 1
 
     def inference(self, test_dataset):
@@ -64,13 +64,18 @@ class UnifiedVLMInference:
         if self.ddp_available:
             # Wrap the model with DDP
             logger.info(f"Wrapping model with DDP on rank {self.local_rank}")
-            model = DDP(model, device_ids=[self.local_rank], output_device=self.local_rank, find_unused_parameters=False)
+            model = DDP(
+                model,
+                device_ids=[self.local_rank],
+                output_device=self.local_rank,
+                find_unused_parameters=False,
+            )
 
             sampler = DistributedSampler(
                 test_dataset,
                 num_replicas=self.world_size,
                 rank=self.global_rank,
-                shuffle=False # Usually False for evaluation/testing
+                shuffle=False,  # Usually False for evaluation/testing
             )
         else:
             sampler = None
@@ -104,7 +109,9 @@ class UnifiedVLMInference:
                 # image_embeds is only in inputs for owl model due to cross attn
                 if "image_embeds" in inputs:
                     if self.ddp_available:
-                        inputs["image_embeds"] = model.module.vision2text_model(inputs["image_embeds"])
+                        inputs["image_embeds"] = model.module.vision2text_model(
+                            inputs["image_embeds"]
+                        )
                         outputs = model.module.language_model.generate(
                             **inputs,
                             max_new_tokens=256,  # Adjust max_new_tokens as needed
@@ -161,6 +168,12 @@ def parse_args(default_config=None):
     )
     general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
     general_parser.add_argument(
+        "--base_model_id",
+        type=str,
+        required=False,
+        help="Base Model ID or path. Only needed for Qwen if model_id is a fine-tuned checkpoint path",
+    )
+    general_parser.add_argument(
         "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
     )
     general_parser.add_argument(
@@ -181,6 +194,12 @@ def parse_args(default_config=None):
     general_parser.add_argument(
         "--num_gpus", type=str, help="Number of GPUs to use for inference", default=1
     )
+    general_parser.add_argument(
+        "--is_base_model",
+        action="store_true",
+        help="Set this flag for Owl model if you want to run inference on the base model, otherwise it will be assumed that model_id is a fine-tuned checkpoint path",
+    )
+
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
 
@@ -225,8 +244,10 @@ def main():
     # Create the appropriate VLM model based on the model type
     if args.model_type == "owl":
         vlm_model_class = OwlVLModel
+        model_specific_args = {"load_checkpoint": True if not args.is_base_model else False}
     elif args.model_type == "qwen":
         vlm_model_class = QwenVLModel
+        model_specific_args = {"base_model_id": args.base_model_id} if args.base_model_id else {}
     else:
         raise ValueError(f"Unsupported model type: {args.model_type}")
 
@@ -234,6 +255,7 @@ def main():
         model_id=args.model_id,
         output_dir=args.output_dir,
         train_only_vision_adapter=True,
+        **model_specific_args,
     )
 
     test_dataset = AMOSMMDataset(

@@ -16,16 +16,22 @@ from utils import logger
 
 
 class QwenVLModel(AbstractVLMModel):
-    def __init__(self, model_id, output_dir="qwen2-vlm", train_only_vision_adapter=False):
+    def __init__(
+        self, model_id, output_dir="qwen2-vlm", train_only_vision_adapter=False, base_model_id=None
+    ):
         super().__init__(model_id, train_only_vision_adapter)
         self.output_dir = output_dir
         self.batch_count = 0
+        if base_model_id is None:
+            self.base_model_id = model_id
+        else:
+            self.base_model_id = base_model_id
 
     def setup_model(self, bnb_config=None):
         """Initialize model, processor and PEFT configuration"""
         # Initialize processor
         self.processor = Qwen2VLProcessor3D.from_pretrained(
-            self.model_id,
+            self.base_model_id,
             cache_dir=os.path.expanduser("~/.cache/huggingface/hub"),
             local_files_only=True,
         )
