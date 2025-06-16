@@ -15,7 +15,7 @@ from transformers import BitsAndBytesConfig, TrainerCallback
 from trl import SFTConfig, SFTTrainer
 
 import wandb
-from data.datasets import AMOSMMDataset
+from data.datasets import AMOSMMDataset, CTRATEDataset
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
@@ -118,16 +118,16 @@ class UnifiedVLMTrainer:
         training_args = self.get_training_args()
 
         # Create the callback TODO implement this also for Qwen?
-        if type(self.vlm_model).__name__ == "OwlVLModel":
-            callbacks = [
-                PrintEvalBatchCallback(
-                    tokenizer=self.vlm_model.tokenizer,
-                    processor=self.vlm_model.processor,
-                ),
-                LossLoggingCallback(),
-            ]
-        else:
-            callbacks = [LossLoggingCallback()]
+        # if type(self.vlm_model).__name__ == "OwlVLModel":
+        callbacks = [
+            PrintEvalBatchCallback(
+                tokenizer=self.vlm_model.tokenizer,
+                processor=self.vlm_model.processor,
+            ),
+            LossLoggingCallback(),
+        ]
+        # else:
+        #     callbacks = [LossLoggingCallback()]
 
         # Initialize SFT trainer
         self.trainer = SFTTrainer(
@@ -165,9 +165,7 @@ def parse_args(default_config=None):
         help="Type of VLM model to train (owl or qwen)",
     )
     general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
-    general_parser.add_argument(
-        "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
-    )
+    general_parser.add_argument("--dataset_path", type=str, required=True, help="Path to the dataset JSON file")
     general_parser.add_argument(
         "--output_dir",
         type=str,
@@ -185,16 +183,15 @@ def parse_args(default_config=None):
         action="store_true",
         help="Train only the vision adapter (Qwen only)",
     )
-    general_parser.add_argument(
-        "--train_config", type=str, help="Path to config file (YAML or JSON)"
-    )
+    general_parser.add_argument("--train_config", type=str, help="Path to config file (YAML or JSON)")
+    general_parser.add_argument("--split_file", type=str, help="Path to cross validation split file (JSON)")
+    general_parser.add_argument("--split_idx", type=int, default=None, help="Index of the split to use (0-4)")
+    general_parser.add_argument("--dataset_name", type=str, default="ctrate", help="Name of the dataset")
 
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
 
-    sft_trainer_parser = argparse.ArgumentParser(
-        description="SFTTrainer args which overwrite the train_config file."
-    )
+    sft_trainer_parser = argparse.ArgumentParser(description="SFTTrainer args which overwrite the train_config file.")
 
     # Load config file if provided
     if general_args.train_config and os.path.exists(general_args.train_config):
@@ -268,9 +265,7 @@ def main():
     }
     general_args, sft_trainer_args = parse_args(default_sft_trainer_config)
 
-    log_file = os.path.join(
-        general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}.log")
-    )
+    log_file = os.path.join(general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}.log"))
     logger.add(log_file)
 
     if general_args.model_id is None:
@@ -296,23 +291,44 @@ def main():
     )
 
     # Create datasets
-    train_dataset = AMOSMMDataset(
-        dataset_json_path=general_args.dataset_path,
-        model_name=general_args.model_type,
-        split="train",
-        embeddings_path=general_args.embeddings_path,
-    )
+    if general_args.dataset_name == "amosmm":
+        # Use AMOSMM dataset
+        train_dataset = AMOSMMDataset(
+            dataset_json_path=general_args.dataset_path,
+            model_name=general_args.model_type,
+            split="train",
+            embeddings_path=general_args.embeddings_path,
+        )
 
-    val_dataset = AMOSMMDataset(
-        dataset_json_path=general_args.dataset_path,
-        model_name=general_args.model_type,
-        split="val",
-        embeddings_path=general_args.embeddings_path,
-        n_samples=50,  # Limit the validation set size
-    )
-    logger.info(
-        f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
-    )
+        val_dataset = AMOSMMDataset(
+            dataset_json_path=general_args.dataset_path,
+            model_name=general_args.model_type,
+            split="val",
+            embeddings_path=general_args.embeddings_path,
+            n_samples=50,  # Limit the validation set size
+        )
+    elif general_args.dataset_name == "ctrate":
+        # Use CTRATE dataset
+        train_dataset = CTRATEDataset(
+            dataset_json_path=general_args.dataset_path,
+            model_name=general_args.model_type,
+            split="train" if general_args.split_idx is None else f"train_{general_args.split_idx}",
+            embeddings_path=general_args.embeddings_path,
+            split_files=general_args.split_file,
+        )
+
+        val_dataset = CTRATEDataset(
+            dataset_json_path=general_args.dataset_path,
+            model_name=general_args.model_type,
+            split="val" if general_args.split_idx is None else f"val_{general_args.split_idx}",
+            embeddings_path=general_args.embeddings_path,
+            n_samples=50,  # Limit the validation set size
+            split_files=general_args.split_file,
+        )
+    else:
+        raise ValueError(f"Unsupported dataset name: {general_args.dataset_name}")
+
+    logger.info(f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples")
 
     # Create the trainer and train the model
     trainer = UnifiedVLMTrainer(
