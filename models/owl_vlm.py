@@ -15,6 +15,7 @@ class OwlVLModel(AbstractVLMModel):
         self,
         model_id,
         train_only_vision_adapter: bool,
+        load_checkpoint: bool = False,
         output_dir="owl-vlm",
         vision_dim=864,
         embed_dim=896,
@@ -24,6 +25,7 @@ class OwlVLModel(AbstractVLMModel):
         self.vision_dim = vision_dim
         self.embed_dim = embed_dim
         self.batch_count = 0
+        self.load_checkpoint = load_checkpoint
 
     def setup_model(self, bnb_config=None):
         """Initialize model, processor, and tokenizer for Owl"""
@@ -34,6 +36,8 @@ class OwlVLModel(AbstractVLMModel):
         config = AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
 
         # Apply BNB config if provided
+        # Ignore mismatched sizes is necessary since the weights of the vision2text_model
+        # have a different shape, but this is loaded in the OwnOwlModel
         if bnb_config:
             language_model = mPLUGOwl3Model.from_pretrained(
                 self.model_id,
@@ -41,6 +45,7 @@ class OwlVLModel(AbstractVLMModel):
                 attn_implementation="sdpa",
                 trust_remote_code=True,
                 quantization_config=bnb_config,
+                ignore_mismatched_sizes=True,
             )
         else:
             language_model = mPLUGOwl3Model.from_pretrained(
@@ -48,21 +53,36 @@ class OwlVLModel(AbstractVLMModel):
                 config=config,
                 attn_implementation="sdpa",
                 trust_remote_code=True,
+                ignore_mismatched_sizes=True,
             )
 
         # Initialize processor via the language model
         self.processor = language_model.init_processor(self.tokenizer)
         self.processor.inference_mode = False
 
-        # Create our custom OwnOwlModel
-        self.model = OwnOwlModel(
-            config,
-            language_model=language_model.language_model,
-            vision_dim=self.vision_dim,
-            embed_dim=self.embed_dim,
-            tokenizer=self.tokenizer,
-            debug=False,
-        )
+        if self.load_checkpoint:
+            logger.info(f"Loading OwnOwlModel from checkpoint with path: {self.model_id}")
+            # Create our custom OwnOwlModel
+            self.model = OwnOwlModel.from_pretrained(
+                self.model_id,
+                config=config,
+                language_model=language_model.language_model,
+                vision_dim=self.vision_dim,
+                embed_dim=self.embed_dim,
+                tokenizer=self.tokenizer,
+                debug=False,
+            )
+        else:
+            logger.info("Creating OwnOwlModel from scratch")
+            # Create our custom OwnOwlModel
+            self.model = OwnOwlModel(
+                config,
+                language_model=language_model.language_model,
+                vision_dim=self.vision_dim,
+                embed_dim=self.embed_dim,
+                tokenizer=self.tokenizer,
+                debug=False,
+            )
 
         # Only manually move to device if not using device_map
         if bnb_config is None:
