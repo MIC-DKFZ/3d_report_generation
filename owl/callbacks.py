@@ -8,6 +8,7 @@ from transformers import TrainerCallback, TrainerControl, TrainerState, Training
 
 import wandb
 from Eval.metrics import BleuScoreHF, METEORScore, ROUGEScore
+from owl.model import OwnOwlModel
 from utils.filter_batch import extract_batch_prompt_only
 from utils import logger
 
@@ -61,7 +62,7 @@ class PrintEvalBatchCallback(TrainerCallback):
 
         n_correct_qa = 0
 
-        model_str = "owl" if isinstance(model, OwlVLModel) else "qwen"
+        model_str = "owl" if isinstance(model, OwnOwlModel) else "qwen"
 
         # metrics_dict = defaultdict(list)
         preds = []
