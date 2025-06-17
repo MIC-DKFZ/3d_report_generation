@@ -472,7 +472,12 @@ class CTRATEDataset(MedicalImageDataset):
 
     def get_embedding_path(self, embedding_path):
         """Convert image ID to embedding path"""
-        return os.path.join(self.embeddings_path, embedding_path + "_embedding.npz")
+        if not hasattr(self, "embedding_dict"):
+            logger.error("embedding_dict not found. Ensure _load_data is called first.")
+            return os.path.join(str(self.embeddings_path), embedding_path + "_embedding.npz")
+
+        return self.embedding_dict.get(embedding_path, None)
+        # return os.path.join(self.embeddings_path, embedding_path + "_embedding.npz")
 
     def extract_sample_list(self, samples):
         """Extract sample list from raw data"""
