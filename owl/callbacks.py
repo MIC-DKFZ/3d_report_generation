@@ -11,6 +11,9 @@ from Eval.metrics import BleuScoreHF, METEORScore, ROUGEScore
 from utils.filter_batch import extract_batch_prompt_only
 from utils import logger
 
+from models.owl_vlm import OwlVLModel
+from models.qwen_vlm import QwenVLModel
+
 
 class PrintEvalBatchCallback(TrainerCallback):
     def __init__(
@@ -58,6 +61,8 @@ class PrintEvalBatchCallback(TrainerCallback):
 
         n_correct_qa = 0
 
+        model_str = "owl" if isinstance(model, OwlVLModel) else "qwen"
+
         # metrics_dict = defaultdict(list)
         preds = []
         gts = []
@@ -81,13 +86,20 @@ class PrintEvalBatchCallback(TrainerCallback):
                 inputs_prompt_only = inputs_prompt_only.to(args.device)
                 del inputs_prompt_only["raw_samples"]
                 del inputs_prompt_only["batch_count"]
-                inputs_prompt_only["image_embeds"] = model.vision2text_model(inputs_prompt_only["image_embeds"]).to(
-                    torch.float16
-                )
-                outputs = model.language_model.generate(
-                    **inputs_prompt_only,
-                    max_new_tokens=256,  # Adjust max_new_tokens as needed
-                )
+
+                if model_str == "owl":
+                    inputs_prompt_only["image_embeds"] = model.vision2text_model(
+                        inputs_prompt_only["image_embeds"]
+                    ).to(torch.float16)
+                    outputs = model.language_model.generate(
+                        **inputs_prompt_only,
+                        max_new_tokens=256,  # Adjust max_new_tokens as needed
+                    )
+                else:
+                    outputs = model.generate(
+                        **inputs_prompt_only,
+                        max_new_tokens=256,  # Adjust max_new_tokens as needed
+                    )
 
                 # Decode input and generated output
                 decoded_output = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
@@ -100,13 +112,17 @@ class PrintEvalBatchCallback(TrainerCallback):
                 decoded_gt_assistant_answer = (
                     decoded_gt[0].split("assistant\n")[-1].strip().split("assistant\n")[0].strip()
                 )
-                decoded_gt_assistant_answer = re.search(r"'text':\s*'([^']*)'", decoded_gt_assistant_answer).group(1)
+                if model_str == "owl":
+                    decoded_gt_assistant_answer = re.search(r"'text':\s*'([^']*)'", decoded_gt_assistant_answer).group(
+                        1
+                    )
 
                 try:
                     decoded_pred_assistant_answer = decoded_output[0].split("assistant\n")[-1].strip()
-                    decoded_pred_assistant_answer = re.search(
-                        r"'text':\s*'([^']*)'", decoded_pred_assistant_answer
-                    ).group(1)
+                    if model_str == "owl":
+                        decoded_pred_assistant_answer = re.search(
+                            r"'text':\s*'([^']*)'", decoded_pred_assistant_answer
+                        ).group(1)
                 except Exception:
                     decoded_pred_assistant_answer = ""
 
