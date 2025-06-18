@@ -92,10 +92,11 @@ class UnifiedVLMTrainer:
         trainable_params = self.vlm_model.get_trainable_params()
 
         # Create quantization config if needed (not for vision adapter only training)
-        if trainable_params.get("train_only_vision_adapter", False) == True:
-            bnb_config = self.get_quantization_config()
-        else:
-            bnb_config = None
+        bnb_config = None
+        # if trainable_params.get("train_only_vision_adapter", False) == True:
+        #     bnb_config = self.get_quantization_config()
+        # else:
+        #     bnb_config = None
 
         # Setup base model with quantization config if applicable
         base_model = self.vlm_model.setup_model(bnb_config=bnb_config)
