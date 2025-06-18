@@ -109,9 +109,7 @@ class UnifiedVLMInference:
                 # image_embeds is only in inputs for owl model due to cross attn
                 if "image_embeds" in inputs:
                     if self.ddp_available:
-                        inputs["image_embeds"] = model.module.vision2text_model(
-                            inputs["image_embeds"]
-                        )
+                        inputs["image_embeds"] = model.module.vision2text_model(inputs["image_embeds"])
                         outputs = model.module.language_model.generate(
                             **inputs,
                             max_new_tokens=256,  # Adjust max_new_tokens as needed
@@ -138,9 +136,16 @@ class UnifiedVLMInference:
                 trimmed_generated_ids = [
                     out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], outputs)
                 ]
-                decoded_output = self.vlm_model.tokenizer.batch_decode(
-                    trimmed_generated_ids, skip_special_tokens=True
-                )
+                decoded_output = self.vlm_model.tokenizer.batch_decode(trimmed_generated_ids, skip_special_tokens=True)
+
+                # raw_input
+
+                # Log the first sample output
+                if i == 0:
+                    logger.info(f"First sample input: {raw_samples['answer'][0]}")
+                    logger.info(f"First sample output: {decoded_output[0]}")
+
+                logger.info(f"Sample {i + 1}/{len(test_loader)}: {decoded_output}")
 
                 results.extend(
                     [
@@ -167,15 +172,13 @@ def parse_args(default_config=None):
         help="Type of VLM model to train (owl or qwen)",
     )
     general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
-    general_parser.add_argument(
-        "--base_model_id",
-        type=str,
-        required=False,
-        help="Base Model ID or path. Only needed for Qwen if model_id is a fine-tuned checkpoint path",
-    )
-    general_parser.add_argument(
-        "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
-    )
+    # general_parser.add_argument(
+    #     "--base_model_id",
+    #     type=str,
+    #     required=False,
+    #     help="Base Model ID or path. Only needed for Qwen if model_id is a fine-tuned checkpoint path",
+    # )
+    general_parser.add_argument("--dataset_path", type=str, required=True, help="Path to the dataset JSON file")
     general_parser.add_argument(
         "--output_dir",
         type=str,
@@ -188,17 +191,14 @@ def parse_args(default_config=None):
         required=True,
         help="Path to the vision embeddings",
     )
-    general_parser.add_argument(
-        "--inference_config", type=str, help="Path to config file (YAML or JSON)"
-    )
-    general_parser.add_argument(
-        "--num_gpus", type=str, help="Number of GPUs to use for inference", default=1
-    )
+    general_parser.add_argument("--inference_config", type=str, help="Path to config file (YAML or JSON)")
+    general_parser.add_argument("--num_gpus", type=str, help="Number of GPUs to use for inference", default=1)
     general_parser.add_argument(
         "--is_base_model",
         action="store_true",
         help="Set this flag for Owl model if you want to run inference on the base model, otherwise it will be assumed that model_id is a fine-tuned checkpoint path",
     )
+    general_parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to a model checkpoint to load")
 
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
@@ -242,12 +242,13 @@ def main():
             args.model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
     # Create the appropriate VLM model based on the model type
+    model_specific_args = {}
     if args.model_type == "owl":
         vlm_model_class = OwlVLModel
-        model_specific_args = {"load_checkpoint": True if not args.is_base_model else False}
+        model_specific_args = {"checkpoint_path": args.checkpoint_path}
     elif args.model_type == "qwen":
         vlm_model_class = QwenVLModel
-        model_specific_args = {"base_model_id": args.base_model_id} if args.base_model_id else {}
+        model_specific_args = {"checkpoint_path": args.checkpoint_path}
     else:
         raise ValueError(f"Unsupported model type: {args.model_type}")
 

@@ -15,7 +15,7 @@ class OwlVLModel(AbstractVLMModel):
         self,
         model_id,
         train_only_vision_adapter: bool,
-        load_checkpoint: bool = False,
+        checkpoint_path=None,
         output_dir="owl-vlm",
         vision_dim=864,
         embed_dim=896,
@@ -25,7 +25,7 @@ class OwlVLModel(AbstractVLMModel):
         self.vision_dim = vision_dim
         self.embed_dim = embed_dim
         self.batch_count = 0
-        self.load_checkpoint = load_checkpoint
+        self.checkpoint_path = checkpoint_path
 
     def setup_model(self, bnb_config=None):
         """Initialize model, processor, and tokenizer for Owl"""
@@ -34,6 +34,19 @@ class OwlVLModel(AbstractVLMModel):
 
         # Load configuration
         config = AutoConfig.from_pretrained(self.model_id, trust_remote_code=True)
+
+        # if self.load_checkpoint:
+        #     logger.info(f"Loading OwnOwlModel from checkpoint with path: {self.model_id}")
+        #     # Create our custom OwnOwlModel
+        #     self.model = OwnOwlModel.from_pretrained(
+        #         self.model_id,
+        #         config=config,
+        #         vision_dim=self.vision_dim,
+        #         embed_dim=self.embed_dim,
+        #         tokenizer=self.tokenizer,
+        #         debug=False,
+        #     )
+        # # else:
 
         # Apply BNB config if provided
         # Ignore mismatched sizes is necessary since the weights of the vision2text_model
@@ -60,11 +73,11 @@ class OwlVLModel(AbstractVLMModel):
         self.processor = language_model.init_processor(self.tokenizer)
         self.processor.inference_mode = False
 
-        if self.load_checkpoint:
+        if self.checkpoint_path:
             logger.info(f"Loading OwnOwlModel from checkpoint with path: {self.model_id}")
             # Create our custom OwnOwlModel
             self.model = OwnOwlModel.from_pretrained(
-                self.model_id,
+                self.checkpoint_path,
                 config=config,
                 language_model=language_model.language_model,
                 vision_dim=self.vision_dim,
@@ -72,6 +85,15 @@ class OwlVLModel(AbstractVLMModel):
                 tokenizer=self.tokenizer,
                 debug=False,
             )
+
+            # Log the parameters of the vision2text_model
+            # # This is useful to see if the model was loaded correctly
+            # logger.info("Loaded OwnOwlModel with the following parameters:")
+            # logger.info(list(self.model.vision2text_model.parameters()))
+
+            # print("Loaded OwnOwlModel with the following parameters:")
+            # print(list(self.model.vision2text_model.parameters()))
+
         else:
             logger.info("Creating OwnOwlModel from scratch")
             # Create our custom OwnOwlModel

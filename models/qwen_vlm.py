@@ -17,47 +17,56 @@ from utils import logger
 
 class QwenVLModel(AbstractVLMModel):
     def __init__(
-        self, model_id, output_dir="qwen2-vlm", train_only_vision_adapter=False, base_model_id=None
+        self,
+        model_id,
+        output_dir="qwen2-vlm",
+        train_only_vision_adapter=False,
+        # base_model_id=None,
+        checkpoint_path=None,
     ):
         super().__init__(model_id, train_only_vision_adapter)
         self.output_dir = output_dir
         self.batch_count = 0
-        if base_model_id is None:
-            self.base_model_id = model_id
-        else:
-            self.base_model_id = base_model_id
+        # if base_model_id is None:
+        #     self.base_model_id = model_id
+        # else:
+        #     self.base_model_id = base_model_id
+
+        self.checkpoint_path = checkpoint_path
 
     def setup_model(self, bnb_config=None):
         """Initialize model, processor and PEFT configuration"""
         # Initialize processor
         self.processor = Qwen2VLProcessor3D.from_pretrained(
-            self.base_model_id,
+            self.model_id,
             cache_dir=os.path.expanduser("~/.cache/huggingface/hub"),
             local_files_only=True,
         )
         self.tokenizer = self.processor.tokenizer
 
-        if self.train_only_vision_adapter:
-            # For adapter-only training, don't use quantization for the adapter
+        if self.checkpoint_path:
+            # If a checkpoint path is provided, load the model from the checkpoint
+            logger.info(f"Loading model from checkpoint: {self.checkpoint_path}")
+            self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
+                self.checkpoint_path,
+                torch_dtype=torch.bfloat16,
+                local_files_only=True,
+            )
+        elif bnb_config and not self.train_only_vision_adapter:
+            self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
+                self.model_id,
+                torch_dtype=torch.bfloat16,
+                quantization_config=bnb_config,
+            )
+        else:
             self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(self.model_id, torch_dtype=torch.bfloat16)
 
+        if self.train_only_vision_adapter:
+            # For adapter-only training, don't use quantization for the adapter
             # Freeze all parameters except vision adapter
             self._set_trainable_params()
-            return self.model
-        else:
-            # Use quantization if provided
-            if bnb_config:
-                self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
-                    self.model_id,
-                    torch_dtype=torch.bfloat16,
-                    quantization_config=bnb_config,
-                )
-            else:
-                self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
-                    self.model_id, torch_dtype=torch.bfloat16
-                )
 
-            return self.model
+        return self.model
 
     def _set_trainable_params(self):
         """Set which parameters are trainable based on configuration"""
