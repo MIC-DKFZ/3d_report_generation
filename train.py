@@ -109,9 +109,9 @@ class UnifiedVLMTrainer:
 
         wandb.init(
             project="mic-rocket-vlm",
-            name=f"{type(self.vlm_model).__name__}_run",
+            name=datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{type(self.vlm_model).__name__}_run_{uuid4()}.log"),
             reinit=True,
-            group=f"{type(self.vlm_model).__name__}_run_{uuid4()}",
+            group=f"{type(self.vlm_model).__name__}_run",
         )
 
         # Configure training arguments
