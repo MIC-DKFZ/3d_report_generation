@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 from datetime import datetime
+import re
 from uuid import uuid4
 
 import torch
@@ -12,6 +13,7 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from data.datasets import AMOSMMDataset
+from eval.metrics import bleu_score, meteor_score, rouge_score
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
 from utils import logger, rank_zero_filter
@@ -29,6 +31,9 @@ class UnifiedVLMInference:
         self.vlm_model = vlm_model
         self.output_dir = output_dir
         self.config_file_path = config_file_path
+
+        # self.model_str = self.vlm_model._model_str  # e.g., "owl" or "qwen"
+        self.model_str = "owl" if isinstance(self.vlm_model, OwlVLModel) else "qwen"
 
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -156,8 +161,62 @@ class UnifiedVLMInference:
                         for i, do in enumerate(decoded_output)
                     ]
                 )
+
+                # if i == 50:
+                #     logger.info("Stopping after 50 samples for testing purposes.")
+                #     break
+
+        for result in results:
+            # Clean up the output text
+            outputs_text = result["output_text"]
+            if "assistant\n" in outputs_text:
+                outputs_text = outputs_text.split("assistant\n")[-1].strip()
+            if self.model_str == "owl" and "'text':" in outputs_text:
+                outputs_text = re.search(r"'text':\s*'([^']*)'", outputs_text).group(1)
+            result["output_text_clean"] = outputs_text
+
+        preds = [result["output_text_clean"] for result in results]
+        gts = [result["answer"] for result in results]
+
         with open(os.path.join(self.output_dir, "inference_results.json"), "w") as f:
             json.dump(results, f, indent=4)
+
+        logger.info(f"Saved inference results to {os.path.join(self.output_dir, 'inference_results.json')}")
+
+        # Calculate and log metrics
+        # Log the Bleu score
+        bleu_score_1 = bleu_score(preds, gts, max_order=1)["bleu"]
+        bleu_score_2 = bleu_score(preds, gts, max_order=2)["bleu"]
+        bleu_score_3 = bleu_score(preds, gts, max_order=3)["bleu"]
+        bleu_score_4 = bleu_score(preds, gts, max_order=4)["bleu"]
+        logger.info(f"Bleu1 score: {bleu_score_1}")
+        logger.info(f"Bleu2 score: {bleu_score_2}")
+        logger.info(f"Bleu3 score: {bleu_score_3}")
+        logger.info(f"Bleu4 score: {bleu_score_4}")
+
+        # Log the METOR score
+        meteor_score_val = meteor_score(preds, gts)["meteor"]
+        logger.info(f"METEOR score: {meteor_score_val}")
+
+        # Log the ROUGE score
+        rouge_score_val = rouge_score(preds, gts)["rougeL"]
+        logger.info(f"ROUGE score: {rouge_score_val}")
+
+        with open(os.path.join(self.output_dir, "inference_metrics.json"), "w") as f:
+            json.dump(
+                {
+                    "bleu_score_1": bleu_score_1,
+                    "bleu_score_2": bleu_score_2,
+                    "bleu_score_3": bleu_score_3,
+                    "bleu_score_4": bleu_score_4,
+                    "meteor_score": meteor_score_val,
+                    "rouge_score": rouge_score_val,
+                },
+                f,
+                indent=4,
+            )
+
+        logger.info(f"Saved inference metrics to {os.path.join(self.output_dir, 'inference_metrics.json')}")
 
 
 def parse_args(default_config=None):
