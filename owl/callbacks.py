@@ -7,7 +7,7 @@ import torch
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
 import wandb
-from Eval.metrics import BleuScoreHF, METEORScore, ROUGEScore
+from eval.metrics import bleu_score, rouge_score, meteor_score
 from owl.model import OwnOwlModel
 from utils.filter_batch import extract_batch_prompt_only
 from utils import logger
@@ -156,10 +156,10 @@ class PrintEvalBatchCallback(TrainerCallback):
                 )
 
         # Log the Bleu score
-        bleu_score_1 = BleuScoreHF(preds, gts, max_order=1)["bleu"]
-        bleu_score_2 = BleuScoreHF(preds, gts, max_order=2)["bleu"]
-        bleu_score_3 = BleuScoreHF(preds, gts, max_order=3)["bleu"]
-        bleu_score_4 = BleuScoreHF(preds, gts, max_order=4)["bleu"]
+        bleu_score_1 = bleu_score(preds, gts, max_order=1)["bleu"]
+        bleu_score_2 = bleu_score(preds, gts, max_order=2)["bleu"]
+        bleu_score_3 = bleu_score(preds, gts, max_order=3)["bleu"]
+        bleu_score_4 = bleu_score(preds, gts, max_order=4)["bleu"]
         logger.info(f"Bleu1 score: {bleu_score_1}")
         logger.info(f"Bleu2 score: {bleu_score_2}")
         logger.info(f"Bleu3 score: {bleu_score_3}")
@@ -176,14 +176,14 @@ class PrintEvalBatchCallback(TrainerCallback):
         )
 
         # Log the METOR score
-        meteor_score = METEORScore(preds, gts)["meteor"]
-        logger.info(f"METEOR score: {meteor_score}")
-        wandb.log({"meteor_score": meteor_score})
+        meteor_score_val = meteor_score(preds, gts)["meteor"]
+        logger.info(f"METEOR score: {meteor_score_val}")
+        wandb.log({"meteor_score": meteor_score_val})
 
         # Log the ROUGE score
-        rouge_score = ROUGEScore(preds, gts)["rougeL"]
-        logger.info(f"ROUGE score: {rouge_score}")
-        wandb.log({"rouge_score": rouge_score})
+        rouge_score_val = rouge_score(preds, gts)["rougeL"]
+        logger.info(f"ROUGE score: {rouge_score_val}")
+        wandb.log({"rouge_score": rouge_score_val})
 
         logger.info(f"Correct QA: {n_correct_qa}/{self.sample_count}")
 

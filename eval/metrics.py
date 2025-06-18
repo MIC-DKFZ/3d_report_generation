@@ -1,8 +1,7 @@
 import evaluate
-from RaTEScore import RaTEScore
 
 
-def BleuScoreHF(pred, gt, max_order=4):
+def bleu_score(pred, gt, max_order=4):
     """
     FORMULA: BLEU = brevity_penalty * exp(sum(w_n * log(p_n)))
 
@@ -24,7 +23,7 @@ def BleuScoreHF(pred, gt, max_order=4):
     return b_score
 
 
-def RateScore(pred, gt):
+def rate_score(pred, gt):
     """
     pred ('list' of 'str'): Predicted text
         ex: pred = ["hello there general kenobi", "foo bar foobar"]
@@ -35,13 +34,15 @@ def RateScore(pred, gt):
             - RateScore can take a list of predictions and ground truth texts and calculate the score for each pair.
             - To calcualte the average score one needs to take the mean of the scores.
     """
+    from RaTEScore import RaTEScore
+
     ratescore = RaTEScore()
     score = ratescore.compute_score(pred, gt)
 
     return score
 
 
-def BERTScore(pred, gt, model_type="distilbert-base-uncased"):
+def bert_score(pred, gt, model_type="distilbert-base-uncased"):
     """
     predictions (list of str): Prediction/candidate sentences.
         ex: predictions = ["hello there general kenobi","foo bar foobar"]
@@ -62,10 +63,7 @@ def BERTScore(pred, gt, model_type="distilbert-base-uncased"):
     return bert_score
 
 
-def GREENScore(pred, gt, model_name="StanfordAIMI/GREEN-RadLlama2-7b", output_dir="."):
-
-    from green_score import GREEN
-
+def green_score(pred, gt, model_name="StanfordAIMI/GREEN-RadLlama2-7b", output_dir="."):
     """
     predictions (list of str): Prediction/candidate sentences.
         ex: predictions = ["hello there general kenobi","foo bar foobar"]
@@ -76,6 +74,8 @@ def GREENScore(pred, gt, model_name="StanfordAIMI/GREEN-RadLlama2-7b", output_di
 
     model_name (str): Pretrained model name from the GREEN model zoo (cf. https://github.com/Stanford-AIMI/GREEN?tab=readme-ov-file#benchmark).
     """
+    from green_score import GREEN
+
     supported_models = [
         "StanfordAIMI/GREEN-RadLlama2-7b",
         "StanfordAIMI/GREEN-RadPhi2",
@@ -95,7 +95,7 @@ def GREENScore(pred, gt, model_name="StanfordAIMI/GREEN-RadLlama2-7b", output_di
     return mean
 
 
-def ROUGEScore(pred, gt):
+def rouge_score(pred, gt):
     """
     predictions (list of str): Prediction/candidate sentences.
         ex: predictions = ["hello there general kenobi","foo bar foobar"]
@@ -112,7 +112,7 @@ def ROUGEScore(pred, gt):
     return r_score
 
 
-def METEORScore(pred, gt, alpha=0.9):
+def meteor_score(pred, gt, alpha=0.9):
     """
     predictions (list of str): Prediction/candidate sentences.
         ex: predictions = ["hello there general kenobi","foo bar foobar"]
