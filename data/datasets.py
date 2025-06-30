@@ -9,6 +9,7 @@ import yaml
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+import pickle
 
 from data.extractors import AMOSMMExtractor, AMOSMMRegionExtractor, LIDCExtractor, CTRATEExtractor
 from utils import logger
@@ -67,6 +68,7 @@ class MedicalImageDataset(Dataset, ABC):
         answer_types=("CHOICE",),
         split_files=None,
         return_embedding=True,
+        cache_file=None,
     ):
         super().__init__()
 
@@ -80,6 +82,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.tokenize_fn = tokenize_fn
         self.split_files = split_files
         self.return_embedding = return_embedding
+        self.cache_file = cache_file
 
         if isinstance(answer_types, str):
             answer_types = [answer_types]  # Convert single string to list of strings for consistency
@@ -95,6 +98,13 @@ class MedicalImageDataset(Dataset, ABC):
             elif isinstance(answer_type, dict):
                 self.answer_type_dict.update(answer_type)
 
+        if self.cache_file is not None and os.path.exists(self.cache_file):
+            logger.info(f"Loading cached dataset from {self.cache_file}")
+            with open(self.cache_file, "rb") as f:
+                self.samples = pickle.load(f)
+            logger.info(f"Loaded {len(self.samples)} samples from cache.")
+            return
+
         # Load and process data
         self.data = self._load_data(dataset_json_path)
 
@@ -106,6 +116,12 @@ class MedicalImageDataset(Dataset, ABC):
 
         if self.tokenize_fn:
             self._tokenize_samples()
+
+        if self.cache_file is not None and not os.path.exists(self.cache_file):
+            logger.info(f"Caching dataset to {self.cache_file}")
+            with open(self.cache_file, "wb") as f:
+                pickle.dump(self.samples, f)
+            logger.info(f"Cached {len(self.samples)} samples.")
 
     @abstractmethod
     def _load_data(self, dataset_json_path):
@@ -182,12 +198,14 @@ class MedicalImageDataset(Dataset, ABC):
             if embedding_path.endswith(".npy"):
                 return np.load(embedding_path)
             elif embedding_path.endswith(".npz"):
-                npz_file = np.load(embedding_path)
-                # Attempt to load the "embeddings" key if it exists, otherwise load the first array
-                if "embedding" in npz_file:
-                    return npz_file["embeddings"]
-                else:
-                    return npz_file[npz_file.files[0]]
+                # Use context manager to ensure proper file closure
+                with np.load(embedding_path) as npz_file:
+                    # Attempt to load the "embeddings" key if it exists, otherwise load the first array
+                    if "embedding" in npz_file:
+                        embedding = npz_file["embeddings"].copy()  # Make a copy to avoid reference issues
+                    else:
+                        embedding = npz_file[npz_file.files[0]].copy()  # Make a copy to avoid reference issues
+                return embedding
             else:
                 raise ValueError(f"Unsupported embedding file format: {embedding_path}")
         except Exception as e:
@@ -218,7 +236,8 @@ class MedicalImageDataset(Dataset, ABC):
             if "embedding_path" not in sample:
                 raise ValueError(f"Sample {index} does not have an embedding path.")
             result["embedding"] = self._load_embedding(sample["embedding_path"])
-            result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
+            result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"]).half()
+            result["embedding"] = result["embedding"].astype(np.float16)  # Convert to float16 for memory efficiency
 
         return result
 

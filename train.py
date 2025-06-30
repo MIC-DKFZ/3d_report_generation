@@ -21,6 +21,7 @@ from models.qwen_vlm import QwenVLModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from utils import logger
 from utils.helper import seed_everything
+from utils.memory_utils import log_memory_usage, setup_memory_efficient_training, aggressive_cleanup
 
 
 class UnifiedVLMTrainer:
@@ -50,12 +51,18 @@ class UnifiedVLMTrainer:
     def get_training_args(self):
         """Configure standard training arguments"""
         num_cores = os.cpu_count()
-        num_workers = num_cores // 2 if num_cores > 4 else 1
+        num_workers = 2  # Reduce workers to prevent memory accumulation
         base_args = {
             "output_dir": self.output_dir,
             "run_name": f"{type(self.vlm_model).__name__}_training",
             "dataloader_num_workers": num_workers,
             "dataloader_pin_memory": True,
+            # Reduce prefetch factor to minimize memory usage
+            "dataloader_prefetch_factor": 1,
+            # Disable persistent workers to prevent memory accumulation
+            "dataloader_persistent_workers": False,
+            # Add torch empty cache steps to clear memory periodically
+            "torch_empty_cache_steps": 20,
         }
         base_args.update(self.sft_trainer_config)
 
@@ -88,6 +95,10 @@ class UnifiedVLMTrainer:
             train_dataset: Training dataset
             val_dataset: Validation dataset
         """
+        # Setup memory efficient training
+        setup_memory_efficient_training()
+        log_memory_usage("Before Training Setup")
+
         # Get trainable parameters configuration
         trainable_params = self.vlm_model.get_trainable_params()
 
@@ -142,14 +153,23 @@ class UnifiedVLMTrainer:
         )
 
         # Train model
+        log_memory_usage("Before Training")
         self.trainer.train()
+        log_memory_usage("After Training")
 
         # Save model
         self.trainer.save_model(self.output_dir)
 
-        # Clear memory
-        self.vlm_model.clear_memory()
+        # Aggressive memory cleanup
         del self.trainer
+        self.trainer = None
+
+        # Clear model memory
+        self.vlm_model.clear_memory()
+
+        # Perform aggressive cleanup
+        aggressive_cleanup()
+        log_memory_usage("After Cleanup")
 
         wandb.finish()
 
@@ -188,6 +208,10 @@ def parse_args(default_config=None):
     general_parser.add_argument("--split_file", type=str, help="Path to cross validation split file (JSON)")
     general_parser.add_argument("--split_idx", type=int, default=None, help="Index of the split to use (0-4)")
     general_parser.add_argument("--dataset_name", type=str, default="ctrate", help="Name of the dataset")
+    general_parser.add_argument("--dataset_cache", type=str, default=None, help="Path to cache file for the dataset")
+    general_parser.add_argument(
+        "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
+    )
 
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
@@ -240,10 +264,10 @@ def parse_args(default_config=None):
 
 def main():
     default_sft_trainer_config = {
-        "num_train_epochs": 3,
-        "per_device_train_batch_size": 1,
+        "num_train_epochs": 5,
+        "per_device_train_batch_size": 4,
         "per_device_eval_batch_size": 1,
-        "gradient_accumulation_steps": 8,
+        "gradient_accumulation_steps": 1,
         "gradient_checkpointing": True,
         "optim": "adamw_torch_fused",
         "learning_rate": 2e-4,
@@ -263,11 +287,18 @@ def main():
         "dataset_kwargs": {"skip_prepare_dataset": True},
         "remove_unused_columns": False,
         "report_to": ["wandb"],
+        # Memory management settings
+        "torch_empty_cache_steps": 10,  # Clear cache every 10 steps
+        "dataloader_drop_last": True,  # Drop incomplete batches
     }
     general_args, sft_trainer_args = parse_args(default_sft_trainer_config)
 
     log_file = os.path.join(general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}.log"))
     logger.add(log_file)
+
+    output_dir = os.path.join(general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}"))
+    os.makedirs(output_dir, exist_ok=True)
+    general_args.output_dir = output_dir
 
     if general_args.model_id is None:
         if general_args.model_type == "owl":
@@ -299,6 +330,7 @@ def main():
             model_name=general_args.model_type,
             split="train",
             embeddings_path=general_args.embeddings_path,
+            cache_file=general_args.dataset_cache,  # Use cache file if provided
         )
 
         val_dataset = AMOSMMDataset(
@@ -307,6 +339,7 @@ def main():
             split="val",
             embeddings_path=general_args.embeddings_path,
             n_samples=50,  # Limit the validation set size
+            cache_file=general_args.dataset_cache_val,  # Use cache file if provided
         )
     elif general_args.dataset_name == "ctrate":
         # Use CTRATE dataset
@@ -316,6 +349,8 @@ def main():
             split="train" if general_args.split_idx is None else f"train_{general_args.split_idx}",
             embeddings_path=general_args.embeddings_path,
             split_files=general_args.split_file,
+            answer_types=("TEXT",),
+            cache_file=general_args.dataset_cache,  # Use cache file if provided
         )
 
         val_dataset = CTRATEDataset(
@@ -325,6 +360,8 @@ def main():
             embeddings_path=general_args.embeddings_path,
             n_samples=50,  # Limit the validation set size
             split_files=general_args.split_file,
+            answer_types=("TEXT",),
+            cache_file=general_args.dataset_cache_val,  # Use cache file if provided
         )
     else:
         raise ValueError(f"Unsupported dataset name: {general_args.dataset_name}")

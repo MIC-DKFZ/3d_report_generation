@@ -43,6 +43,8 @@ class PrintEvalBatchCallback(TrainerCallback):
 
         self.processor = processor
 
+        self.meteor_failed = False
+
     def on_evaluate(
         self,
         args,
@@ -89,9 +91,11 @@ class PrintEvalBatchCallback(TrainerCallback):
                 del inputs_prompt_only["batch_count"]
 
                 if model_str == "owl":
-                    inputs_prompt_only["image_embeds"] = model.vision2text_model(
-                        inputs_prompt_only["image_embeds"]
-                    ).to(torch.float16)
+                    # Process embeddings with explicit memory management
+                    embeddings = model.vision2text_model(inputs_prompt_only["image_embeds"])
+                    inputs_prompt_only["image_embeds"] = embeddings.to(torch.float16)
+                    del embeddings  # Explicitly delete intermediate tensor
+
                     outputs = model.language_model.generate(
                         **inputs_prompt_only,
                         max_new_tokens=256,  # Adjust max_new_tokens as needed
@@ -106,18 +110,27 @@ class PrintEvalBatchCallback(TrainerCallback):
                 decoded_output = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
                 decoded_gt = self.tokenizer.batch_decode(inputs["input_ids"], skip_special_tokens=True)
 
+                # Explicitly delete large tensors to free memory
+                del inputs_prompt_only
+                del outputs
+                torch.cuda.empty_cache()  # Clear CUDA cache periodically
+
                 if self.print_first_sample and i == 0:
-                    logger.info(f"First sample input: {decoded_gt[0]}")
-                    logger.info(f"First sample output: {decoded_output[0]}")
+                    logger.error(f"First sample input: {decoded_gt[0]}")
+                    logger.error(f"First sample output: {decoded_output[0]}")
 
                 decoded_gt_assistant_answer = (
                     decoded_gt[0].split("assistant\n")[-1].strip().split("assistant\n")[0].strip()
                 )
                 if model_str == "owl":
-                    decoded_gt_assistant_answer = re.search(r"'text':\s*'([^']*)'", decoded_gt_assistant_answer).group(
-                        1
-                    )
+                    try:
+                        decoded_gt_assistant_answer = re.search(
+                            r"'text':\s*'([^']*)'", decoded_gt_assistant_answer
+                        ).group(1)
+                    except Exception:
+                        pass
 
+                decoded_pred_assistant_answer = ""
                 try:
                     decoded_pred_assistant_answer = decoded_output[0].split("assistant\n")[-1].strip()
                     if model_str == "owl":
@@ -125,7 +138,7 @@ class PrintEvalBatchCallback(TrainerCallback):
                             r"'text':\s*'([^']*)'", decoded_pred_assistant_answer
                         ).group(1)
                 except Exception:
-                    decoded_pred_assistant_answer = ""
+                    pass
 
                 # store predictions and ground truths
                 preds.append(decoded_pred_assistant_answer)
@@ -155,35 +168,59 @@ class PrintEvalBatchCallback(TrainerCallback):
                     answer_gt,
                 )
 
-        # Log the Bleu score
-        bleu_score_1 = bleu_score(preds, gts, max_order=1)["bleu"]
-        bleu_score_2 = bleu_score(preds, gts, max_order=2)["bleu"]
-        bleu_score_3 = bleu_score(preds, gts, max_order=3)["bleu"]
-        bleu_score_4 = bleu_score(preds, gts, max_order=4)["bleu"]
-        logger.info(f"Bleu1 score: {bleu_score_1}")
-        logger.info(f"Bleu2 score: {bleu_score_2}")
-        logger.info(f"Bleu3 score: {bleu_score_3}")
-        logger.info(f"Bleu4 score: {bleu_score_4}")
+        try:
 
-        # Log the Bleu scores to WandB
-        wandb.log(
-            {
-                "bleu_score_1": bleu_score_1,
-                "bleu_score_2": bleu_score_2,
-                "bleu_score_3": bleu_score_3,
-                "bleu_score_4": bleu_score_4,
-            }
-        )
+            # Log the Bleu score
+            bleu_score_1 = bleu_score(preds, gts, max_order=1)["bleu"]
+            bleu_score_2 = bleu_score(preds, gts, max_order=2)["bleu"]
+            bleu_score_3 = bleu_score(preds, gts, max_order=3)["bleu"]
+            bleu_score_4 = bleu_score(preds, gts, max_order=4)["bleu"]
+            logger.info(f"Bleu1 score: {bleu_score_1}")
+            logger.info(f"Bleu2 score: {bleu_score_2}")
+            logger.info(f"Bleu3 score: {bleu_score_3}")
+            logger.info(f"Bleu4 score: {bleu_score_4}")
 
-        # Log the METOR score
-        meteor_score_val = meteor_score(preds, gts)["meteor"]
-        logger.info(f"METEOR score: {meteor_score_val}")
-        wandb.log({"meteor_score": meteor_score_val})
+            # Log the Bleu scores to WandB
+            wandb.log(
+                {
+                    "bleu_score_1": bleu_score_1,
+                    "bleu_score_2": bleu_score_2,
+                    "bleu_score_3": bleu_score_3,
+                    "bleu_score_4": bleu_score_4,
+                }
+            )
 
-        # Log the ROUGE score
-        rouge_score_val = rouge_score(preds, gts)["rougeL"]
-        logger.info(f"ROUGE score: {rouge_score_val}")
-        wandb.log({"rouge_score": rouge_score_val})
+        except Exception as e:
+            logger.error(f"Bleu score calculation failed: {e}")
+            bleu_score_1 = -1  # Use -1 to indicate failure in logging
+            bleu_score_2 = -1
+            bleu_score_3 = -1
+            bleu_score_4 = -1
+
+        if not self.meteor_failed:
+            try:
+                # Log the METEOR score
+                meteor_score_val = meteor_score(preds, gts)["meteor"]
+            except Exception as e:
+                logger.error(f"METEOR score calculation failed: {e}")
+                self.meteor_failed = True
+                meteor_score_val = -1  # Use -1 to indicate failure in logging
+
+            # # Log the METOR score
+            # meteor_score_val = meteor_score(preds, gts)["meteor"]
+            logger.info(f"METEOR score: {meteor_score_val}")
+            wandb.log({"meteor_score": meteor_score_val})
+
+        try:
+
+            # Log the ROUGE score
+            rouge_score_val = rouge_score(preds, gts)["rougeL"]
+            logger.info(f"ROUGE score: {rouge_score_val}")
+            wandb.log({"rouge_score": rouge_score_val})
+
+        except Exception as e:
+            logger.error(f"ROUGE score calculation failed: {e}")
+            rouge_score_val = -1
 
         logger.info(f"Correct QA: {n_correct_qa}/{self.sample_count}")
 
@@ -191,6 +228,14 @@ class PrintEvalBatchCallback(TrainerCallback):
         wandb.log({"correct_qa": n_correct_qa})
 
         model.train()  # Ensure model is back in training mode
+
+        # Clean up memory after evaluation
+        del preds
+        del gts
+        torch.cuda.empty_cache()
+        import gc
+
+        gc.collect()
 
 
 class LossLoggingCallback(TrainerCallback):

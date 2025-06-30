@@ -21,6 +21,7 @@ class OwlVLModel(AbstractVLMModel):
         embed_dim=896,
     ):
         super().__init__(model_id, train_only_vision_adapter)
+        self._model_str = "owl"  # Used for logging and evaluation
         self.output_dir = output_dir
         self.vision_dim = vision_dim
         self.embed_dim = embed_dim
@@ -74,7 +75,7 @@ class OwlVLModel(AbstractVLMModel):
         self.processor.inference_mode = False
 
         if self.checkpoint_path:
-            logger.info(f"Loading OwnOwlModel from checkpoint with path: {self.model_id}")
+            logger.info(f"Loading OwnOwlModel from checkpoint with path: {self.checkpoint_path}")
             # Create our custom OwnOwlModel
             self.model = OwnOwlModel.from_pretrained(
                 self.checkpoint_path,
@@ -84,6 +85,7 @@ class OwlVLModel(AbstractVLMModel):
                 embed_dim=self.embed_dim,
                 tokenizer=self.tokenizer,
                 debug=False,
+                local_files_only=True,
             )
 
             # Log the parameters of the vision2text_model
@@ -207,6 +209,8 @@ class OwlVLModel(AbstractVLMModel):
         else:
             images = torch.cat(image_tensors, dim=0)
 
+        images = images.float()  # Ensure images are in float32 format
+
         padded, padded_prompt_only, media_offsets = self.pad_inputs(
             input_ids_list, input_ids_list_prompt_only, media_offset_list
         )
@@ -231,6 +235,12 @@ class OwlVLModel(AbstractVLMModel):
             "batch_count": self.batch_count,
             "raw_samples": raw_samples,
         }
+
+        # # Print size in MB of the batch
+        # batch_size_mb = sum(tensor.numel() * tensor.element_size() for tensor in batch_out.values()) / (1024 * 1024)\
+        # logger.info(f"Batch size in MB: {batch_size_mb:.2f} MB")
+        # logger.info(f"Batch size: {len(batch)}")
+
         batch_out = transformers.BatchFeature(batch_out)
         self.batch_count += 1
 

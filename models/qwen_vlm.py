@@ -14,6 +14,8 @@ from utils.filter_batch import extract_raw_samples_from_batch
 from .abstract_vlm import AbstractVLMModel
 from utils import logger
 
+import numpy as np
+
 
 class QwenVLModel(AbstractVLMModel):
     def __init__(
@@ -25,6 +27,7 @@ class QwenVLModel(AbstractVLMModel):
         checkpoint_path=None,
     ):
         super().__init__(model_id, train_only_vision_adapter)
+        self._model_str = "qwen"
         self.output_dir = output_dir
         self.batch_count = 0
         # if base_model_id is None:
@@ -97,7 +100,9 @@ class QwenVLModel(AbstractVLMModel):
         ]
 
         embeddings = [
-            example["embedding"] for example in examples if "embedding" in example and example["embedding"] is not None
+            example["embedding"].astype(np.float32)
+            for example in examples
+            if "embedding" in example and example["embedding"] is not None
         ]
 
         batch = self.processor(text=texts, vision_embeddings=embeddings, return_tensors="pt", padding=True)

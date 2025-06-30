@@ -9,9 +9,7 @@ from utils import logger
 
 
 class OwnOwlModel(Qwen2PreTrainedModel):
-    def __init__(
-        self, config, language_model, vision_dim=1152, embed_dim=896, tokenizer=None, debug=False
-    ):
+    def __init__(self, config, language_model=None, vision_dim=1152, embed_dim=896, tokenizer=None, debug=False):
         super().__init__(config)
         self.language_model = language_model
 
@@ -56,9 +54,7 @@ class OwnOwlModel(Qwen2PreTrainedModel):
 
         return image_embeds
 
-    def forward(
-        self, image_embeds, input_ids, media_offset, attention_mask=None, labels=None, **kwargs
-    ):
+    def forward(self, image_embeds, input_ids, media_offset, attention_mask=None, labels=None, **kwargs):
         image_embeds_proj = self.forward_image(image_embeds)
 
         model_returns = self.language_model(
