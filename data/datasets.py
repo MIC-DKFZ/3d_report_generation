@@ -236,8 +236,13 @@ class MedicalImageDataset(Dataset, ABC):
             if "embedding_path" not in sample:
                 raise ValueError(f"Sample {index} does not have an embedding path.")
             result["embedding"] = self._load_embedding(sample["embedding_path"])
-            result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"]).half()
-            result["embedding"] = result["embedding"].astype(np.float16)  # Convert to float16 for memory efficiency
+            result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
+            if result["embedding_tensor"] is not None:
+                result["embedding_tensor"] = result["embedding_tensor"].half()  # Ensure tensor is
+            if result["embedding"] is not None:
+                result["embedding"] = result["embedding"].astype(
+                    np.float16
+                )  # Convert to float16 for memory efficiency
 
         return result
 

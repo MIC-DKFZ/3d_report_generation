@@ -208,8 +208,7 @@ class OwlVLModel(AbstractVLMModel):
             images = None
         else:
             images = torch.cat(image_tensors, dim=0)
-
-        images = images.float()  # Ensure images are in float32 format
+            images = images.float()  # Ensure images are in float32 format
 
         padded, padded_prompt_only, media_offsets = self.pad_inputs(
             input_ids_list, input_ids_list_prompt_only, media_offset_list
