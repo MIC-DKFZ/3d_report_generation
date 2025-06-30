@@ -275,7 +275,7 @@ def main():
         "logging_steps": 10,
         "eval_steps": 50,
         "eval_strategy": "steps",
-        "save_strategy": "steps",
+        "save_strategy": "best",
         "save_steps": 50,
         "save_total_limit": 2,
         "metric_for_best_model": "eval_loss",
@@ -290,6 +290,8 @@ def main():
         # Memory management settings
         "torch_empty_cache_steps": 10,  # Clear cache every 10 steps
         "dataloader_drop_last": True,  # Drop incomplete batches
+        "metric_for_best_model": "eval_rouge_score",  # Changed from "eval_loss"
+        "greater_is_better": True,  # Changed from False (higher ROUGE is better)
     }
     general_args, sft_trainer_args = parse_args(default_sft_trainer_config)
 

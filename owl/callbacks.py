@@ -55,6 +55,10 @@ class PrintEvalBatchCallback(TrainerCallback):
         metrics=None,
         **kwargs,
     ):
+
+        if metrics is not None:
+            metrics["eval_rouge_score"] = -1  # Initialize to -1 in case of failure
+
         # TODO: for DDP check something like trainer.is_world_process_zero() here
         if state.epoch - self.last_epoch < self.max_diff:
             return
@@ -221,6 +225,9 @@ class PrintEvalBatchCallback(TrainerCallback):
         except Exception as e:
             logger.error(f"ROUGE score calculation failed: {e}")
             rouge_score_val = -1
+
+        if metrics is not None:
+            metrics["eval_rouge_score"] = rouge_score_val
 
         logger.info(f"Correct QA: {n_correct_qa}/{self.sample_count}")
 
