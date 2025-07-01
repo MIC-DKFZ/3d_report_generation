@@ -141,6 +141,7 @@ class UnifiedVLMTrainer:
             PrintEvalBatchCallback(
                 tokenizer=self.vlm_model.tokenizer,
                 processor=self.vlm_model.processor,
+                sample_count=len(val_dataset),
             ),
             LossLoggingCallback(),
         ]
@@ -237,6 +238,7 @@ def parse_args(default_config=None):
     general_parser.add_argument(
         "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
     )
+    general_parser.add_argument("--n_val_samples", type=int, default=50, help="Number of validation samples to use")
 
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
@@ -302,7 +304,7 @@ def main():
         "logging_steps": 10,
         "eval_steps": 50,
         "eval_strategy": "steps",
-        "save_strategy": "best",
+        "save_strategy": "steps",
         "save_steps": 50,
         "save_total_limit": 2,
         "metric_for_best_model": "eval_loss",
@@ -371,7 +373,7 @@ def main():
             model_name=general_args.model_type,
             split="val",
             embeddings_path=general_args.embeddings_path,
-            n_samples=50,  # Limit the validation set size
+            n_samples=general_args.n_val_samples,  # Limit the validation set size
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
         )
     elif general_args.dataset_name == "ctrate":
@@ -391,7 +393,7 @@ def main():
             model_name=general_args.model_type,
             split="val" if general_args.split_idx is None else f"val_{general_args.split_idx}",
             embeddings_path=general_args.embeddings_path,
-            n_samples=50,  # Limit the validation set size
+            n_samples=general_args.n_val_samples,  # Limit the validation set size
             split_files=general_args.split_file,
             answer_types=("TEXT",),
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
