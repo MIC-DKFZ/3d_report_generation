@@ -45,6 +45,9 @@ class PrintEvalBatchCallback(TrainerCallback):
 
         self.meteor_failed = False
 
+        # Track best rouge score for model saving
+        self.best_rouge_score = -1.0
+
     def on_evaluate(
         self,
         args,
@@ -58,6 +61,12 @@ class PrintEvalBatchCallback(TrainerCallback):
 
         if metrics is not None:
             metrics["eval_rouge_score"] = -1  # Initialize to -1 in case of failure
+
+        # return
+
+        # for DDP check something like trainer.is_world_process_zero() here
+        if not state.is_world_process_zero:
+            return
 
         # TODO: for DDP check something like trainer.is_world_process_zero() here
         if state.epoch - self.last_epoch < self.max_diff:
@@ -227,22 +236,42 @@ class PrintEvalBatchCallback(TrainerCallback):
             rouge_score_val = -1
 
         if metrics is not None:
-            metrics["eval_rouge_score"] = rouge_score_val
+            metrics["eval_rouge_score"] = float(rouge_score_val)
 
         logger.info(f"Correct QA: {n_correct_qa}/{self.sample_count}")
 
         wandb.log({"eval_table": self.eval_table})
         wandb.log({"correct_qa": n_correct_qa})
 
+        # Save model if we found a new best rouge score
+        if rouge_score_val > self.best_rouge_score:
+            self.best_rouge_score = rouge_score_val
+            logger.info(f"New best ROUGE score: {rouge_score_val:.4f} - Saving model checkpoint")
+
+            # Create best model directory
+            best_model_dir = os.path.join(args.output_dir, "best_model")
+            os.makedirs(best_model_dir, exist_ok=True)
+
+            # Save the model
+            model.save_pretrained(best_model_dir)
+            if hasattr(self.tokenizer, "save_pretrained"):
+                self.tokenizer.save_pretrained(best_model_dir)
+            if hasattr(self.processor, "save_pretrained"):
+                self.processor.save_pretrained(best_model_dir)
+
+            # Log to wandb
+            wandb.log({"best_rouge_score": self.best_rouge_score})
+            logger.info(f"Model saved to: {best_model_dir}")
+
         model.train()  # Ensure model is back in training mode
 
         # Clean up memory after evaluation
-        del preds
-        del gts
-        torch.cuda.empty_cache()
-        import gc
+        # del preds
+        # del gts
+        # torch.cuda.empty_cache()
+        # import gc
 
-        gc.collect()
+        # gc.collect()
 
 
 class LossLoggingCallback(TrainerCallback):
