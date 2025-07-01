@@ -17,7 +17,9 @@ from utils import logger
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
 
-def format_into_message(question, answer, model_name, system_text=SYSTEM_TEXT, embedding_path=None):
+def format_into_message(
+    question, answer, model_name, system_text=SYSTEM_TEXT, embedding_path=None
+):
 
     system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
 
@@ -69,6 +71,7 @@ class MedicalImageDataset(Dataset, ABC):
         split_files=None,
         return_embedding=True,
         cache_file=None,
+        embedding_constant=None,
     ):
         super().__init__()
 
@@ -77,15 +80,20 @@ class MedicalImageDataset(Dataset, ABC):
 
         self.model_name = model_name
         self.split = split
-        self.embeddings_path = Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
+        self.embeddings_path = (
+            Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
+        )
         self.n_samples = n_samples
         self.tokenize_fn = tokenize_fn
         self.split_files = split_files
         self.return_embedding = return_embedding
+        self.embedding_constant = embedding_constant
         self.cache_file = cache_file
 
         if isinstance(answer_types, str):
-            answer_types = [answer_types]  # Convert single string to list of strings for consistency
+            answer_types = [
+                answer_types
+            ]  # Convert single string to list of strings for consistency
 
         self.answer_type_dict = {}
         for answer_type in answer_types:
@@ -171,7 +179,9 @@ class MedicalImageDataset(Dataset, ABC):
         for sample in tqdm(self.samples, desc="Tokenizing samples"):
             # sample["tokenized"] = {}
             sample["tokenized_qa_text_tokens"] = self.tokenize_fn(sample["formatted_qa"])
-            sample["tokenized_qa_text_prompt_only_tokens"] = self.tokenize_fn(sample["formatted_qa_prompt_only"])
+            sample["tokenized_qa_text_prompt_only_tokens"] = self.tokenize_fn(
+                sample["formatted_qa_prompt_only"]
+            )
 
     def _filter_samples(self, samples):
         """Filter samples based on answer type"""
@@ -202,9 +212,13 @@ class MedicalImageDataset(Dataset, ABC):
                 with np.load(embedding_path) as npz_file:
                     # Attempt to load the "embeddings" key if it exists, otherwise load the first array
                     if "embedding" in npz_file:
-                        embedding = npz_file["embeddings"].copy()  # Make a copy to avoid reference issues
+                        embedding = npz_file[
+                            "embeddings"
+                        ].copy()  # Make a copy to avoid reference issues
                     else:
-                        embedding = npz_file[npz_file.files[0]].copy()  # Make a copy to avoid reference issues
+                        embedding = npz_file[
+                            npz_file.files[0]
+                        ].copy()  # Make a copy to avoid reference issues
                 return embedding
             else:
                 raise ValueError(f"Unsupported embedding file format: {embedding_path}")
@@ -233,9 +247,12 @@ class MedicalImageDataset(Dataset, ABC):
 
         if self.return_embedding:
             # Load embedding and convert to tensor
-            if "embedding_path" not in sample:
-                raise ValueError(f"Sample {index} does not have an embedding path.")
-            result["embedding"] = self._load_embedding(sample["embedding_path"])
+            if self.embedding_constant is None:
+                if "embedding_path" not in sample:
+                    raise ValueError(f"Sample {index} does not have an embedding path.")
+                result["embedding"] = self._load_embedding(sample["embedding_path"])
+            else:
+                result["embedding"] = np.full((1, 864, 24, 24, 24), self.embedding_constant)
             result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
             if result["embedding_tensor"] is not None:
                 result["embedding_tensor"] = result["embedding_tensor"].half()  # Ensure tensor is

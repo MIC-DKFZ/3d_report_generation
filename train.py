@@ -21,7 +21,11 @@ from models.qwen_vlm import QwenVLModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from utils import logger
 from utils.helper import seed_everything
-from utils.memory_utils import log_memory_usage, setup_memory_efficient_training, aggressive_cleanup
+from utils.memory_utils import (
+    aggressive_cleanup,
+    log_memory_usage,
+    setup_memory_efficient_training,
+)
 
 
 class UnifiedVLMTrainer:
@@ -121,7 +125,9 @@ class UnifiedVLMTrainer:
 
         wandb.init(
             project="mic-rocket-vlm",
-            name=datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{type(self.vlm_model).__name__}_run_{uuid4()}.log"),
+            name=datetime.now().strftime(
+                f"%Y-%m-%d_%H-%M-%S_train_{type(self.vlm_model).__name__}_run_{uuid4()}.log"
+            ),
             reinit=True,
             group=f"{type(self.vlm_model).__name__}_run",
         )
@@ -186,7 +192,9 @@ def parse_args(default_config=None):
         help="Type of VLM model to train (owl or qwen)",
     )
     general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
-    general_parser.add_argument("--dataset_path", type=str, required=True, help="Path to the dataset JSON file")
+    general_parser.add_argument(
+        "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
+    )
     general_parser.add_argument(
         "--output_dir",
         type=str,
@@ -199,16 +207,33 @@ def parse_args(default_config=None):
         required=True,
         help="Path to the vision embeddings",
     )
+
+    general_parser.add_argument(
+        "--embedding_constant",
+        type=float,
+        default=None,
+        help="Constant value for training language only baseline (! Do not set this when training a VLM !)",
+    )
     general_parser.add_argument(
         "--train_only_vision_adapter",
         action="store_true",
         help="Train only the vision adapter (Qwen only)",
     )
-    general_parser.add_argument("--train_config", type=str, help="Path to config file (YAML or JSON)")
-    general_parser.add_argument("--split_file", type=str, help="Path to cross validation split file (JSON)")
-    general_parser.add_argument("--split_idx", type=int, default=None, help="Index of the split to use (0-4)")
-    general_parser.add_argument("--dataset_name", type=str, default="ctrate", help="Name of the dataset")
-    general_parser.add_argument("--dataset_cache", type=str, default=None, help="Path to cache file for the dataset")
+    general_parser.add_argument(
+        "--train_config", type=str, help="Path to config file (YAML or JSON)"
+    )
+    general_parser.add_argument(
+        "--split_file", type=str, help="Path to cross validation split file (JSON)"
+    )
+    general_parser.add_argument(
+        "--split_idx", type=int, default=None, help="Index of the split to use (0-4)"
+    )
+    general_parser.add_argument(
+        "--dataset_name", type=str, default="ctrate", help="Name of the dataset"
+    )
+    general_parser.add_argument(
+        "--dataset_cache", type=str, default=None, help="Path to cache file for the dataset"
+    )
     general_parser.add_argument(
         "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
     )
@@ -216,7 +241,9 @@ def parse_args(default_config=None):
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
 
-    sft_trainer_parser = argparse.ArgumentParser(description="SFTTrainer args which overwrite the train_config file.")
+    sft_trainer_parser = argparse.ArgumentParser(
+        description="SFTTrainer args which overwrite the train_config file."
+    )
 
     # Load config file if provided
     if general_args.train_config and os.path.exists(general_args.train_config):
@@ -295,10 +322,14 @@ def main():
     }
     general_args, sft_trainer_args = parse_args(default_sft_trainer_config)
 
-    log_file = os.path.join(general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}.log"))
+    log_file = os.path.join(
+        general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}.log")
+    )
     logger.add(log_file)
 
-    output_dir = os.path.join(general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}"))
+    output_dir = os.path.join(
+        general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}")
+    )
     os.makedirs(output_dir, exist_ok=True)
     general_args.output_dir = output_dir
 
@@ -368,7 +399,13 @@ def main():
     else:
         raise ValueError(f"Unsupported dataset name: {general_args.dataset_name}")
 
-    logger.info(f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples")
+    if general_args.embedding_constant is not None:
+        train_dataset.embedding_constant = general_args.embedding_constant
+        val_dataset.embedding_constant = general_args.embedding_constant
+
+    logger.info(
+        f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
+    )
 
     # Create the trainer and train the model
     trainer = UnifiedVLMTrainer(
