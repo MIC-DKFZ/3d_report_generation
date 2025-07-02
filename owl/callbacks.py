@@ -83,16 +83,20 @@ class PrintEvalBatchCallback(TrainerCallback):
         preds = []
         gts = []
 
-        self.eval_table = wandb.Table(
-            columns=[
-                "Epoch",
-                "Sample Index",
-                "Generated Output",
-                "Ground Truth",
-                "Answer Pred",
-                "Answer GT",
-            ]
-        )
+        # Only create wandb table if wandb is initialized (i.e., on main process)
+        if wandb.run is not None:
+            self.eval_table = wandb.Table(
+                columns=[
+                    "Epoch",
+                    "Sample Index",
+                    "Generated Output",
+                    "Ground Truth",
+                    "Answer Pred",
+                    "Answer GT",
+                ]
+            )
+        else:
+            self.eval_table = None
         model.eval()  # Ensure model is in evaluation mode
         with torch.no_grad():  # Disable gradient calculations
             for i, inputs in enumerate(eval_dataloader):
