@@ -123,14 +123,44 @@ class UnifiedVLMTrainer:
         else:
             model_to_train = self.vlm_model.model
 
-        wandb.init(
-            project="mic-rocket-vlm",
-            name=datetime.now().strftime(
-                f"%Y-%m-%d_%H-%M-%S_train_{type(self.vlm_model).__name__}_run_{uuid4()}.log"
-            ),
-            reinit=True,
-            group=f"{type(self.vlm_model).__name__}_run",
+        # Create comprehensive config for WandB logging
+        general_args = getattr(self, "general_args", None)
+        dataset_info = getattr(self, "dataset_info", None)
+        config_dict = create_comprehensive_wandb_config(
+            self.vlm_model, self.sft_trainer_config, general_args, dataset_info
         )
+        # Ensure trainable_params are included in the config
+        config_dict["trainable_params"] = trainable_params
+
+        # Only initialize wandb on the main process (rank 0) for DDP
+        should_init_wandb = (
+            int(os.environ.get("LOCAL_RANK", "0")) == 0 or int(os.environ.get("RANK", "0")) == 0
+        )
+
+        if should_init_wandb:
+            wandb.init(
+                entity="mic-rocket-vlm",
+                project="workshop_runs",
+                name=datetime.now().strftime(
+                    f"%Y-%m-%d_%H-%M-%S_train_{type(self.vlm_model).__name__}_run_{uuid4()}"
+                ),
+                reinit=True,
+                group=f"{type(self.vlm_model).__name__}_run",
+                config=config_dict,
+            )
+
+            # Ensure wandb properly logs hyperparameters in offline mode
+            ensure_wandb_config_logging()
+
+            # Additional explicit config update for offline mode robustness
+            if os.getenv("WANDB_MODE", "online").lower() == "offline":
+                # Re-update config one more time to ensure persistence
+                wandb.config.update(config_dict, allow_val_change=True)
+                logger.info("Offline mode: Config explicitly updated after init")
+        else:
+            logger.info(
+                f"Skipping wandb init on rank {os.environ.get('RANK', 'unknown')}/{os.environ.get('LOCAL_RANK', 'unknown')}"
+            )
 
         # Configure training arguments
         training_args = self.get_training_args()
@@ -145,8 +175,6 @@ class UnifiedVLMTrainer:
             ),
             LossLoggingCallback(),
         ]
-        # else:
-        #     callbacks = [LossLoggingCallback()]
 
         # Initialize SFT trainer
         self.trainer = SFTTrainer(
@@ -177,6 +205,15 @@ class UnifiedVLMTrainer:
         # Perform aggressive cleanup
         aggressive_cleanup()
         log_memory_usage("After Cleanup")
+
+        # Final config validation for offline mode
+        if os.getenv("WANDB_MODE", "online").lower() == "offline" and wandb.run is not None:
+            final_config = dict(wandb.config)
+            logger.info(f"Final config verification - Total keys: {len(final_config)}")
+            if len(final_config) < 5:  # Arbitrary threshold - expect at least some config
+                logger.warning(
+                    "Suspiciously few config keys logged - may indicate config persistence issue"
+                )
 
         wandb.finish()
 
@@ -238,7 +275,9 @@ def parse_args(default_config=None):
     general_parser.add_argument(
         "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
     )
-    general_parser.add_argument("--n_val_samples", type=int, default=50, help="Number of validation samples to use")
+    general_parser.add_argument(
+        "--n_val_samples", type=int, default=50, help="Number of validation samples to use"
+    )
 
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
@@ -291,6 +330,111 @@ def parse_args(default_config=None):
     return general_args, sft_trainer_parsed
 
 
+def ensure_wandb_config_logging():
+    """
+    Ensure that wandb properly logs hyperparameters in offline mode.
+    This function updates the wandb config with environment variables and additional metadata.
+    """
+    if wandb.run is not None:
+        # Add environment variables that are relevant to the training
+        env_config = {
+            "WANDB_MODE": os.getenv("WANDB_MODE", "online"),
+            "WANDB_DIR": os.getenv("WANDB_DIR", ""),
+            "SLURM_JOB_ID": os.getenv("SLURM_JOB_ID", ""),
+            "CUDA_VISIBLE_DEVICES": os.getenv("CUDA_VISIBLE_DEVICES", ""),
+            "NODE_COUNT": os.getenv("SLURM_NNODES", "1"),
+            "GPU_COUNT": os.getenv("GPUS_PER_NODE", "1"),
+        }
+
+        # Update wandb config with environment info
+        wandb.config.update({"environment": env_config}, allow_val_change=True)
+
+        # In offline mode, explicitly save the current config to ensure persistence
+        if os.getenv("WANDB_MODE", "online").lower() == "offline":
+            try:
+                # Force config to be saved by accessing and logging all current config values
+                config_dict = dict(wandb.config)
+
+                # Log a summary of the configuration
+                logger.info(
+                    f"Offline mode - ensuring config persistence. Total config keys: {len(config_dict)}"
+                )
+
+                # Re-update the config to ensure it's properly saved in offline mode
+                wandb.config.update(config_dict, allow_val_change=True)
+
+                # Save config to a backup JSON file in the run directory for extra safety
+                if hasattr(wandb.run, "dir") and wandb.run.dir:
+                    config_backup_path = os.path.join(wandb.run.dir, "config_backup.json")
+                    try:
+                        import json
+
+                        with open(config_backup_path, "w") as f:
+                            json.dump(config_dict, f, indent=2, default=str)
+                        logger.info(f"Config backup saved to: {config_backup_path}")
+                    except Exception as e:
+                        logger.warning(f"Could not save config backup: {e}")
+
+            except Exception as e:
+                logger.warning(f"Error in offline config handling: {e}")
+
+        # Log the configuration to ensure it's saved
+        logger.info(f"Updated wandb config with environment variables: {env_config}")
+        logger.info(f"Total config keys logged: {len(dict(wandb.config))}")
+
+
+def create_comprehensive_wandb_config(
+    vlm_model, sft_trainer_config, general_args=None, dataset_info=None
+):
+    """
+    Create a comprehensive configuration dictionary for WandB logging.
+    This ensures all hyperparameters are properly captured, especially for offline mode.
+    """
+    slurm_job_id = os.getenv("SLURM_JOB_ID", "local_run")
+    username = os.getenv("USER", "unknown_user")
+
+    # Start with basic model and training info
+    config_dict = {
+        "model_name": type(vlm_model).__name__,
+        "model_id": getattr(vlm_model, "model_id", "unknown"),
+        "trainable_params": vlm_model.get_trainable_params(),
+        "training_args": sft_trainer_config,
+        "slurm_job_id": slurm_job_id,
+        "username": username,
+        "timestamp": datetime.now().isoformat(),
+        "wandb_mode": os.getenv("WANDB_MODE", "online"),
+    }
+
+    # Add general args if available
+    if general_args is not None:
+        config_dict.update({"general_args": general_args})
+
+    # Add dataset info if available
+    if dataset_info is not None:
+        config_dict.update({"dataset_info": dataset_info})
+
+    # Add model-specific config if available
+    if hasattr(vlm_model, "get_config_dict"):
+        model_config = vlm_model.get_config_dict()
+        config_dict.update({"model_config": model_config})
+
+    # Add environment information
+    env_config = {
+        "WANDB_MODE": os.getenv("WANDB_MODE", "online"),
+        "WANDB_DIR": os.getenv("WANDB_DIR", ""),
+        "SLURM_JOB_ID": os.getenv("SLURM_JOB_ID", ""),
+        "CUDA_VISIBLE_DEVICES": os.getenv("CUDA_VISIBLE_DEVICES", ""),
+        "NODE_COUNT": os.getenv("SLURM_NNODES", "1"),
+        "GPU_COUNT": os.getenv("GPUS_PER_NODE", "1"),
+        "PYTHONPATH": os.getenv("PYTHONPATH", ""),
+        "TRANSFORMERS_OFFLINE": os.getenv("TRANSFORMERS_OFFLINE", ""),
+        "HF_DATASETS_OFFLINE": os.getenv("HF_DATASETS_OFFLINE", ""),
+    }
+    config_dict.update({"environment": env_config})
+
+    return config_dict
+
+
 def main():
     default_sft_trainer_config = {
         "num_train_epochs": 5,
@@ -304,6 +448,7 @@ def main():
         "logging_steps": 10,
         "eval_steps": 50,
         "eval_strategy": "steps",
+        # "save_strategy": "best",
         "save_strategy": "steps",
         "save_steps": 50,
         "save_total_limit": 2,
@@ -318,7 +463,7 @@ def main():
         "report_to": ["wandb"],
         # Memory management settings
         "torch_empty_cache_steps": 10,  # Clear cache every 10 steps
-        "dataloader_drop_last": True,  # Drop incomplete batches
+        # "dataloader_drop_last": True,  # Drop incomplete batches
         "metric_for_best_model": "eval_rouge_score",  # Changed from "eval_loss"
         "greater_is_better": True,  # Changed from False (higher ROUGE is better)
     }
@@ -415,6 +560,15 @@ def main():
         output_dir=general_args.output_dir,
         sft_trainer_config=vars(sft_trainer_args),
     )
+
+    # Update trainer with additional config for wandb logging
+    trainer.general_args = vars(general_args)
+    trainer.dataset_info = {
+        "dataset_name": general_args.dataset_name,
+        "train_size": len(train_dataset),
+        "val_size": len(val_dataset),
+    }
+
     trainer.train(train_dataset, val_dataset)
 
 
