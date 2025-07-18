@@ -547,6 +547,8 @@ def main():
         raise ValueError(f"Unsupported dataset name: {general_args.dataset_name}")
 
     if general_args.embedding_constant is not None:
+        logger.info(f"Setting embedding constant to {general_args.embedding_constant}")
+        print(f"Setting embedding constant to {general_args.embedding_constant}")
         train_dataset.embedding_constant = general_args.embedding_constant
         val_dataset.embedding_constant = general_args.embedding_constant
 
