@@ -1,6 +1,5 @@
 import os
-from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Type, TypeVar
-
+from typing import Any, Dict, List, Optional, Set, Tuple, Type, TypedDict, TypeVar
 
 ExtractorType = TypeVar("ExtractorType", bound="AMOSMMExtractor")
 
@@ -77,7 +76,9 @@ class AMOSMMExtractor:
         }
 
     @staticmethod
-    def _extract_region_question(region: str, text: str, question_type: str) -> Dict[str, Any] | None:
+    def _extract_region_question(
+        region: str, text: str, question_type: str
+    ) -> Dict[str, Any] | None:
         """
         Helper method to extract formatted texts for region questions.
         """
@@ -87,7 +88,11 @@ class AMOSMMExtractor:
         if isinstance(text, list):
             text = ", ".join(text)
 
-        question_prefix = "What are the findings in" if question_type == "FINDINGS" else "What is the impression of "
+        question_prefix = (
+            "What are the findings in"
+            if question_type == "FINDINGS"
+            else "What is the impression of "
+        )
 
         return {
             "region": region,
@@ -135,8 +140,8 @@ class AMOSMMExtractor:
 
                 # Create formatted region question
                 if region_findings:
-                    extracted_report["finding_questions"][region] = AMOSMMExtractor.extract_finding_question(
-                        region, region_findings
+                    extracted_report["finding_questions"][region] = (
+                        AMOSMMExtractor.extract_finding_question(region, region_findings)
                     )
 
         # Extract impression and create impression question
@@ -146,8 +151,8 @@ class AMOSMMExtractor:
 
                 # Create formatted impression question
                 if region_impressions:
-                    extracted_report["impression_question"][region] = AMOSMMExtractor.extract_impressions_question(
-                        region, region_impressions
+                    extracted_report["impression_question"][region] = (
+                        AMOSMMExtractor.extract_impressions_question(region, region_impressions)
                     )
 
         return extracted_report
@@ -167,7 +172,9 @@ class AMOSMMExtractor:
 
         if "labels" in sample:
             if "report" in sample["labels"]:
-                report_dict = AMOSMMExtractor.extract_report(sample["labels"]["report"])  # TODO Throw out report here?
+                report_dict = AMOSMMExtractor.extract_report(
+                    sample["labels"]["report"]
+                )  # TODO Throw out report here?
                 extracted["report"]["raw"] = report_dict["raw"]
                 extracted["report"]["findings"] = report_dict["findings"]
                 extracted["report"]["impression"] = report_dict["impression"]
@@ -189,7 +196,9 @@ class AMOSMMExtractor:
         return extracted
 
     @classmethod
-    def extract_sample_list(cls: Type[ExtractorType], samples: List[Dict[str, Any]]) -> List[QAItemDict]:
+    def extract_sample_list(
+        cls: Type[ExtractorType], samples: List[Dict[str, Any]]
+    ) -> List[QAItemDict]:
         """
         Extract all relevant information from a list of AMOS-MM samples.
         """
@@ -227,7 +236,9 @@ class AMOSMMRegionExtractor(AMOSMMExtractor):
             findings = sample["labels"]
             extracted["report"]["findings"] = findings
 
-            extracted["qa_items"].append(AMOSMMExtractor.extract_finding_question(sample["region"], findings))
+            extracted["qa_items"].append(
+                AMOSMMExtractor.extract_finding_question(sample["region"], findings)
+            )
 
         return extracted
 
@@ -330,7 +341,7 @@ class CTRATEExtractor:
     ]
 
     @staticmethod
-    def extract_sample_list(samples):
+    def extract_sample_list(samples, include_cls_text_gen: bool = False):
         """Extract sample list from raw data"""
         extracted_samples = []
 
@@ -357,33 +368,39 @@ class CTRATEExtractor:
 
             # Report generation sample
             if "report_gen" in sample["tasks"] and sample["tasks"]["report_gen"]:
-                extracted_samples.append(
-                    {
-                        "image_id": sample["image_id"],
-                        "image_path": sample["embedding_path"],
-                        "question": "Generate a detailed report for this CT scan.",
-                        "answer": sample["tasks"]["report_gen"],
-                        "full_answer": sample["tasks"]["report_gen"],
-                        "answer_type": "TEXT",
-                        "answer_subtype": "REPORT",
-                        "system_text": "You are a medical imaging AI trained to analyze CT scans.",
-                    }
-                )
+                extracted_sample = {
+                    "image_id": sample["image_id"],
+                    "image_path": sample["embedding_path"],
+                    "question": "Generate a detailed report for this CT scan.",
+                    "answer": sample["tasks"]["report_gen"],
+                    "full_answer": sample["tasks"]["report_gen"],
+                    "answer_type": "TEXT",
+                    "answer_subtype": "REPORT",
+                    "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                }
+                if include_cls_text_gen:
+                    extracted_sample[
+                        "question"
+                    ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
+                extracted_samples.append(extracted_sample)
 
             # Diagnosis sample
             if "diagnosis" in sample["tasks"] and sample["tasks"]["diagnosis"]:
-                extracted_samples.append(
-                    {
-                        "image_id": sample["image_id"],
-                        "image_path": sample["embedding_path"],
-                        "question": "What is the diagnosis for this CT scan?",
-                        "answer": sample["tasks"]["diagnosis"],
-                        "full_answer": sample["tasks"]["diagnosis"],
-                        "answer_type": "TEXT",
-                        "answer_subtype": "DIAGNOSIS",
-                        "system_text": "You are a medical imaging AI trained to analyze CT scans.",
-                    }
-                )
+                extracted_sample = {
+                    "image_id": sample["image_id"],
+                    "image_path": sample["embedding_path"],
+                    "question": "What is the diagnosis for this CT scan?",
+                    "answer": sample["tasks"]["diagnosis"],
+                    "full_answer": sample["tasks"]["diagnosis"],
+                    "answer_type": "TEXT",
+                    "answer_subtype": "DIAGNOSIS",
+                    "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                }
+                if include_cls_text_gen:
+                    extracted_sample[
+                        "question"
+                    ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
+                extracted_samples.append(extracted_sample)
 
         # convert to QAItemDict
         extracted_samples = [QAItemDict(sample) for sample in extracted_samples]

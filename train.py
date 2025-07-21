@@ -253,6 +253,11 @@ def parse_args(default_config=None):
         help="Constant value for training language only baseline (! Do not set this when training a VLM !)",
     )
     general_parser.add_argument(
+        "--include_cls_text_gen",
+        action="store_true",
+        help="Include classes from classification for text generation (report/diagnosis) (CTRATE only)",
+    )
+    general_parser.add_argument(
         "--train_only_vision_adapter",
         action="store_true",
         help="Train only the vision adapter (Qwen only)",
@@ -530,6 +535,7 @@ def main():
             embeddings_path=general_args.embeddings_path,
             split_files=general_args.split_file,
             answer_types=("TEXT",),
+            include_cls_text_gen=general_args.include_cls_text_gen,
             cache_file=general_args.dataset_cache,  # Use cache file if provided
         )
 
@@ -541,6 +547,7 @@ def main():
             n_samples=general_args.n_val_samples,  # Limit the validation set size
             split_files=general_args.split_file,
             answer_types=("TEXT",),
+            include_cls_text_gen=general_args.include_cls_text_gen,
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
         )
     else:

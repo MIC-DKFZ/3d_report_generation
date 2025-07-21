@@ -1,17 +1,22 @@
 import json
 import os
+import pickle
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Tuple
-from tqdm import tqdm
-import yaml
 
 import numpy as np
 import torch
+import yaml
 from torch.utils.data import Dataset
-import pickle
+from tqdm import tqdm
 
-from data.extractors import AMOSMMExtractor, AMOSMMRegionExtractor, LIDCExtractor, CTRATEExtractor
+from data.extractors import (
+    AMOSMMExtractor,
+    AMOSMMRegionExtractor,
+    CTRATEExtractor,
+    LIDCExtractor,
+)
 from utils import logger
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
@@ -72,6 +77,7 @@ class MedicalImageDataset(Dataset, ABC):
         return_embedding=True,
         cache_file=None,
         embedding_constant=None,
+        include_cls_text_gen=False,
     ):
         super().__init__()
 
@@ -88,6 +94,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.split_files = split_files
         self.return_embedding = return_embedding
         self.embedding_constant = embedding_constant
+        self.include_cls_text_gen = include_cls_text_gen
         self.cache_file = cache_file
 
         if isinstance(answer_types, str):
@@ -522,5 +529,7 @@ class CTRATEDataset(MedicalImageDataset):
 
     def extract_sample_list(self, samples):
         """Extract sample list from raw data"""
-        extracted_samples = CTRATEExtractor.extract_sample_list(samples)
+        extracted_samples = CTRATEExtractor.extract_sample_list(
+            samples, include_cls_text_gen=self.include_cls_text_gen
+        )
         return extracted_samples
