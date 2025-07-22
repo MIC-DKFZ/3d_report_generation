@@ -1,38 +1,21 @@
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from datasets import load_dataset
-from peft import LoraConfig, get_peft_model
-from qwen_vl_utils import process_vision_info
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
-from transformers import (
-    BitsAndBytesConfig,
-    Qwen2VLForConditionalGeneration,
-    Qwen2VLProcessor,
-)
+
 from transformers.activations import QuickGELUActivation
-from transformers.models.qwen2_vl.modeling_qwen2_vl import (
-    _CONFIG_FOR_DOC,
-    ACT2FN,
-    QWEN2_VL_INPUTS_DOCSTRING,
-    Qwen2VLCausalLMOutputWithPast,
-    VisionMlp,
-)
-from trl import SFTConfig, SFTTrainer
 
-"""
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration as QwenVLForConditionalGeneration
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLCausalLMOutputWithPast as QwenVLCausalLMOutputWithPast
+from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as _CONFIG_FOR_DOC
 
-    def __init__(self, embedding_dim: int, embed_dim: int):
-        super().__init__()
-        self.adapter = VisionMlp(
-            dim=embedding_dim,  # 864
-            hidden_dim=embed_dim,  # 1536
-            hidden_act="quick_gelu"
-        )
-"""
+from transformers.cache_utils import Cache
+from transformers.processing_utils import Unpack
+from  transformers.utils import auto_docstring, can_return_tuple, TransformersKwargs
 
+#from transformers.models.qwen2_vl.modeling_qwen2_vl
 
 class VisionAdapter(nn.Module):
     def __init__(self, embedding_dim: int, embed_dim: int):
@@ -307,96 +290,44 @@ from transformers.utils import (
 )
 
 
-class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
+class QwenVLForConditionalGeneration3D(QwenVLForConditionalGeneration):
     def __init__(self, config, reduce_block=[2, 2, 2]):
         super().__init__(config)
 
         self.reduce_block = reduce_block
         self.vision_adapter = VisionAdapterReduceBlocks(
-            embedding_dim=864, embed_dim=1536, reduce_block=reduce_block
+            embedding_dim=864, embed_dim=2048, reduce_block=reduce_block
         )
         # self.vision_adapter = VisionAdapterHeterogeneous(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
 
-    @add_start_docstrings_to_model_forward(QWEN2_VL_INPUTS_DOCSTRING)
-    @replace_return_docstrings(
-        output_type=Qwen2VLCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
-    )
     def forward(
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        past_key_values: Optional[Cache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
         pixel_values: Optional[torch.Tensor] = None,
         pixel_values_videos: Optional[torch.FloatTensor] = None,
         image_grid_thw: Optional[torch.LongTensor] = None,
         video_grid_thw: Optional[torch.LongTensor] = None,
         rope_deltas: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        **kwargs,
-    ) -> Union[Tuple, Qwen2VLCausalLMOutputWithPast]:
-        r"""
-        Args:
-            labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-                Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
-                config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
-                (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
+        second_per_grid_ts: Optional[torch.Tensor] = None,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> Union[tuple, QwenVLCausalLMOutputWithPast]:
 
-        Returns:
-
-        Example:
-
-        ```python
-        >>> from PIL import Image
-        >>> import requests
-        >>> from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
-
-        >>> model = Qwen2VLForConditionalGeneration.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
-        >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
-
-        >>> messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": "What is shown in this image?"},
-                ],
-            },
-        ]
-        >>> url = "https://www.ilankelman.org/stopsigns/australia.jpg"
-        >>> image = Image.open(requests.get(url, stream=True).raw)
-
-        >>> text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        >>> inputs = processor(text=[text], images=[image], vision_infos=[vision_infos])
-
-        >>> # Generate
-        >>> generate_ids = model.generate(inputs.input_ids, max_length=30)
-        >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-        "The image shows a street scene with a red stop sign in the foreground. In the background, there is a large red gate with Chinese characters ..."
-        ```"""
-
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
-        )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
 
         if inputs_embeds is None:
-            inputs_embeds = self.model.embed_tokens(input_ids)
+            inputs_embeds = self.model.language_model.embed_tokens(input_ids)
             if pixel_values is not None:
                 pixel_values = pixel_values.type(self.visual.get_dtype())
                 image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
@@ -452,21 +383,21 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
             # calculate RoPE index once per generation in the pre-fill stage only
             if (
                 (cache_position is not None and cache_position[0] == 0)
-                or self.rope_deltas is None
+                or self.model.rope_deltas is None
                 or (past_key_values is None or past_key_values.get_seq_length() == 0)
             ):
                 for video in video_grid_thw:
                     # Since we use the time dimension as spatial dimension we have to apply the reduce factor already here since it is not done in the rope function below
                     video[0] = torch.floor_divide(video[0], self.reduce_block[0])
-                position_ids, rope_deltas = self.get_rope_index(
-                    input_ids, image_grid_thw, video_grid_thw, attention_mask
+                position_ids, rope_deltas = self.model.get_rope_index(
+                    input_ids=input_ids, image_grid_thw=image_grid_thw, video_grid_thw=video_grid_thw, attention_mask=attention_mask
                 )
-                self.rope_deltas = rope_deltas
+                self.model.rope_deltas = rope_deltas
             # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
                 delta = (
-                    cache_position[0] + self.rope_deltas
+                    cache_position[0] + self.model.rope_deltas
                     if cache_position is not None
                     else 0
                 )
@@ -487,7 +418,7 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
+            return_dict=True,
             cache_position=cache_position,
         )
 
@@ -496,28 +427,13 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
 
         loss = None
         if labels is not None:
-            # Upcast to float if we need to compute the loss to avoid potential precision issues
-            logits = logits.float()
-            # Shift so that tokens < n predict n
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
-            loss_fct = CrossEntropyLoss()
-            shift_logits = shift_logits.view(-1, self.config.vocab_size)
-            shift_labels = shift_labels.view(-1)
-            # Enable model parallelism
-            shift_labels = shift_labels.to(shift_logits.device)
-            loss = loss_fct(shift_logits, shift_labels)
+            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size)
 
-        if not return_dict:
-            output = (logits,) + outputs[1:]
-            return (loss,) + output if loss is not None else output
-
-        return Qwen2VLCausalLMOutputWithPast(
+        return QwenVLCausalLMOutputWithPast(
             loss=loss,
             logits=logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-            rope_deltas=self.rope_deltas,
+            rope_deltas=self.model.rope_deltas,
         )

@@ -1,14 +1,11 @@
 import os
-import random
-from pathlib import Path
 
 import torch
 import transformers
-from peft import LoraConfig, get_peft_model
-from transformers import BitsAndBytesConfig, Qwen2VLForConditionalGeneration
+from peft import LoraConfig
 
-from qwenvl.processing_3d import Qwen2VLProcessor3D
-from qwenvl.Qwen3D import Qwen2VLForConditionalGeneration3D
+from qwenvl.processing_3d import QwenVLProcessor3D
+from qwenvl.Qwen3D import QwenVLForConditionalGeneration3D
 from utils.filter_batch import extract_raw_samples_from_batch
 
 from .abstract_vlm import AbstractVLMModel
@@ -40,7 +37,7 @@ class QwenVLModel(AbstractVLMModel):
     def setup_model(self, bnb_config=None):
         """Initialize model, processor and PEFT configuration"""
         # Initialize processor
-        self.processor = Qwen2VLProcessor3D.from_pretrained(
+        self.processor = QwenVLProcessor3D.from_pretrained(
             self.model_id,
             cache_dir=os.path.expanduser("~/.cache/huggingface/hub"),
             local_files_only=True,
@@ -50,19 +47,19 @@ class QwenVLModel(AbstractVLMModel):
         if self.checkpoint_path:
             # If a checkpoint path is provided, load the model from the checkpoint
             logger.info(f"Loading model from checkpoint: {self.checkpoint_path}")
-            self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
+            self.model = QwenVLForConditionalGeneration3D.from_pretrained(
                 self.checkpoint_path,
                 torch_dtype=torch.bfloat16,
                 local_files_only=True,
             )
         elif bnb_config and not self.train_only_vision_adapter:
-            self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(
+            self.model = QwenVLForConditionalGeneration3D.from_pretrained(
                 self.model_id,
                 torch_dtype=torch.bfloat16,
                 quantization_config=bnb_config,
             )
         else:
-            self.model = Qwen2VLForConditionalGeneration3D.from_pretrained(self.model_id, torch_dtype=torch.bfloat16)
+            self.model = QwenVLForConditionalGeneration3D.from_pretrained(self.model_id, torch_dtype=torch.bfloat16)
 
         if self.train_only_vision_adapter:
             # For adapter-only training, don't use quantization for the adapter
@@ -117,7 +114,7 @@ class QwenVLModel(AbstractVLMModel):
         labels = batch["input_ids"].clone()
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
 
-        if isinstance(self.processor, Qwen2VLProcessor3D):
+        if isinstance(self.processor, QwenVLProcessor3D):
             image_tokens = [151652, 151653, 151655]
         else:
             image_tokens = [self.processor.tokenizer.convert_tokens_to_ids(self.processor.image_token)]
