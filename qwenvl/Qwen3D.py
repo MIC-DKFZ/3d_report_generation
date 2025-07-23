@@ -9,6 +9,7 @@ from transformers.activations import QuickGELUActivation
 
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration as QwenVLForConditionalGeneration
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLCausalLMOutputWithPast as QwenVLCausalLMOutputWithPast
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2RMSNorm
 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as _CONFIG_FOR_DOC
 
 from transformers.cache_utils import Cache
@@ -53,17 +54,20 @@ class VisionAdapterReduceBlocks(nn.Module):
         self,
         embedding_dim: int,
         embed_dim: int,
-        reduce_block: Tuple[int, int, int] = [2, 2, 2],
+        reduce_block: Tuple[int, int, int] = (2, 2, 2),
     ):
         super().__init__()
         self.reduce_block = reduce_block
+
+        hidden_size = embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2]
+        self.ln_q = Qwen2RMSNorm(hidden_size, eps=1e-6)
         self.adapter = nn.Sequential(
             nn.Linear(
-                embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2],
-                5120,
+                hidden_size,
+                hidden_size,
             ),
-            QuickGELUActivation(),
-            nn.Linear(5120, embed_dim),
+            nn.GELU(),
+            nn.Linear(hidden_size, embed_dim)
         )
 
     def forward(self, x, video_grid_thw):
@@ -95,6 +99,7 @@ class VisionAdapterReduceBlocks(nn.Module):
 
         # Process through adapter
         # x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
+        x = self.ln_q(x)
         x = self.adapter(x)
 
         return x
@@ -328,25 +333,6 @@ class QwenVLForConditionalGeneration3D(QwenVLForConditionalGeneration):
 
         if inputs_embeds is None:
             inputs_embeds = self.model.language_model.embed_tokens(input_ids)
-            if pixel_values is not None:
-                pixel_values = pixel_values.type(self.visual.get_dtype())
-                image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
-                n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
-                n_image_features = image_embeds.shape[0]
-                if n_image_tokens != n_image_features:
-                    raise ValueError(
-                        f"Image features and image tokens do not match: tokens: {n_image_tokens}, features {n_image_features}"
-                    )
-                image_mask = (
-                    (input_ids == self.config.image_token_id)
-                    .unsqueeze(-1)
-                    .expand_as(inputs_embeds)
-                    .to(inputs_embeds.device)
-                )
-                image_embeds = image_embeds.to(
-                    inputs_embeds.device, inputs_embeds.dtype
-                )
-                inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
             if pixel_values_videos is not None:
                 # pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
@@ -356,12 +342,6 @@ class QwenVLForConditionalGeneration3D(QwenVLForConditionalGeneration):
                 )
                 video_embeds = self.vision_adapter(pixel_values_videos, video_grid_thw)
 
-                n_video_tokens = (input_ids == self.config.video_token_id).sum().item()
-                n_video_features = video_embeds.shape[0] * video_embeds.shape[1]
-                if n_video_tokens != n_video_features:
-                    raise ValueError(
-                        f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"
-                    )
                 video_mask = (
                     (input_ids == self.config.video_token_id)
                     .unsqueeze(-1)
