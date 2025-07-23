@@ -368,7 +368,7 @@ class QwenVLForConditionalGeneration3D(QwenVLForConditionalGeneration):
             ):
                 for video in video_grid_thw:
                     # Since we use the time dimension as spatial dimension we have to apply the reduce factor already here since it is not done in the rope function below
-                    video[0] = torch.floor_divide(video[0], self.reduce_block[0])
+                    video[:] = torch.floor_divide(video, torch.tensor(self.reduce_block, device=video.device, dtype=video.dtype))
                 position_ids, rope_deltas = self.model.get_rope_index(
                     input_ids=input_ids, image_grid_thw=image_grid_thw, video_grid_thw=video_grid_thw, attention_mask=attention_mask
                 )
