@@ -1,8 +1,8 @@
 import argparse
 import json
 import os
-from datetime import datetime
 import re
+from datetime import datetime
 from uuid import uuid4
 
 import torch
@@ -12,7 +12,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-from data.datasets import AMOSMMDataset
+from data.datasets import AMOSMMDataset, CTRATEDataset
 from eval.metrics import bleu_score, meteor_score, rouge_score
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
@@ -56,7 +56,7 @@ class UnifiedVLMInference:
             self.local_rank = 0  # or handle as single process
             self.world_size = 1
 
-    def inference(self, test_dataset):
+    def inference(self, test_dataset, calculate_metrics=True):
         """
         Main inference function that runs inference on the VLM model.
         Args:
@@ -114,7 +114,9 @@ class UnifiedVLMInference:
                 # image_embeds is only in inputs for owl model due to cross attn
                 if "image_embeds" in inputs:
                     if self.ddp_available:
-                        inputs["image_embeds"] = model.module.vision2text_model(inputs["image_embeds"])
+                        inputs["image_embeds"] = model.module.vision2text_model(
+                            inputs["image_embeds"]
+                        )
                         outputs = model.module.language_model.generate(
                             **inputs,
                             max_new_tokens=256,  # Adjust max_new_tokens as needed
@@ -141,7 +143,9 @@ class UnifiedVLMInference:
                 trimmed_generated_ids = [
                     out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], outputs)
                 ]
-                decoded_output = self.vlm_model.tokenizer.batch_decode(trimmed_generated_ids, skip_special_tokens=True)
+                decoded_output = self.vlm_model.tokenizer.batch_decode(
+                    trimmed_generated_ids, skip_special_tokens=True
+                )
 
                 # raw_input
 
@@ -181,42 +185,47 @@ class UnifiedVLMInference:
         with open(os.path.join(self.output_dir, "inference_results.json"), "w") as f:
             json.dump(results, f, indent=4)
 
-        logger.info(f"Saved inference results to {os.path.join(self.output_dir, 'inference_results.json')}")
+        logger.info(
+            f"Saved inference results to {os.path.join(self.output_dir, 'inference_results.json')}"
+        )
 
-        # Calculate and log metrics
-        # Log the Bleu score
-        bleu_score_1 = bleu_score(preds, gts, max_order=1)["bleu"]
-        bleu_score_2 = bleu_score(preds, gts, max_order=2)["bleu"]
-        bleu_score_3 = bleu_score(preds, gts, max_order=3)["bleu"]
-        bleu_score_4 = bleu_score(preds, gts, max_order=4)["bleu"]
-        logger.info(f"Bleu1 score: {bleu_score_1}")
-        logger.info(f"Bleu2 score: {bleu_score_2}")
-        logger.info(f"Bleu3 score: {bleu_score_3}")
-        logger.info(f"Bleu4 score: {bleu_score_4}")
+        if calculate_metrics:
+            # Calculate and log metrics
+            # Log the Bleu score
+            bleu_score_1 = bleu_score(preds, gts, max_order=1)["bleu"]
+            bleu_score_2 = bleu_score(preds, gts, max_order=2)["bleu"]
+            bleu_score_3 = bleu_score(preds, gts, max_order=3)["bleu"]
+            bleu_score_4 = bleu_score(preds, gts, max_order=4)["bleu"]
+            logger.info(f"Bleu1 score: {bleu_score_1}")
+            logger.info(f"Bleu2 score: {bleu_score_2}")
+            logger.info(f"Bleu3 score: {bleu_score_3}")
+            logger.info(f"Bleu4 score: {bleu_score_4}")
 
-        # Log the METOR score
-        meteor_score_val = meteor_score(preds, gts)["meteor"]
-        logger.info(f"METEOR score: {meteor_score_val}")
+            # Log the METOR score
+            meteor_score_val = meteor_score(preds, gts)["meteor"]
+            logger.info(f"METEOR score: {meteor_score_val}")
 
-        # Log the ROUGE score
-        rouge_score_val = rouge_score(preds, gts)["rougeL"]
-        logger.info(f"ROUGE score: {rouge_score_val}")
+            # Log the ROUGE score
+            rouge_score_val = rouge_score(preds, gts)["rougeL"]
+            logger.info(f"ROUGE score: {rouge_score_val}")
 
-        with open(os.path.join(self.output_dir, "inference_metrics.json"), "w") as f:
-            json.dump(
-                {
-                    "bleu_score_1": bleu_score_1,
-                    "bleu_score_2": bleu_score_2,
-                    "bleu_score_3": bleu_score_3,
-                    "bleu_score_4": bleu_score_4,
-                    "meteor_score": meteor_score_val,
-                    "rouge_score": rouge_score_val,
-                },
-                f,
-                indent=4,
+            with open(os.path.join(self.output_dir, "inference_metrics.json"), "w") as f:
+                json.dump(
+                    {
+                        "bleu_score_1": bleu_score_1,
+                        "bleu_score_2": bleu_score_2,
+                        "bleu_score_3": bleu_score_3,
+                        "bleu_score_4": bleu_score_4,
+                        "meteor_score": meteor_score_val,
+                        "rouge_score": rouge_score_val,
+                    },
+                    f,
+                    indent=4,
+                )
+
+            logger.info(
+                f"Saved inference metrics to {os.path.join(self.output_dir, 'inference_metrics.json')}"
             )
-
-        logger.info(f"Saved inference metrics to {os.path.join(self.output_dir, 'inference_metrics.json')}")
 
 
 def parse_args(default_config=None):
@@ -237,7 +246,9 @@ def parse_args(default_config=None):
     #     required=False,
     #     help="Base Model ID or path. Only needed for Qwen if model_id is a fine-tuned checkpoint path",
     # )
-    general_parser.add_argument("--dataset_path", type=str, required=True, help="Path to the dataset JSON file")
+    general_parser.add_argument(
+        "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
+    )
     general_parser.add_argument(
         "--output_dir",
         type=str,
@@ -250,14 +261,31 @@ def parse_args(default_config=None):
         required=True,
         help="Path to the vision embeddings",
     )
-    general_parser.add_argument("--inference_config", type=str, help="Path to config file (YAML or JSON)")
-    general_parser.add_argument("--num_gpus", type=str, help="Number of GPUs to use for inference", default=1)
+    general_parser.add_argument(
+        "--inference_config", type=str, help="Path to config file (YAML or JSON)"
+    )
+    general_parser.add_argument(
+        "--num_gpus", type=str, help="Number of GPUs to use for inference", default=1
+    )
     general_parser.add_argument(
         "--is_base_model",
         action="store_true",
         help="Set this flag for Owl model if you want to run inference on the base model, otherwise it will be assumed that model_id is a fine-tuned checkpoint path",
     )
-    general_parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to a model checkpoint to load")
+    general_parser.add_argument(
+        "--checkpoint_path", type=str, default=None, help="Path to a model checkpoint to load"
+    )
+    general_parser.add_argument(
+        "--dataset_name", type=str, default="ctrate", help="Name of the dataset"
+    )
+    general_parser.add_argument(
+        "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
+    )
+    general_parser.add_argument(
+        "--no_calculate_metrics",
+        action="store_true",
+        help="Not calculate and store metrics",
+    )
 
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
@@ -317,18 +345,32 @@ def main():
         train_only_vision_adapter=True,
         **model_specific_args,
     )
-
-    test_dataset = AMOSMMDataset(
-        dataset_json_path=args.dataset_path,
-        model_name=args.model_type,
-        split="val",
-        embeddings_path=args.embeddings_path,
-    )
-    logger.info(f"Loaded {len(test_dataset)} test samples")
+    if args.dataset_name == "amosmm":
+        test_dataset = AMOSMMDataset(
+            dataset_json_path=args.dataset_path,
+            model_name=args.model_type,
+            split="val",
+            embeddings_path=args.embeddings_path,
+        )
+        logger.info(f"Loaded {len(test_dataset)} test samples")
+    elif args.dataset_name == "ctrate":
+        test_dataset = CTRATEDataset(
+            dataset_json_path=args.dataset_path,
+            model_name=args.model_type,
+            split="val",
+            embeddings_path=args.embeddings_path,
+            # n_samples=args.n_val_samples,  # Limit the validation set size
+            # split_files=args.split_file,
+            answer_types=("TEXT",),
+            cache_file=args.dataset_cache_val,  # Use cache file if provided
+        )
+    else:
+        raise ValueError(f"Unsupported dataset name: {args.dataset_name}")
 
     # Create inference object and run inference
     inference = UnifiedVLMInference(vlm_model, output_dir=args.output_dir)
-    inference.inference(test_dataset)
+    calculate_metrics = not args.no_calculate_metrics
+    inference.inference(test_dataset, calculate_metrics=calculate_metrics)
 
 
 if __name__ == "__main__":
