@@ -56,7 +56,7 @@ class UnifiedVLMInference:
             self.local_rank = 0  # or handle as single process
             self.world_size = 1
 
-    def inference(self, test_dataset, calculate_metrics=True):
+    def inference(self, test_dataset, challenge_submission=False):
         """
         Main inference function that runs inference on the VLM model.
         Args:
@@ -182,14 +182,31 @@ class UnifiedVLMInference:
         preds = [result["output_text_clean"] for result in results]
         gts = [result["answer"] for result in results]
 
-        with open(os.path.join(self.output_dir, "inference_results.json"), "w") as f:
+        if challenge_submission:
+            results = [
+                {
+                    "input_image_name": result["image_id"],
+                    "report": result["output_text_clean"],
+                }
+                for result in results
+            ]
+            results = {
+                "name": "Generated reports",
+                "type": "Report generation",
+                "generated_reports": results,
+                "version": {"major": 1, "minor": 0},
+            }
+
+        results_filename = "inference_results.json" if not challenge_submission else "results.json"
+
+        with open(os.path.join(self.output_dir, results_filename), "w") as f:
             json.dump(results, f, indent=4)
 
         logger.info(
             f"Saved inference results to {os.path.join(self.output_dir, 'inference_results.json')}"
         )
 
-        if calculate_metrics:
+        if not challenge_submission:
             # Calculate and log metrics
             # Log the Bleu score
             bleu_score_1 = bleu_score(preds, gts, max_order=1)["bleu"]
@@ -281,10 +298,15 @@ def parse_args(default_config=None):
     general_parser.add_argument(
         "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
     )
+    # general_parser.add_argument(
+    #     "--no_calculate_metrics",
+    #     action="store_true",
+    #     help="Not calculate and store metrics",
+    # )
     general_parser.add_argument(
-        "--no_calculate_metrics",
+        "--challenge_submission",
         action="store_true",
-        help="Not calculate and store metrics",
+        help="Set this flag if you want to run inference for challenge submission (no metrics calculation, different output format)",
     )
 
     # First parse just the config argument to load the file
@@ -369,8 +391,8 @@ def main():
 
     # Create inference object and run inference
     inference = UnifiedVLMInference(vlm_model, output_dir=args.output_dir)
-    calculate_metrics = not args.no_calculate_metrics
-    inference.inference(test_dataset, calculate_metrics=calculate_metrics)
+    # calculate_metrics = not args.no_calculate_metrics
+    inference.inference(test_dataset, challenge_submission=args.challenge_submission)
 
 
 if __name__ == "__main__":
