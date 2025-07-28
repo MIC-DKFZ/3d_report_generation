@@ -23,6 +23,7 @@ dependencies = [
     "trl>=0.11.4",
     "wandb>=0.19.8",
     "loguru",
+    "nltk"
 ]
 
 [tool.setuptools]
