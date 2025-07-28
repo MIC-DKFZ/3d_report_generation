@@ -183,17 +183,58 @@ class UnifiedVLMInference:
         gts = [result["answer"] for result in results]
 
         if challenge_submission:
-            results = [
-                {
-                    "input_image_name": result["image_id"],
-                    "report": result["output_text_clean"],
-                }
-                for result in results
-            ]
+            results_report = [r for r in results if r["answer_subtype"] == "REPORT"]
+            results_diagnosis = [r for r in results if r["answer_subtype"] == "DIAGNOSIS"]
+            results_concat = []
+            image_ids = set([r["image_id"] for r in results])
+            for image_id in image_ids:
+                if image_id not in [r["image_id"] for r in results_report]:
+                    logger.warning(f"Image ID {image_id} has no report generation result.")
+                    finding = [r for r in results_report if r["image_id"] == image_id]
+                    if len(finding) > 1:
+                        logger.warning(
+                            f"Multiple report results for image ID {image_id}. Using the first one."
+                        )
+                    results_concat.append(
+                        {
+                            "input_image_name": image_id,
+                            "report": f"Findings: {finding[0]['output_text_clean']}",
+                        }
+                    )
+                if image_id not in [r["image_id"] for r in results_diagnosis]:
+                    logger.warning(f"Image ID {image_id} has no diagnosis generation result.")
+                    impression = [r for r in results_diagnosis if r["image_id"] == image_id]
+                    if len(impression) > 1:
+                        logger.warning(
+                            f"Multiple diagnosis results for image ID {image_id}. Using the first one."
+                        )
+                    results_concat.append(
+                        {
+                            "input_image_name": image_id,
+                            "report": f"Impression: {impression[0]['output_text_clean']}",
+                        }
+                    )
+                else:
+                    finding = [r for r in results_report if r["image_id"] == image_id]
+                    if len(finding) > 1:
+                        logger.warning(
+                            f"Multiple diagnosis results for image ID {image_id}. Using the first one."
+                        )
+                    impression = [r for r in results_diagnosis if r["image_id"] == image_id]
+                    if len(impression) > 1:
+                        logger.warning(
+                            f"Multiple report results for image ID {image_id}. Using the first one."
+                        )
+                    results_concat.append(
+                        {
+                            "input_image_name": image_id,
+                            "report": f"Findings: {finding[0]['output_text_clean']}\nImpression: {impression[0]['output_text_clean']}",
+                        }
+                    )
             results = {
                 "name": "Generated reports",
                 "type": "Report generation",
-                "generated_reports": results,
+                "generated_reports": results_concat,
                 "version": {"major": 1, "minor": 0},
             }
 
@@ -203,7 +244,7 @@ class UnifiedVLMInference:
             json.dump(results, f, indent=4)
 
         logger.info(
-            f"Saved inference results to {os.path.join(self.output_dir, 'inference_results.json')}"
+            f"Saved inference results to {os.path.join(self.output_dir, results_filename)}"
         )
 
         if not challenge_submission:
