@@ -12,11 +12,8 @@ pip install -e .
 * LIDC-IDRI dataset: ``E132-Projekte/Projects/2025_MIC_Rocket_VLM/LIDC-IDRI``. For information how to generate this VQA dataset, see [here](data/lidc/README.md)
 
 ### Embeddings
-* All image embeddings are located in ``E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings``
-    * AMOS-MM reshaped ``E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings/192_reshaped/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/2024_MICCAI24_AMOS-MM``
-    * AMOS-MM sliding window ``E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings/192_sliding_window/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/2024_MICCAI24_AMOS-MM``
-    * LIDC-IDRI sliding window ``E132-Projekte/Projects/2025_MIC_Rocket_VLM/vision_embeddings/LIDC-IDRI/192_sliding_window/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth24__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/npz``
-
+* All image embeddings are located in `/p/scratch/hai_1023/rocket_vlm/data/ctrate/embeddings/`
+    
 ## Training
 To run a training, execute
 ```
