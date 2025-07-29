@@ -12,7 +12,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-from data.datasets import AMOSMMDataset, CTRATEDataset
+from data.datasets import AMOSMMDataset, CTRATEDataset, CTRATEDataset_Submission
 from eval.metrics import bleu_score, meteor_score, rouge_score
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
@@ -175,6 +175,8 @@ class UnifiedVLMInference:
             outputs_text = result["output_text"]
             if "assistant\n" in outputs_text:
                 outputs_text = outputs_text.split("assistant\n")[-1].strip()
+            if "system\n" in outputs_text:
+                outputs_text = outputs_text.split("system\n")[-1].strip()
             if self.model_str == "owl" and "'text':" in outputs_text:
                 outputs_text = re.search(r"'text':\s*'([^']*)'", outputs_text).group(1)
             result["output_text_clean"] = outputs_text
@@ -417,16 +419,28 @@ def main():
         )
         logger.info(f"Loaded {len(test_dataset)} test samples")
     elif args.dataset_name == "ctrate":
-        test_dataset = CTRATEDataset(
-            dataset_json_path=args.dataset_path,
-            model_name=args.model_type,
-            split="val",
-            embeddings_path=args.embeddings_path,
-            # n_samples=args.n_val_samples,  # Limit the validation set size
-            # split_files=args.split_file,
-            answer_types=("TEXT",),
-            cache_file=args.dataset_cache_val,  # Use cache file if provided
-        )
+        if args.challenge_submission: 
+            test_dataset = CTRATEDataset_Submission(
+                dataset_json_path=args.dataset_path,
+                model_name=args.model_type,
+                split="test",
+                embeddings_path=args.embeddings_path,
+                # n_samples=args.n_test_samples,  # Limit the test set size
+                # split_files=args.split_file,
+                answer_types=("TEXT",),
+                cache_file=args.dataset_cache_val,  # Use cache file if provided
+            )
+        else:
+            test_dataset = CTRATEDataset(
+                dataset_json_path=args.dataset_path,
+                model_name=args.model_type,
+                split="val",
+                embeddings_path=args.embeddings_path,
+                # n_samples=args.n_val_samples,  # Limit the validation set size
+                # split_files=args.split_file,
+                answer_types=("TEXT",),
+                cache_file=args.dataset_cache_val,  # Use cache file if provided
+            )
     else:
         raise ValueError(f"Unsupported dataset name: {args.dataset_name}")
 

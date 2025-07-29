@@ -11,7 +11,13 @@ import torch
 from torch.utils.data import Dataset
 import pickle
 
-from data.extractors import AMOSMMExtractor, AMOSMMRegionExtractor, LIDCExtractor, CTRATEExtractor
+from data.extractors import (
+    AMOSMMExtractor,
+    AMOSMMRegionExtractor,
+    LIDCExtractor,
+    CTRATEExtractor,
+    QAItemDict,
+)
 from utils import logger
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
@@ -41,7 +47,6 @@ def format_into_message(question, answer, model_name, system_text=SYSTEM_TEXT, e
 
     full_conversation = [system_message, user_message, answer_message]
     prompt_only_conversation = [system_message, user_message]
-
     return full_conversation, prompt_only_conversation
 
 
@@ -507,3 +512,84 @@ class CTRATEDataset(MedicalImageDataset):
         """Extract sample list from raw data"""
         extracted_samples = CTRATEExtractor.extract_sample_list(samples)
         return extracted_samples
+
+
+class CTRATEDataset_Submission(MedicalImageDataset):
+    """
+    CT-RATE dataset class for CT scan analysis
+
+    Args:
+        dataset_json_path (str): Path to the CT-RATE dataset directory
+        model_name (str): Name of the VLM the dataset is used for
+        split (str): Split name ('train', 'val', or 'test')
+        embeddings_path (str | Path): Path to the vision embeddings directory
+        n_samples (int, optional): Number of samples to load (for debugging)
+        answer_types (tuple, optional): Types of answers to include
+    """
+
+    def _load_data(self, dataset_path):
+        self.embedding_dict = {
+            p.stem.split("_embedding")[0]: str(p)
+            for p in Path(self.embeddings_path).rglob("*_embedding.npz")
+        }
+
+        samples = []
+        for file_name, embedding_path in tqdm(
+            self.embedding_dict.items(), desc="Loading metadata files"
+        ):
+            image_id = file_name
+            sample = {
+                "image_id": image_id,
+                "embedding_path": embedding_path,
+            }
+            samples.append(sample)
+
+        return samples
+
+    def get_embedding_path(self, embedding_path):
+        """Convert image ID to embedding path"""
+        if not hasattr(self, "embedding_dict"):
+            logger.error("embedding_dict not found. Ensure _load_data is called first.")
+            return os.path.join(str(self.embeddings_path), embedding_path + "_embedding.npz")
+
+        return self.embedding_dict.get(embedding_path, None)
+
+    def extract_sample_list(self, samples):
+        """Extract sample list from raw data"""
+        extracted_samples = []
+
+        for sample in samples:
+            # Report generation sample
+            extracted_samples.append(
+                {
+                    "image_id": sample["image_id"],
+                    "image_path": sample["embedding_path"],
+                    "question": "Generate a detailed report for this CT scan.",
+                    "answer": "",  # sample["tasks"]["report_gen"],
+                    "full_answer": "",  # sample["tasks"]["report_gen"],
+                    "answer_type": "TEXT",
+                    "answer_subtype": "REPORT",
+                    "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                }
+            )
+
+            extracted_samples.append(
+                {
+                    "image_id": sample["image_id"],
+                    "image_path": sample["embedding_path"],
+                    "question": "What is the diagnosis for this CT scan?",
+                    "answer": "",  # sample["tasks"]["diagnosis"],
+                    "full_answer": "",  # sample["tasks"]["diagnosis"],
+                    "answer_type": "TEXT",
+                    "answer_subtype": "DIAGNOSIS",
+                    "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                }
+            )
+
+        # convert to QAItemDict
+        extracted_samples = [QAItemDict(sample) for sample in extracted_samples]
+
+        return extracted_samples
+
+    def _filter_samples(self, samples):
+        return samples  # No filtering needed for submission dataset

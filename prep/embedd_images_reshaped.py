@@ -461,14 +461,14 @@ def load_image_data_and_affine(img_path: str):
 def process_image(img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"):
     # Print debug information about patch size
     patch_size = tuple(config["input_shape"])
-    print(f"Target patch size from config: {patch_size}")
+    # print(f"Target patch size from config: {patch_size}")
     try:
         img_data, affine = load_image_data_and_affine(img_path) # Load image data and affine
 
         # Add batch and channel dimensions
         img_data = np.expand_dims(img_data, axis=(0, 1))
 
-        print(f"Original image shape: {img_data.shape}")
+        # print(f"Original image shape: {img_data.shape}")
 
         # Apply normalization using the provided scheme
         normalized_np = apply_normalization(
@@ -480,24 +480,24 @@ def process_image(img_path, model, config, device="cuda" if torch.cuda.is_availa
 
         # Convert back to tensor
         img_tensor = torch.from_numpy(normalized_np).to(device)
-        print(f"Tensor shape after adding batch/channel dims: {img_tensor.shape}")
+        # print(f"Tensor shape after adding batch/channel dims: {img_tensor.shape}")
 
         # Get patch size from config and ensure it's a tuple
         patch_size = tuple(config["input_shape"])  # Should be (192, 192, 192)
 
         # Resize image to match patch size with additional checks
         try:
-            print(f"Attempting to resize from {img_tensor.shape} to {patch_size}")
+            # print(f"Attempting to resize from {img_tensor.shape} to {patch_size}")
             if img_tensor.shape[-3:] != patch_size:
                 img_tensor = F.interpolate(
                     img_tensor, size=patch_size, mode="trilinear", align_corners=False
                 )
-            else:
-                print("Image already at target size, skipping resize")
+            # else:
+                # print("Image already at target size, skipping resize")
         except Exception as e:
             print(f"Error during resize: {str(e)}")
             raise
-        print(f"Input shape after resizing: {img_tensor.shape}")
+        # print(f"Input shape after resizing: {img_tensor.shape}")
 
         # Generate embeddings
         with torch.no_grad():
@@ -554,10 +554,10 @@ def main(args):
 
                 if isinstance(embeddings, torch.Tensor):
                     # Print embedding information
-                    print(f"Embedding shape: {embeddings.shape}")
-                    print(f"Value range: [{embeddings.min():.3f}, {embeddings.max():.3f}]")
-                    print(f"Mean: {embeddings.mean():.3f}")
-                    print(f"Std: {embeddings.std():.3f}")
+                    # print(f"Embedding shape: {embeddings.shape}")
+                    # print(f"Value range: [{embeddings.min():.3f}, {embeddings.max():.3f}]")
+                    # print(f"Mean: {embeddings.mean():.3f}")
+                    # print(f"Std: {embeddings.std():.3f}")
 
                     # Save embeddings and metadata
                     np.savez_compressed(
@@ -570,10 +570,10 @@ def main(args):
                 elif isinstance(embeddings, dict):
                     for key, value in embeddings.items():
                         # Print embedding information
-                        print(f"Embedding shape: {value.shape}")
-                        print(f"Value range: [{value.min():.3f}, {value.max():.3f}]")
-                        print(f"Mean: {value.mean():.3f}")
-                        print(f"Std: {value.std():.3f}")
+                        # print(f"Embedding shape: {value.shape}")
+                        # print(f"Value range: [{value.min():.3f}, {value.max():.3f}]")
+                        # print(f"Mean: {value.mean():.3f}")
+                        # print(f"Std: {value.std():.3f}")
 
                         # Save embeddings and metadata
                         np.savez_compressed(
