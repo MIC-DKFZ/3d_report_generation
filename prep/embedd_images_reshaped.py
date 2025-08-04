@@ -20,6 +20,42 @@ from nnssl.preprocessing.normalization.normalization_schemes import (
 )
 
 
+import torch.distributed as dist
+import os
+
+def setup_distributed():
+    """Initialize distributed training"""
+    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        rank = int(os.environ['RANK'])
+        world_size = int(os.environ['WORLD_SIZE'])
+        gpu = int(os.environ['LOCAL_RANK'])
+        
+        dist.init_process_group(backend='nccl', init_method='env://')
+        torch.cuda.set_device(gpu)
+        
+        return rank, world_size, gpu
+    else:
+        # Single GPU fallback
+        return 0, 1, 0
+
+def cleanup_distributed():
+    """Clean up distributed training"""
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+def distribute_files(img_files, rank, world_size):
+    """Distribute files across GPUs"""
+    # Split files evenly across GPUs
+    files_per_gpu = len(img_files) // world_size
+    start_idx = rank * files_per_gpu
+    
+    if rank == world_size - 1:  # Last GPU gets remaining files
+        end_idx = len(img_files)
+    else:
+        end_idx = start_idx + files_per_gpu
+    
+    return img_files[start_idx:end_idx]
+
 def save_embeddings_blosc2(embeddings, output_dir, img_file, clevel: int = 8, codec=blosc2.Codec.ZSTD):
     blosc2.set_nthreads(1)
     
@@ -565,7 +601,12 @@ def process_image(img_path, model, config, device="cuda" if torch.cuda.is_availa
 
 
 def main(args):
-        # Convert string to actual function reference
+    # Setup distributed processing
+    rank, world_size, gpu = setup_distributed()
+    
+    if rank == 0:
+        print(f"Using {world_size} GPUs for processing")
+    
     processing_function_map = {
         "native": process_image_native_res,
         "resized": process_image,
@@ -577,9 +618,12 @@ def main(args):
     input_dirs = args.input_dirs
     save_as_blosc2 = args.save_as_blosc2
     process_image_fct = processing_function_map[args.processing_function]
-    print(f"Using processing function: {process_image_fct.__name__}")
-    # Setup model
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    if rank == 0:
+        print(f"Using processing function: {process_image_fct.__name__}")
+    
+    # Setup model on the specific GPU
+    device = torch.device(f"cuda:{gpu}")
     model, config = setup_model(base_path)
     model = model.to(device)
 
@@ -590,19 +634,31 @@ def main(args):
     for input_dir in input_dirs:
         dir_name = os.path.basename(input_dir)
         output_dir = os.path.join(output_base, dir_name)
-        os.makedirs(output_dir, exist_ok=True)
+        
+        if rank == 0:
+            os.makedirs(output_dir, exist_ok=True)
+        
+        # Sync all processes
+        if dist.is_initialized():
+            dist.barrier()
 
+        # Collect all image files
         img_files = []
         for root, _, files in os.walk(input_dir):
             for f in files:
                 if f.endswith((".nii.gz", ".nrrd", ".b2nd")):
-                    # Store relative path from input_dir for output naming
                     rel_path = os.path.relpath(os.path.join(root, f), input_dir)
                     img_files.append(rel_path)
 
-        print("found images:", len(img_files))
-        # Process files with tqdm
-        for img_file in tqdm(img_files, desc=f"Processing {dir_name}"):
+        # Distribute files across GPUs
+        my_files = distribute_files(img_files, rank, world_size)
+        
+        if rank == 0:
+            print(f"Total images: {len(img_files)}")
+            print(f"GPU {rank} processing: {len(my_files)} files")
+        
+        # Process files assigned to this GPU
+        for img_file in tqdm(my_files, desc=f"GPU {rank} - Processing {dir_name}"):
             img_path = os.path.join(input_dir, img_file)
             output_path = os.path.join(
                 output_dir,
@@ -610,11 +666,14 @@ def main(args):
             )
 
             if os.path.exists(output_path):
-                print(f"Skipping {img_file} - embedding already exists")
                 continue
 
             try:
                 embeddings, affine = process_image_fct(img_path, model, config, device)
+                
+                # Create output directory if it doesn't exist
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                
                 if save_as_blosc2:
                     save_embeddings_blosc2(embeddings, output_dir, img_file)
                 else:
@@ -626,8 +685,11 @@ def main(args):
                     )
 
             except Exception as e:
-                print(f"Error processing {img_file}: {str(e)}")
-                continue  # Continue with next file instead of stopping
+                print(f"GPU {rank} - Error processing {img_file}: {str(e)}")
+                continue
+
+    # Clean up
+    cleanup_distributed()
 
 
 def parse_args():
