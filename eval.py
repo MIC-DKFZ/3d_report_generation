@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from Eval.metrics import BERTScore, RateScore, BleuScoreHF, ROUGEScore, METEORScore #, GREENScore
 
-def get_scores(inference_results_file, eval_dir):
+def get_scores(inference_results_dir, eval_dir):
     '''
     This function loads the inference results from a JSON file and calculates various evaluation metrics for each sample and their average.
     The metrics include RateScore, BLEU score, BERT score, ROUGE score, and METEOR score.
@@ -31,23 +31,29 @@ def get_scores(inference_results_file, eval_dir):
 
     # Load inference results from JSON file
     input_data = []
-    with open(inference_results_file, 'r') as json_file: # TODO: maybe support other formats later
+    with open(os.path.join(inference_results_dir,'inference_results.json'), 'r') as json_file: # TODO: maybe support other formats later
         input_data = json.load(json_file)
 
     results = []
     average_results = {
         "average_rate_score" : 0.0,
-        "average_bleu_score" : 0.0,
+        "average_bleu_score_1" : 0.0,
+        "average_bleu_score_2" : 0.0,
+        "average_bleu_score_3" : 0.0,
+        "average_bleu_score_4" : 0.0,
         "average_bert_score" : 0.0,
         "average_rouge_score" : 0.0,
         "average_meteor_score" : 0.0,
     }
     for sample in tqdm(input_data):
-        pred = sample['output_text']
+        pred = sample['output_text_clean']
         gt = sample['answer']
 
         rate_score = RateScore([pred], [gt])
-        bleu_score = BleuScoreHF([pred], [gt])
+        bleu_score_1 = BleuScoreHF([pred], [gt], 1)
+        bleu_score_2 = BleuScoreHF([pred], [gt], 2)
+        bleu_score_3 = BleuScoreHF([pred], [gt], 3)
+        bleu_score_4 = BleuScoreHF([pred], [gt], 4)
         bert_score = BERTScore([pred], [gt])
         # green_score = GREENScore([pred], [gt])
         rouge_score = ROUGEScore([pred], [gt])
@@ -61,7 +67,10 @@ def get_scores(inference_results_file, eval_dir):
                 'answer_subtype': sample['answer_subtype'],
                 'output_text': sample['output_text'],
                 'rate_score': rate_score[0],
-                "bleu_score_hf": bleu_score['bleu'],
+                "bleu_score_1": bleu_score_1['bleu'],
+                "bleu_score_2": bleu_score_2['bleu'],
+                "bleu_score_3": bleu_score_3['bleu'],
+                "bleu_score_4": bleu_score_4['bleu'],
                 "bert_score": bert_score['f1'][0],
                 # "green_score": green_score,
                 "rouge_score": rouge_score['rougeLsum'],
@@ -70,14 +79,20 @@ def get_scores(inference_results_file, eval_dir):
         )
         # accumulate average results
         average_results['average_rate_score'] += rate_score[0]
-        average_results['average_bleu_score'] += bleu_score['bleu']
+        average_results['average_bleu_score_1'] += bleu_score_1['bleu']
+        average_results['average_bleu_score_2'] += bleu_score_2['bleu']
+        average_results['average_bleu_score_3'] += bleu_score_3['bleu']
+        average_results['average_bleu_score_4'] += bleu_score_4['bleu']
         average_results['average_bert_score'] += bert_score['f1'][0]
         average_results['average_rouge_score'] += rouge_score['rougeLsum']
         average_results['average_meteor_score'] += meteor_score['meteor']
 
     # calculate average scores
     average_results['average_rate_score'] /= len(input_data)
-    average_results['average_bleu_score'] /= len(input_data)
+    average_results['average_bleu_score_1'] /= len(input_data)
+    average_results['average_bleu_score_2'] /= len(input_data)
+    average_results['average_bleu_score_3'] /= len(input_data)
+    average_results['average_bleu_score_4'] /= len(input_data)
     average_results['average_bert_score'] /= len(input_data)
     average_results['average_rouge_score'] /= len(input_data)
     average_results['average_meteor_score'] /= len(input_data)
@@ -141,7 +156,7 @@ def main():
     )
     logger.add(log_file)
 
-    get_scores(inference_results_file=args.results_dir, eval_dir=args.output_dir)
+    get_scores(inference_results_dir=args.results_dir, eval_dir=args.output_dir)
 
 
 if __name__ == '__main__':
