@@ -10,7 +10,7 @@ from utils import logger
 import yaml
 from tqdm import tqdm
 
-from Eval.metrics import BERTScore, RateScore, BleuScoreHF, ROUGEScore, METEORScore #, GREENScore
+from evaluation.metrics import BERTScore, RateScore, BleuScoreHF, ROUGEScore, METEORScore #, GREENScore
 
 def get_scores(inference_results_dir, eval_dir):
     '''
