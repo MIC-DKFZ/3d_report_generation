@@ -7,7 +7,7 @@ import torch
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
 import wandb
-from eval.metrics import bleu_score, rouge_score, meteor_score
+from evaluation.metrics import bleu_score, rouge_score, meteor_score
 from owl.model import OwnOwlModel
 from utils.filter_batch import extract_batch_prompt_only
 from utils import logger
