@@ -443,7 +443,7 @@ def main():
         if general_args.model_type == "owl":
             general_args.model_id = "mPLUG/mPLUG-Owl3-1B-241014"
         elif general_args.model_type == "qwen":
-            general_args.model_id = "Qwen/Qwen2.5-VL-3B-Instruct"
+            general_args.model_id = "Qwen/Qwen2-VL-2B-Instruct"
 
     # Create the appropriate VLM model based on model_type
     if general_args.model_type == "owl":

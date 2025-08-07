@@ -10,89 +10,13 @@ import os
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
-import blosc2
-import traceback
+
 from einops import rearrange
 
 from nnssl.preprocessing.normalization.normalization_schemes import (
     apply_normalization,
     NormalizationScheme,
 )
-
-
-import torch.distributed as dist
-import os
-
-def setup_distributed():
-    """Initialize distributed training"""
-    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-        rank = int(os.environ['RANK'])
-        world_size = int(os.environ['WORLD_SIZE'])
-        gpu = int(os.environ['LOCAL_RANK'])
-        
-        dist.init_process_group(backend='nccl', init_method='env://')
-        torch.cuda.set_device(gpu)
-        
-        return rank, world_size, gpu
-    else:
-        # Single GPU fallback
-        return 0, 1, 0
-
-def cleanup_distributed():
-    """Clean up distributed training"""
-    if dist.is_initialized():
-        dist.destroy_process_group()
-
-def distribute_files(img_files, rank, world_size):
-    """Distribute files across GPUs"""
-    # Split files evenly across GPUs
-    files_per_gpu = len(img_files) // world_size
-    start_idx = rank * files_per_gpu
-    
-    if rank == world_size - 1:  # Last GPU gets remaining files
-        end_idx = len(img_files)
-    else:
-        end_idx = start_idx + files_per_gpu
-    
-    return img_files[start_idx:end_idx]
-
-def save_embeddings_blosc2(embeddings, output_dir, img_file, clevel: int = 8, codec=blosc2.Codec.ZSTD):
-    blosc2.set_nthreads(1)
-    
-    if img_file.endswith('.b2nd'):
-        output_filename_truncated = os.path.join(output_dir, img_file[:-5] + '_embedding')
-    elif img_file.endswith('.nii.gz'):
-        output_filename_truncated = os.path.join(output_dir, img_file[:-7] + '_embedding')
-    elif img_file.endswith('.nrrd'):
-        output_filename_truncated = os.path.join(output_dir, img_file[:-5] + '_embedding')
-    else:
-        # Fallback - remove any extension
-        base_name = os.path.splitext(img_file)[0]
-        output_filename_truncated = os.path.join(output_dir, base_name + '_embedding')
-    
-    os.makedirs(os.path.dirname(output_filename_truncated), exist_ok=True)
-    
-    # Convert tensor to numpy if needed
-    if hasattr(embeddings, 'numpy'):
-        embeddings_np = embeddings.detach().cpu().numpy()
-    else:
-        embeddings_np = embeddings
-
-    print(f"Saving embeddings with shape: {embeddings_np.shape} to {output_filename_truncated + '.b2nd'}")
-        
-    # nnU-Net style cparams
-    cparams = {
-        'codec': codec,
-        'clevel': clevel,
-    }
-    
-    try:
-        blosc2.asarray(embeddings_np, 
-                      urlpath=output_filename_truncated + '.b2nd',
-                      cparams=cparams)
-        
-    except Exception as e:
-        raise
 
 
 def setup_model(base_path):
@@ -408,16 +332,20 @@ def process_image_native_res(
 ):
     # Print debug information about patch size
     patch_size = tuple(config["input_shape"])
+    print(f"Target patch size from config: {patch_size}")
     try:
-        blosc2_result = load_blosc2(img_path)
-        img_data, _ = blosc2_result 
-        img = np.array(img_data)
-        
-        # Add batch dimension
-        img = np.expand_dims(img, axis=0)
+        img = nib.load(img_path)
+        img_data = img.get_fdata()
+        # Add batch and channel dimensions
+        img_data = np.expand_dims(img_data, axis=(0, 1))
+        affine = img.affine
+
+        print(f"Original image shape: {img_data.shape}")
+
+        # Apply normalization using the provided scheme
         normalized_np = apply_normalization(
             scheme=NormalizationScheme.Z_SCORE,
-            image=img,
+            image=img_data,
             target_dtype=np.float32,
             use_mask_for_norm=False,
         )
@@ -434,26 +362,23 @@ def process_image_native_res(
         )
 
         # Resize image to match patch size with additional checks
+
         embeddings = []
         # Generate embeddings
-        for i, (patch, attn_mask) in enumerate(zip(patches, attn_masks)):            
+        for patch, attn_mask in zip(patches, attn_masks):
             with torch.no_grad():
                 patch_embeddings = model(
                     patch, rearrange(attn_mask, "h w d -> (h w d)").to(device)
                 )
             embeddings.append(patch_embeddings)
         embeddings = combine_patches_into_image(embeddings, attn_masks.to(device), num_patches)
-        
-        return embeddings.cpu(), None
+
+        return embeddings.cpu(), affine
 
     except Exception as e:
-        print(f"DEBUG: Exception occurred in process_image_native_res")
-        print(f"DEBUG: Exception type: {type(e)}")
-        print(f"DEBUG: Exception message: {str(e)}")
         print(f"Error in process_image for {img_path}: {str(e)}")
-        import traceback
-        traceback.print_exc()
         raise
+
 
 # --- Image Processing Functions ---
 def load_nrrd(img_path):
@@ -529,24 +454,9 @@ def load_image_data_and_affine(img_path: str):
         return load_nifti(img_path)
     elif ext == ".nrrd":
         return load_nrrd(img_path)
-    elif ext == ".b2nd":
-        return load_blosc2(img_path)
     else:
         raise ValueError(f"Unsupported file extension: {ext}")
 
-
-def load_blosc2(img_path: str) -> Tuple[np.ndarray, np.ndarray]:
-    # von nnunet kopiert...
-    dparams = {
-        'nthreads': 1
-    }
-
-    mmap_kwargs = {} if os.name == "nt" else {'mmap_mode': 'r'}
-
-    data_array = blosc2.open(urlpath=img_path, mode='r', dparams=dparams, **mmap_kwargs)
-    print(f"blosc2 array loaded, dtype: {data_array.dtype}, shape: {data_array.shape}")
-
-    return data_array, None
 
 def process_image(img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"):
     # Print debug information about patch size
@@ -601,12 +511,7 @@ def process_image(img_path, model, config, device="cuda" if torch.cuda.is_availa
 
 
 def main(args):
-    # Setup distributed processing
-    rank, world_size, gpu = setup_distributed()
-    
-    if rank == 0:
-        print(f"Using {world_size} GPUs for processing")
-    
+        # Convert string to actual function reference
     processing_function_map = {
         "native": process_image_native_res,
         "resized": process_image,
@@ -616,67 +521,45 @@ def main(args):
     base_path = args.base_path
     output_base = args.output_base
     input_dirs = args.input_dirs
-    save_as_blosc2 = args.save_as_blosc2
     process_image_fct = processing_function_map[args.processing_function]
-    
-    if rank == 0:
-        print(f"Using processing function: {process_image_fct.__name__}")
-    
-    # Setup model on the specific GPU
-    device = torch.device(f"cuda:{gpu}")
+
+    # Setup model
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, config = setup_model(base_path)
     model = model.to(device)
-
-    if args.save_as_blosc2:
-        blosc2.set_nthreads(1)
 
     # Process each directory
     for input_dir in input_dirs:
         dir_name = os.path.basename(input_dir)
         output_dir = os.path.join(output_base, dir_name)
-        
-        if rank == 0:
-            os.makedirs(output_dir, exist_ok=True)
-        
-        # Sync all processes
-        if dist.is_initialized():
-            dist.barrier()
+        os.makedirs(output_dir, exist_ok=True)
 
-        # Collect all image files
-        img_files = []
-        for root, _, files in os.walk(input_dir):
-            for f in files:
-                if f.endswith((".nii.gz", ".nrrd", ".b2nd")):
-                    rel_path = os.path.relpath(os.path.join(root, f), input_dir)
-                    img_files.append(rel_path)
+        # Get list of files first
+        img_files = [f for f in os.listdir(input_dir) if f.endswith((".nii.gz", ".nrrd"))]
 
-        # Distribute files across GPUs
-        my_files = distribute_files(img_files, rank, world_size)
-        
-        if rank == 0:
-            print(f"Total images: {len(img_files)}")
-            print(f"GPU {rank} processing: {len(my_files)} files")
-        
-        # Process files assigned to this GPU
-        for img_file in tqdm(my_files, desc=f"GPU {rank} - Processing {dir_name}"):
+        # Process files with tqdm
+        for img_file in tqdm(img_files, desc=f"Processing {dir_name}"):
             img_path = os.path.join(input_dir, img_file)
             output_path = os.path.join(
                 output_dir,
-                img_file.replace(".nii.gz", "_embedding.npz").replace(".nrrd", "_embedding.npz").replace(".b2nd", "_embedding.npz"),
+                img_file.replace(".nii.gz", "_embedding.npz").replace(".nrrd", "_embedding.npz"),
             )
 
             if os.path.exists(output_path):
+                print(f"Skipping {img_file} - embedding already exists")
                 continue
 
             try:
                 embeddings, affine = process_image_fct(img_path, model, config, device)
-                
-                # Create output directory if it doesn't exist
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                
-                if save_as_blosc2:
-                    save_embeddings_blosc2(embeddings, output_dir, img_file)
-                else:
+
+                if isinstance(embeddings, torch.Tensor):
+                    # Print embedding information
+                    # print(f"Embedding shape: {embeddings.shape}")
+                    # print(f"Value range: [{embeddings.min():.3f}, {embeddings.max():.3f}]")
+                    # print(f"Mean: {embeddings.mean():.3f}")
+                    # print(f"Std: {embeddings.std():.3f}")
+
+                    # Save embeddings and metadata
                     np.savez_compressed(
                         output_path,
                         embeddings=embeddings.numpy(),
@@ -684,12 +567,25 @@ def main(args):
                         original_file=img_file,
                     )
 
-            except Exception as e:
-                print(f"GPU {rank} - Error processing {img_file}: {str(e)}")
-                continue
+                elif isinstance(embeddings, dict):
+                    for key, value in embeddings.items():
+                        # Print embedding information
+                        # print(f"Embedding shape: {value.shape}")
+                        # print(f"Value range: [{value.min():.3f}, {value.max():.3f}]")
+                        # print(f"Mean: {value.mean():.3f}")
+                        # print(f"Std: {value.std():.3f}")
 
-    # Clean up
-    cleanup_distributed()
+                        # Save embeddings and metadata
+                        np.savez_compressed(
+                            output_path.replace("_embedding.npz", f"_{key}_embedding.npz"),
+                            embeddings=value.numpy(),
+                            affine=affine,
+                            original_file=img_file,
+                        )
+
+            except Exception as e:
+                print(f"Error processing {img_file}: {str(e)}")
+                continue  # Continue with next file instead of stopping
 
 
 def parse_args():
@@ -733,11 +629,6 @@ def parse_args():
         type=str,
         choices=["native", "resized", "region"],
         help="Embedding generation method: 'native' (patch-based full image), 'resized' (resize full image), 'region' (patch-based region extraction).",
-    )
-    parser.add_argument(
-        "--save_as_blosc2",
-        action="store_true",
-        help="If set, save embeddings as .b2nd (blosc2) files instead of .npz.",
     )
     return parser.parse_args()
 

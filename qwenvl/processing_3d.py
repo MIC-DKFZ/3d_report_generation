@@ -1,18 +1,16 @@
 from typing import List, Union
 
 from transformers.feature_extraction_utils import BatchFeature
-from transformers.image_utils import ImageInput
-from transformers.video_utils import VideoInput
+from transformers.image_utils import ImageInput, VideoInput
 from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack
 from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
 from transformers.utils import logging
-
-from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import Qwen2_5_VLProcessor as QwenVLProcessor
+from transformers import Qwen2VLProcessor
 
 import torch
 import numpy as np
 
-class QwenVLProcessorKwargs(ProcessingKwargs, total=False):
+class Qwen2VLProcessorKwargs(ProcessingKwargs, total=False):
     _defaults = {
         "text_kwargs": {
             "padding": False,
@@ -20,7 +18,7 @@ class QwenVLProcessorKwargs(ProcessingKwargs, total=False):
     }
 
 
-class QwenVLProcessor3D(QwenVLProcessor):
+class Qwen2VLProcessor3D(Qwen2VLProcessor):
     r"""
     Constructs a Qwen2-VL processor which wraps a Qwen2-VL image processor and a Qwen2 tokenizer into a single processor.
     [`Qwen2VLProcessor`] offers all the functionalities of [`Qwen2VLImageProcessor`] and [`Qwen2TokenizerFast`]. See the
@@ -52,7 +50,7 @@ class QwenVLProcessor3D(QwenVLProcessor):
         vision_embeddings: List[torch.Tensor] = None,
         text: Union[TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]] = None,
         videos: VideoInput = None,
-        **kwargs: Unpack[QwenVLProcessorKwargs],
+        **kwargs: Unpack[Qwen2VLProcessorKwargs],
     ) -> BatchFeature:
         """
         Main method to prepare for the model one or several sequences(s) and image(s). This method forwards the `text`
@@ -91,7 +89,7 @@ class QwenVLProcessor3D(QwenVLProcessor):
             - **video_grid_thw** -- List of video 3D grid in LLM. Returned when `videos` is not `None`.
         """
         output_kwargs = self._merge_kwargs(
-            QwenVLProcessorKwargs,
+            Qwen2VLProcessorKwargs,
             tokenizer_init_kwargs=self.tokenizer.init_kwargs,
             **kwargs,
         )
