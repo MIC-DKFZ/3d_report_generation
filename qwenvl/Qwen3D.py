@@ -312,6 +312,7 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
         super().__init__(config)
 
         self.reduce_block = reduce_block
+        # Added by us
         self.vision_adapter = VisionAdapterReduceBlocks(
             embedding_dim=864, embed_dim=1536, reduce_block=reduce_block
         )
@@ -321,6 +322,7 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
     @replace_return_docstrings(
         output_type=Qwen2VLCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
     )
+    # This method is updated by us
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -417,7 +419,7 @@ class Qwen2VLForConditionalGeneration3D(Qwen2VLForConditionalGeneration):
                 )
                 inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
-            if pixel_values_videos is not None:
+            if pixel_values_videos is not None: # below two lines are updated by us
                 # pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
                 # video_embeds = self.vision_adapter(pixel_values_videos) # The only line that has changed so far (and the added adapter above)
                 pixel_values_videos = pixel_values_videos.to(

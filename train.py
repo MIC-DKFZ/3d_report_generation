@@ -452,7 +452,7 @@ def main():
         vlm_model_class = QwenVLModel
     else:
         raise ValueError(f"Unknown model type: {general_args.model_type}")
-
+    # TODO: could add it as an arguement
     seed_everything(42)  # Set a random seed for reproducibility
 
     vlm_model = vlm_model_class(

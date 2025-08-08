@@ -2,7 +2,7 @@ import evaluate
 from RaTEScore import RaTEScore
 # from green_score import GREEN
 
-def BleuScoreHF(pred, gt, max_order=4):
+def bleu_score(pred, gt, max_order=4):
     '''
     FORMULA: BLEU = brevity_penalty * exp(sum(w_n * log(p_n)))
 
@@ -23,7 +23,7 @@ def BleuScoreHF(pred, gt, max_order=4):
 
     return b_score
 
-def RateScore(pred, gt):
+def rate_score(pred, gt):
     '''
     pred ('list' of 'str'): Predicted text
         ex: pred = ["hello there general kenobi", "foo bar foobar"]
@@ -39,7 +39,7 @@ def RateScore(pred, gt):
 
     return score
 
-def BERTScore(pred, gt, model_type="distilbert-base-uncased"):
+def bert_score(pred, gt, model_type="distilbert-base-uncased"):
     '''
     predictions (list of str): Prediction/candidate sentences.
         ex: predictions = ["hello there general kenobi","foo bar foobar"]
@@ -86,7 +86,7 @@ def BERTScore(pred, gt, model_type="distilbert-base-uncased"):
 #     mean, std, green_score_list, summary, result_df = green_scorer_fct(gt, pred)
 #     return mean
 
-def ROUGEScore(pred, gt):
+def rouge_score(pred, gt):
     '''
     predictions (list of str): Prediction/candidate sentences.
         ex: predictions = ["hello there general kenobi","foo bar foobar"]
@@ -102,7 +102,7 @@ def ROUGEScore(pred, gt):
 
     return r_score
 
-def METEORScore(pred, gt, alpha=0.9):
+def meteor_score(pred, gt, alpha=0.9):
     '''
     predictions (list of str): Prediction/candidate sentences.
         ex: predictions = ["hello there general kenobi","foo bar foobar"]

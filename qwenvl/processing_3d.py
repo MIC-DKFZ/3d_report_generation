@@ -109,19 +109,19 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
             videos_inputs = {}
             video_grid_thw = None
 
-
+        # Below is added by us
         if vision_embeddings:
             # Put the shape of each vision embedding in tensor
-            video_grid_thw = torch.tensor([v_e.shape[-3:] for v_e in vision_embeddings]).int()
+            video_grid_thw = torch.tensor([v_e.shape[-3:] for v_e in vision_embeddings]).int() # this grid is generated to be used in positional embeddings
             # Flatten vision embeddings to [B, C, H*W*D] delete the batch dimension and transpose to [H*W*D, C]
             list_of_vision_embeddings = [
                 torch.tensor(v_e).view(v_e.shape[0], v_e.shape[1], -1).squeeze(0).transpose(1, 0)
                 for v_e in vision_embeddings]
-            len_of_vision_embeddings = [v_e.size(0) for v_e in list_of_vision_embeddings]
+            # len_of_vision_embeddings = [v_e.size(0) for v_e in list_of_vision_embeddings]
             # Pad the vision embeddings to the same length and stack them in a tensor,
             # then transpose to [B, C, H*W*D]
             videos_input_embeddings = torch.nn.utils.rnn.pad_sequence(
-                list_of_vision_embeddings, batch_first=True, padding_value=0).transpose(2, 1)
+                list_of_vision_embeddings, batch_first=True, padding_value=0).transpose(2, 1) # this padding is only done if we have varying size of image embeddings
             # # Create padding mask for the vision embeddings for later reconstruction
             # padding_mask = torch.nn.utils.rnn.pad_sequence([torch.ones(l) for l in len_of_vision_embeddings], batch_first=True, padding_value=0)
 
@@ -141,6 +141,7 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
             text = [text]
 
         #Dirty solution. TODO use own text input so that we do not need to replace video token
+        # video_pad could also be directly used in dataset formatting step rather than image_pad
         for i in range(0, len(text)):
             if self.image_token in text[i]:
                 text[i] = text[i].replace(self.image_token, self.video_token, 1)
