@@ -258,6 +258,12 @@ def parse_args(default_config=None):
         help="Include classes from classification for text generation (report/diagnosis) (CTRATE only)",
     )
     general_parser.add_argument(
+        "--cls_aug_strength",
+        type=float,
+        default=0.0,
+        help="Strength of the class augmentation for text generation, meaning probability of flipping labels for individual classes. E.g. 0.05 means 5 percent of the time a class label will be flipped to another class label.  Only used for training dataset. (CTRATE only)",
+    )
+    general_parser.add_argument(
         "--train_only_vision_adapter",
         action="store_true",
         help="Train only the vision adapter (Qwen only)",
@@ -527,6 +533,8 @@ def main():
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
         )
     elif general_args.dataset_name == "ctrate":
+        if general_args.include_cls_text_gen:
+            logger.info(f"Including classes in text generation for CTRate with augmentation strength {general_args.cls_aug_strength}")
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
             dataset_json_path=general_args.dataset_path,
@@ -536,6 +544,7 @@ def main():
             split_files=general_args.split_file,
             answer_types=("TEXT",),
             include_cls_text_gen=general_args.include_cls_text_gen,
+            cls_aug_strength=general_args.cls_aug_strength,
             cache_file=general_args.dataset_cache,  # Use cache file if provided
         )
 
@@ -548,6 +557,7 @@ def main():
             split_files=general_args.split_file,
             answer_types=("TEXT",),
             include_cls_text_gen=general_args.include_cls_text_gen,
+            cls_aug_strength=0.0,
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
         )
     else:

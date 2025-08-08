@@ -379,9 +379,10 @@ class CTRATEExtractor:
                     "system_text": "You are a medical imaging AI trained to analyze CT scans.",
                 }
                 if include_cls_text_gen:
-                    extracted_sample[
-                        "question"
-                    ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
+                    extracted_sample["cls_text_gen"] = sample["tasks"]["classification"]
+                    # extracted_sample[
+                    #     "question"
+                    # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
                 extracted_samples.append(extracted_sample)
 
             # Diagnosis sample
@@ -397,9 +398,10 @@ class CTRATEExtractor:
                     "system_text": "You are a medical imaging AI trained to analyze CT scans.",
                 }
                 if include_cls_text_gen:
-                    extracted_sample[
-                        "question"
-                    ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
+                    extracted_sample["cls_text_gen"] = sample["tasks"]["classification"]
+                    # extracted_sample[
+                    #     "question"
+                    # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
                 extracted_samples.append(extracted_sample)
 
         # convert to QAItemDict

@@ -3,6 +3,7 @@ import os
 import pickle
 from abc import ABC, abstractmethod
 from pathlib import Path
+import random
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -78,6 +79,7 @@ class MedicalImageDataset(Dataset, ABC):
         cache_file=None,
         embedding_constant=None,
         include_cls_text_gen=False,
+        cls_aug_strength=0.0,
     ):
         super().__init__()
 
@@ -95,6 +97,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.return_embedding = return_embedding
         self.embedding_constant = embedding_constant
         self.include_cls_text_gen = include_cls_text_gen
+        self.cls_aug_strength = cls_aug_strength
         self.cache_file = cache_file
 
         if isinstance(answer_types, str):
@@ -167,16 +170,6 @@ class MedicalImageDataset(Dataset, ABC):
                 continue
 
             sample["embedding_path"] = embedding_path
-
-            formatted_qa, formatted_qa_prompt_only = format_into_message(
-                sample["question"],
-                sample["full_answer"],
-                self.model_name,
-                system_text=sample["system_text"],
-            )
-
-            sample["formatted_qa"] = formatted_qa
-            sample["formatted_qa_prompt_only"] = formatted_qa_prompt_only
 
             formatted_data.append(sample)
 
@@ -251,6 +244,23 @@ class MedicalImageDataset(Dataset, ABC):
 
         # Create a new dictionary instead of modifying the stored one
         result = dict(sample)
+
+        if self.include_cls_text_gen and "cls_text_gen" in sample:
+            for key in result["cls_text_gen"]:
+                if random.random() < self.cls_aug_strength:
+                    result["cls_text_gen"][key] = 1 - result["cls_text_gen"][key]  # flip 0 to 1
+            result["question"] += f' The scan is classified into the following classes {str(result["cls_text_gen"])}, where 1 means presence of a disease and 0 means absence.'
+            # result["cls_text_gen"] = sample["cls_text_gen"]
+
+        formatted_qa, formatted_qa_prompt_only = format_into_message(
+                result["question"],
+                result["full_answer"],
+                self.model_name,
+                system_text=sample["system_text"],
+            )
+
+        result["formatted_qa"] = formatted_qa
+        result["formatted_qa_prompt_only"] = formatted_qa_prompt_only
 
         if self.return_embedding:
             # Load embedding and convert to tensor
