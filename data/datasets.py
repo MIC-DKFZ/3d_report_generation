@@ -529,7 +529,9 @@ class CTRATEDataset(MedicalImageDataset):
 
     def extract_sample_list(self, samples):
         """Extract sample list from raw data"""
-        extracted_samples = CTRATEExtractor.extract_sample_list(samples)
+        extracted_samples = CTRATEExtractor.extract_sample_list(
+            samples, include_cls_text_gen=self.include_cls_text_gen
+        )
         return extracted_samples
 
 
