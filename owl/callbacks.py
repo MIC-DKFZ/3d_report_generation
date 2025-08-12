@@ -69,9 +69,10 @@ class PrintEvalBatchCallback(TrainerCallback):
             return
 
         # TODO: for DDP check something like trainer.is_world_process_zero() here
-        if state.epoch - self.last_epoch < self.max_diff:
-            return
-        self.last_epoch = state.epoch
+        # This leads to very rare callback reporting, therefore commented out
+        #if state.epoch - self.last_epoch < self.max_diff:
+        #    return
+        #self.last_epoch = state.epoch
         logger.info(f"Output samples from validation dataset after epoch {state.epoch}:")
         logger.info(f"Epoch {state.epoch} reached")
 
@@ -115,12 +116,12 @@ class PrintEvalBatchCallback(TrainerCallback):
 
                     outputs = model.language_model.generate(
                         **inputs_prompt_only,
-                        max_new_tokens=256,  # Adjust max_new_tokens as needed
+                        max_new_tokens=640,  # Adjust max_new_tokens as needed
                     )
                 else:
                     outputs = model.generate(
                         **inputs_prompt_only,
-                        max_new_tokens=256,  # Adjust max_new_tokens as needed
+                        max_new_tokens=640,  # Adjust max_new_tokens as needed
                     )
 
                 # Decode input and generated output
