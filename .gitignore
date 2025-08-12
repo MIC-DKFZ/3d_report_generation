@@ -8,6 +8,10 @@ owl-owl3-1b/
 __pycache__/
 *.py[cod]
 *$py.class
+*.log
+*.pkl
+*.json
+*.csv
 
 # Distribution / packaging
 dist/
