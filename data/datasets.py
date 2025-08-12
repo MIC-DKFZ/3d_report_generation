@@ -1,9 +1,9 @@
 import json
 import os
 import pickle
+import random
 from abc import ABC, abstractmethod
 from pathlib import Path
-import random
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -269,7 +269,12 @@ class MedicalImageDataset(Dataset, ABC):
                     raise ValueError(f"Sample {index} does not have an embedding path.")
                 result["embedding"] = self._load_embedding(sample["embedding_path"])
             else:
-                result["embedding"] = np.full((1, 864, 24, 24, 24), self.embedding_constant)
+                if type(self.embedding_constant) is float:
+                    result["embedding"] = np.full((self._load_embedding(sample["embedding_path"])).shape, self.embedding_constant)
+                elif type(self.embedding_constant) is str and self.embedding_constant == "random":
+                    result["embedding"] = np.random.rand(*(self._load_embedding(sample["embedding_path"])).shape)
+                else:
+                    raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
             result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
             if result["embedding_tensor"] is not None:
                 result["embedding_tensor"] = result["embedding_tensor"].half()  # Ensure tensor is

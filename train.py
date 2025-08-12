@@ -248,9 +248,9 @@ def parse_args(default_config=None):
 
     general_parser.add_argument(
         "--embedding_constant",
-        type=float,
+        # type=float,
         default=None,
-        help="Constant value for training language only baseline (! Do not set this when training a VLM !)",
+        help="Constant value for training language only baseline (! Do not set this when training a VLM !). Can either be a float to set the whole embedding to a constant value or 'random' to set the embedding to a random values.",
     )
     general_parser.add_argument(
         "--include_cls_text_gen",
@@ -338,6 +338,13 @@ def parse_args(default_config=None):
             )
 
     sft_trainer_parsed, _ = sft_trainer_parser.parse_known_args()
+
+    if general_args.embedding_constant is not None:
+        try:
+            general_args.embedding_constant = float(general_args.embedding_constant)
+        except ValueError:
+            pass
+
     return general_args, sft_trainer_parsed
 
 
