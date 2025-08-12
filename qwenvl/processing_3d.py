@@ -1,28 +1,24 @@
 from typing import List, Union
 
 from transformers.feature_extraction_utils import BatchFeature
-from transformers.image_utils import ImageInput, VideoInput
+from transformers.image_utils import ImageInput
+from transformers.video_utils import VideoInput
 from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack
 from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
 from transformers.utils import logging
-from transformers import Qwen2VLProcessor
+
+from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import Qwen2_5_VLProcessor, Qwen2_5_VLProcessorKwargs, Qwen2_5_VLVideosProcessorKwargs
+
 
 import torch
 import numpy as np
 
-class Qwen2VLProcessorKwargs(ProcessingKwargs, total=False):
-    _defaults = {
-        "text_kwargs": {
-            "padding": False,
-        },
-    }
 
-
-class Qwen2VLProcessor3D(Qwen2VLProcessor):
+class QwenVLProcessor3D(Qwen2_5_VLProcessor):
     r"""
-    Constructs a Qwen2-VL processor which wraps a Qwen2-VL image processor and a Qwen2 tokenizer into a single processor.
-    [`Qwen2VLProcessor`] offers all the functionalities of [`Qwen2VLImageProcessor`] and [`Qwen2TokenizerFast`]. See the
-    [`~Qwen2VLProcessor.__call__`] and [`~Qwen2VLProcessor.decode`] for more information.
+    Constructs a Qwen2.5-VL processor which wraps a Qwen2.5-VL image processor and a Qwen2 tokenizer into a single processor.
+    [`Qwen2_5_VLProcessor`] offers all the functionalities of [`Qwen2VLImageProcessor`] and [`Qwen2TokenizerFast`]. See the
+    [`~Qwen2_5_VLProcessor.__call__`] and [`~Qwen2_5_VLProcessor.decode`] for more information.
     Args:
         image_processor ([`Qwen2VLImageProcessor`], *optional*):
             The image processor is a required input.
@@ -34,6 +30,7 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
 
     attributes = ["image_processor", "tokenizer"]
     valid_kwargs = ["chat_template"]
+    
     image_processor_class = "AutoImageProcessor"
     tokenizer_class = ("Qwen2Tokenizer", "Qwen2TokenizerFast")
 
@@ -42,7 +39,7 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
         self.video_token = "<|video_pad|>" if not hasattr(tokenizer, "video_token") else tokenizer.video_token
         super().__init__(image_processor, tokenizer, chat_template=chat_template)
 
-        self.reduce_block = reduce_block # this is fixed and parameter that will be changed during training
+        self.reduce_block = reduce_block
 
     def __call__(
         self,
@@ -50,7 +47,7 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
         vision_embeddings: List[torch.Tensor] = None,
         text: Union[TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]] = None,
         videos: VideoInput = None,
-        **kwargs: Unpack[Qwen2VLProcessorKwargs],
+        **kwargs: Unpack[Qwen2_5_VLProcessorKwargs],
     ) -> BatchFeature:
         """
         Main method to prepare for the model one or several sequences(s) and image(s). This method forwards the `text`
@@ -87,13 +84,13 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
             - **pixel_values_videos** -- Pixel values of videos to be fed to a model. Returned when `videos` is not `None`.
             - **image_grid_thw** -- List of image 3D grid in LLM. Returned when `images` is not `None`.
             - **video_grid_thw** -- List of video 3D grid in LLM. Returned when `videos` is not `None`.
+            - **second_per_grid_ts** -- List of video seconds per time grid. Returned when `videos` is not `None`.
         """
         output_kwargs = self._merge_kwargs(
-            Qwen2VLProcessorKwargs,
+            Qwen2_5_VLProcessorKwargs,
             tokenizer_init_kwargs=self.tokenizer.init_kwargs,
             **kwargs,
         )
-
         if images is not None:
             image_inputs = self.image_processor(images=images, videos=None, **output_kwargs["images_kwargs"])
             image_grid_thw = image_inputs["image_grid_thw"]
@@ -101,27 +98,37 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
             image_inputs = {}
             image_grid_thw = None
 
-
         if videos is not None:
-            videos_inputs = self.image_processor(images=None, videos=videos, **output_kwargs["videos_kwargs"])
+            videos_inputs = self.image_processor(images=None, videos=videos, **output_kwargs["images_kwargs"])
             video_grid_thw = videos_inputs["video_grid_thw"]
+
+            fps = output_kwargs["videos_kwargs"].pop("fps", 2.0)
+            if isinstance(fps, (int, float)):
+                second_per_grid_ts = [self.image_processor.temporal_patch_size / fps] * len(video_grid_thw)
+            elif hasattr(fps, "__len__") and len(fps) == len(video_grid_thw):
+                second_per_grid_ts = [self.image_processor.temporal_patch_size / tmp for tmp in fps]
+            else:
+                raise ValueError(
+                    f"The length of fps ({len(fps) if hasattr(fps, '__len__') else fps}) must be equal to the length of video_grid_thw ({len(video_grid_thw)}) or fps should be a single number."
+                )
+            videos_inputs.update({"second_per_grid_ts": second_per_grid_ts})
+
         else:
             videos_inputs = {}
             video_grid_thw = None
 
-        # Below is added by us
+
         if vision_embeddings:
             # Put the shape of each vision embedding in tensor
-            video_grid_thw = torch.tensor([v_e.shape[-3:] for v_e in vision_embeddings]).int() # this grid is generated to be used in positional embeddings
+            video_grid_thw = torch.tensor([v_e.shape[-3:] for v_e in vision_embeddings]).int()
             # Flatten vision embeddings to [B, C, H*W*D] delete the batch dimension and transpose to [H*W*D, C]
             list_of_vision_embeddings = [
                 torch.tensor(v_e).view(v_e.shape[0], v_e.shape[1], -1).squeeze(0).transpose(1, 0)
                 for v_e in vision_embeddings]
-            # len_of_vision_embeddings = [v_e.size(0) for v_e in list_of_vision_embeddings]
             # Pad the vision embeddings to the same length and stack them in a tensor,
             # then transpose to [B, C, H*W*D]
             videos_input_embeddings = torch.nn.utils.rnn.pad_sequence(
-                list_of_vision_embeddings, batch_first=True, padding_value=0).transpose(2, 1) # this padding is only done if we have varying size of image embeddings
+                list_of_vision_embeddings, batch_first=True, padding_value=0).transpose(2, 1)
             # # Create padding mask for the vision embeddings for later reconstruction
             # padding_mask = torch.nn.utils.rnn.pad_sequence([torch.ones(l) for l in len_of_vision_embeddings], batch_first=True, padding_value=0)
 
@@ -141,7 +148,6 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
             text = [text]
 
         #Dirty solution. TODO use own text input so that we do not need to replace video token
-        # video_pad could also be directly used in dataset formatting step rather than image_pad
         for i in range(0, len(text)):
             if self.image_token in text[i]:
                 text[i] = text[i].replace(self.image_token, self.video_token, 1)
@@ -152,7 +158,9 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
             for i in range(len(text)):
                 while self.image_token in text[i]:
                     text[i] = text[i].replace(
-                        self.image_token, "<|placeholder|>" * (image_grid_thw[index].prod() // merge_length), 1
+                        self.image_token,
+                        "<|placeholder|>" * (image_grid_thw[index].prod() // merge_length),
+                        1,
                     )
                     index += 1
                 text[i] = text[i].replace("<|placeholder|>", self.image_token)
@@ -169,6 +177,9 @@ class Qwen2VLProcessor3D(Qwen2VLProcessor):
                     index += 1
                 text[i] = text[i].replace("<|placeholder|>", self.video_token)
 
-        text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
+        #text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
+        # TODO check why it fails with the above line!
+        text_inputs = self.tokenizer(text, **{"padding":True, "return_tensors": "pt"})
+
 
         return BatchFeature(data={**text_inputs, **image_inputs, **videos_inputs})
