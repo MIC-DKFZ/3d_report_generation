@@ -21,6 +21,7 @@ class QwenVLModel(AbstractVLMModel):
         model_id,
         output_dir="qwen25-vlm",
         train_only_vision_adapter=False,
+        reduce_block=[2,2,2],
         # base_model_id=None,
         checkpoint_path=None,
     ):
@@ -28,7 +29,7 @@ class QwenVLModel(AbstractVLMModel):
         self._model_str = "qwen"
         self.output_dir = output_dir
         self.batch_count = 0
-        self.reduce_block = [2, 2, 2]
+        self.reduce_block = reduce_block
         # if base_model_id is None:
         #     self.base_model_id = model_id
         # else:

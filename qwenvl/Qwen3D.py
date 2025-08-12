@@ -208,12 +208,14 @@ class VisionAdapterReduceBlocks(nn.Module):
     ):
         super().__init__()
         self.reduce_block = reduce_block
-
-        hidden_size = embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2]
-        self.ln_q = Qwen2RMSNorm(hidden_size, eps=1e-6)
+        print(reduce_block)
+        input_size = embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2]
+        hidden_size = embedding_dim * min(8, reduce_block[0] * reduce_block[1] * reduce_block[2]) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
+        # the linear layer still can become too large for large blocks greater than 8cube. In such cases better use pooling?!
+        self.ln_q = Qwen2RMSNorm(input_size, eps=1e-6)
         self.adapter = nn.Sequential(
             nn.Linear(
-                hidden_size,
+                input_size,
                 hidden_size,
             ),
             nn.GELU(),
@@ -330,6 +332,7 @@ class QwenVLModel3D(Qwen2_5_VLModel):
             n_video_tokens = (video_mask).sum()
             n_video_features = video_embeds.shape[0]
             video_mask = video_mask.unsqueeze(-1).expand_as(inputs_embeds).to(inputs_embeds.device)
+            #TODO this fails for images with different sizes when batch size > 1!
             if not is_torchdynamo_compiling() and n_video_tokens != n_video_features:
                 raise ValueError(
                     f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"

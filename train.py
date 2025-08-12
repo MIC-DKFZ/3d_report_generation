@@ -286,6 +286,12 @@ def parse_args(default_config=None):
     general_parser.add_argument(
         "--n_val_samples", type=int, default=50, help="Number of validation samples to use"
     )
+    general_parser.add_argument(
+        "--reduce_block",
+        type=lambda s: [int(x) for x in s.strip("()").split(",")],
+        default=[2, 2, 2],
+        help="List for reduce_block, e.g. (2,2,2) or (4,4,4)",
+    )
 
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
@@ -515,6 +521,7 @@ def main():
         model_id=general_args.model_id,
         output_dir=general_args.output_dir,
         train_only_vision_adapter=general_args.train_only_vision_adapter,
+        reduce_block=general_args.reduce_block
     )
 
     # Create datasets
