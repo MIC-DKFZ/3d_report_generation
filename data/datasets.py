@@ -5,12 +5,13 @@ import random
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Tuple
-
+from tqdm import tqdm
+import yaml
+import blosc2
 import numpy as np
 import torch
-import yaml
 from torch.utils.data import Dataset
-from tqdm import tqdm
+import pickle
 
 from data.extractors import (
     AMOSMMExtractor,
@@ -212,14 +213,20 @@ class MedicalImageDataset(Dataset, ABC):
                 with np.load(embedding_path) as npz_file:
                     # Attempt to load the "embeddings" key if it exists, otherwise load the first array
                     if "embedding" in npz_file:
-                        embedding = npz_file[
-                            "embeddings"
-                        ].copy()  # Make a copy to avoid reference issues
+                        embedding = npz_file["embeddings"].copy()  # Make a copy to avoid reference issues
                     else:
-                        embedding = npz_file[
-                            npz_file.files[0]
-                        ].copy()  # Make a copy to avoid reference issues
+                        embedding = npz_file[npz_file.files[0]].copy()  # Make a copy to avoid reference issues
                 return embedding
+            elif embedding_path.endswith(".b2nd"):
+                # Load b2nd file like nnUNet :)
+                dparams = {
+                    'nthreads': 1
+                }
+                mmap_kwargs = {} if os.name == "nt" else {'mmap_mode': 'r'}
+                
+                embedding = blosc2.open(urlpath=embedding_path, mode='r', dparams=dparams, **mmap_kwargs)
+                
+                return np.array(embedding)
             else:
                 raise ValueError(f"Unsupported embedding file format: {embedding_path}")
         except Exception as e:
@@ -467,7 +474,7 @@ class CTRATEDataset(MedicalImageDataset):
 
         for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
             for fl in fls_:
-                if fl.endswith(".npy") or fl.endswith(".npz"):
+                if fl.endswith(".npy") or fl.endswith(".npz") or fl.endswith(".b2nd"):
                     image_id = fl.split("_embedding")[0]
                     self.embedding_dict[image_id] = os.path.join(flr_, fl)
 
