@@ -564,7 +564,7 @@ def main():
             split_files=general_args.split_file,
             answer_types=("TEXT",),
             include_cls_text_gen=general_args.include_cls_text_gen,
-            cls_aug_strength=0.0,
+            cls_aug_strength=general_args.cls_aug_strength,
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
         )
     else:
