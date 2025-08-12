@@ -13,7 +13,7 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from data.datasets import AMOSMMDataset, CTRATEDataset, CTRATEDataset_Submission
-from evaluation.metrics import bleu_score, rouge_score, meteor_score
+from evaluation.metrics import bleu_score, meteor_score, rouge_score
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
 from utils import logger, rank_zero_filter
@@ -321,6 +321,24 @@ def parse_args(default_config=None):
         required=True,
         help="Path to the vision embeddings",
     )
+
+    general_parser.add_argument(
+        "--embedding_constant",
+        # type=float,
+        default=None,
+        help="Constant value for training language only baseline (! Do not set this when training a VLM !). Can either be a float to set the whole embedding to a constant value or 'random' to set the embedding to a random values.",
+    )
+    general_parser.add_argument(
+        "--include_cls_text_gen",
+        action="store_true",
+        help="Include classes from classification for text generation (report/diagnosis) (CTRATE only)",
+    )
+    general_parser.add_argument(
+        "--cls_aug_strength",
+        type=float,
+        default=0.0,
+        help="Strength of the class augmentation for text generation, meaning probability of flipping labels for individual classes. E.g. 0.05 means 5 percent of the time a class label will be flipped to another class label.  Only used for training dataset. (CTRATE only)",
+    )
     general_parser.add_argument(
         "--inference_config", type=str, help="Path to config file (YAML or JSON)"
     )
@@ -368,6 +386,11 @@ def parse_args(default_config=None):
 
             # Update config with values from file
             default_config.update(file_config)
+    if general_args.embedding_constant is not None:
+        try:
+            general_args.embedding_constant = float(general_args.embedding_constant)
+        except ValueError:
+            pass
 
     return general_args
 
@@ -431,6 +454,8 @@ def main():
                 cache_file=args.dataset_cache_val,  # Use cache file if provided
             )
         else:
+            if args.include_cls_text_gen:
+                logger.info(f"Including classes in text generation for CTRate with augmentation strength {args.cls_aug_strength}")
             test_dataset = CTRATEDataset(
                 dataset_json_path=args.dataset_path,
                 model_name=args.model_type,
@@ -439,10 +464,16 @@ def main():
                 # n_samples=args.n_val_samples,  # Limit the validation set size
                 # split_files=args.split_file,
                 answer_types=("TEXT",),
+                include_cls_text_gen=args.include_cls_text_gen,
+                cls_aug_strength=args.cls_aug_strength,
                 cache_file=args.dataset_cache_val,  # Use cache file if provided
             )
     else:
         raise ValueError(f"Unsupported dataset name: {args.dataset_name}")
+    if args.embedding_constant is not None:
+        logger.info(f"Setting embedding constant to {args.embedding_constant}")
+        print(f"Setting embedding constant to {args.embedding_constant}")
+        test_dataset.embedding_constant = args.embedding_constant
 
     # Create inference object and run inference
     inference = UnifiedVLMInference(vlm_model, output_dir=args.output_dir)
