@@ -13,7 +13,7 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from data.datasets import AMOSMMDataset, CTRATEDataset, CTRATEDataset_Submission
-from eval.metrics import bleu_score, meteor_score, rouge_score
+from evaluation.metrics import bleu_score, rouge_score, meteor_score
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
 from utils import logger, rank_zero_filter
