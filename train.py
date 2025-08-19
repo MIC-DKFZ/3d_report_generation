@@ -32,6 +32,7 @@ class UnifiedVLMTrainer:
         output_dir="vlm_output",
         config_file_path: str = None,
         sft_trainer_config: dict = None,
+        wandb_project: str = "debug",
     ):
         """
         Initialize the unified VLM trainer.
@@ -45,6 +46,7 @@ class UnifiedVLMTrainer:
         self.trainer = None
         self.config_file_path = config_file_path
         self.sft_trainer_config = sft_trainer_config
+        self.wandb_project = wandb_project
 
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -137,7 +139,7 @@ class UnifiedVLMTrainer:
         if should_init_wandb:
             wandb.init(
                 entity="mic-rocket-vlm",
-                project="workshop_runs",
+                project=self.wandb_project,
                 name=datetime.now().strftime(
                     f"%Y-%m-%d_%H-%M-%S_train_{type(self.vlm_model).__name__}_run_{uuid4()}"
                 ),
@@ -236,6 +238,13 @@ def parse_args(default_config=None):
         default="output/vlm_output",
         help="Directory to save model outputs",
     )
+    general_parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="debug",
+        help="WandB project name",
+    )
+    
     general_parser.add_argument(
         "--embeddings_path",
         type=str,
@@ -589,6 +598,7 @@ def main():
         vlm_model,
         output_dir=general_args.output_dir,
         sft_trainer_config=vars(sft_trainer_args),
+        wandb_project=general_args.wandb_project,
     )
 
     # Update trainer with additional config for wandb logging
