@@ -399,7 +399,7 @@ class CTRATEExtractor:
                 and sample["tasks"]["diagnosis"]
             ):
                 # If both report generation and diagnosis are present, we can combine them
-                full_answer = f"Report: {sample['tasks']['report_gen']}\n\nDiagnosis: {sample['tasks']['diagnosis']}"
+                full_answer = f"Findings: {sample['tasks']['report_gen']}\nImpression: {sample['tasks']['diagnosis']}"
                 extracted_sample = {
                     "image_id": sample["image_id"],
                     "image_path": sample["embedding_path"],
