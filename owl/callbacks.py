@@ -1,8 +1,6 @@
-from collections import defaultdict
 import os
-from pathlib import Path
 import re
-
+from tqdm import tqdm
 import torch
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
@@ -69,10 +67,9 @@ class PrintEvalBatchCallback(TrainerCallback):
             return
 
         # TODO: for DDP check something like trainer.is_world_process_zero() here
-        # This leads to very rare callback reporting, therefore commented out
-        #if state.epoch - self.last_epoch < self.max_diff:
-        #    return
-        #self.last_epoch = state.epoch
+        if state.epoch - self.last_epoch < self.max_diff:
+           return
+        self.last_epoch = state.epoch
         logger.info(f"Output samples from validation dataset after epoch {state.epoch}:")
         logger.info(f"Epoch {state.epoch} reached")
 
@@ -100,7 +97,7 @@ class PrintEvalBatchCallback(TrainerCallback):
             self.eval_table = None
         model.eval()  # Ensure model is in evaluation mode
         with torch.no_grad():  # Disable gradient calculations
-            for i, inputs in enumerate(eval_dataloader):
+            for i, inputs in enumerate(tqdm(eval_dataloader, total=self.sample_count)):
                 if i >= self.sample_count:  # Limit the number of samples to print
                     break
                 inputs_prompt_only = extract_batch_prompt_only(inputs)

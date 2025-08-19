@@ -3,13 +3,12 @@ from typing import List, Union
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
 from transformers.video_utils import VideoInput
-from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack
+from transformers.processing_utils import Unpack
 from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
-from transformers.utils import logging
 
-from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import Qwen2_5_VLProcessor, Qwen2_5_VLProcessorKwargs, Qwen2_5_VLVideosProcessorKwargs
+from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import Qwen2_5_VLProcessor, Qwen2_5_VLProcessorKwargs
 
-
+from einops import rearrange
 import torch
 import numpy as np
 
@@ -24,28 +23,26 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
             The image processor is a required input.
         tokenizer ([`Qwen2TokenizerFast`], *optional*):
             The tokenizer is a required input.
+        video_processor ([`Qwen2_5_VLVideoProcessor`], *optional*):
+            The video processor is a required input.
         chat_template (`str`, *optional*): A Jinja template which will be used to convert lists of messages
             in a chat into a tokenizable string.
     """
-
-    attributes = ["image_processor", "tokenizer"]
-    valid_kwargs = ["chat_template"]
+    attributes = ["image_processor", "tokenizer"]#, "video_processor"]
     
     image_processor_class = "AutoImageProcessor"
+    #video_processor_class = "AutoVideoProcessor"
     tokenizer_class = ("Qwen2Tokenizer", "Qwen2TokenizerFast")
 
     def __init__(self, image_processor=None, tokenizer=None, chat_template=None, reduce_block = [2, 2, 2], **kwargs):
-        self.image_token = "<|image_pad|>" if not hasattr(tokenizer, "image_token") else tokenizer.image_token
-        self.video_token = "<|video_pad|>" if not hasattr(tokenizer, "video_token") else tokenizer.video_token
         super().__init__(image_processor, tokenizer, chat_template=chat_template)
-
         self.reduce_block = reduce_block
 
     def __call__(
         self,
         images: ImageInput = None,
         vision_embeddings: List[torch.Tensor] = None,
-        text: Union[TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]] = None,
+        text: Union[TextInput, PreTokenizedInput, list[TextInput], list[PreTokenizedInput]] = None,
         videos: VideoInput = None,
         **kwargs: Unpack[Qwen2_5_VLProcessorKwargs],
     ) -> BatchFeature:
@@ -56,14 +53,14 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
         Qwen2VLImageProcessor's [`~Qwen2VLImageProcessor.__call__`] if `vision_infos` is not `None`.
 
         Args:
-            images (`PIL.Image.Image`, `np.ndarray`, `torch.Tensor`, `List[PIL.Image.Image]`, `List[np.ndarray]`, `List[torch.Tensor]`):
+            images (`PIL.Image.Image`, `np.ndarray`, `torch.Tensor`, `list[PIL.Image.Image]`, `list[np.ndarray]`, `list[torch.Tensor]`):
                 The image or batch of images to be prepared. Each image can be a PIL image, NumPy array or PyTorch
                 tensor. Both channels-first and channels-last formats are supported.
-            text (`str`, `List[str]`, `List[List[str]]`):
+            text (`str`, `list[str]`, `list[list[str]]`):
                 The sequence or batch of sequences to be encoded. Each sequence can be a string or a list of strings
                 (pretokenized string). If the sequences are provided as list of strings (pretokenized), you must set
                 `is_split_into_words=True` (to lift the ambiguity with a batch of sequences).
-            videos (`np.ndarray`, `torch.Tensor`, `List[np.ndarray]`, `List[torch.Tensor]`):
+            videos (`np.ndarray`, `torch.Tensor`, `list[np.ndarray]`, `list[torch.Tensor]`):
                 The image or batch of videos to be prepared. Each video can be a 4D NumPy array or PyTorch
                 tensor, or a nested list of 3D frames. Both channels-first and channels-last formats are supported.
             return_tensors (`str` or [`~utils.TensorType`], *optional*):
@@ -91,79 +88,31 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
             tokenizer_init_kwargs=self.tokenizer.init_kwargs,
             **kwargs,
         )
-        if images is not None:
-            image_inputs = self.image_processor(images=images, videos=None, **output_kwargs["images_kwargs"])
-            image_grid_thw = image_inputs["image_grid_thw"]
-        else:
-            image_inputs = {}
-            image_grid_thw = None
 
-        if videos is not None:
-            videos_inputs = self.image_processor(images=None, videos=videos, **output_kwargs["images_kwargs"])
-            video_grid_thw = videos_inputs["video_grid_thw"]
-
-            fps = output_kwargs["videos_kwargs"].pop("fps", 2.0)
-            if isinstance(fps, (int, float)):
-                second_per_grid_ts = [self.image_processor.temporal_patch_size / fps] * len(video_grid_thw)
-            elif hasattr(fps, "__len__") and len(fps) == len(video_grid_thw):
-                second_per_grid_ts = [self.image_processor.temporal_patch_size / tmp for tmp in fps]
-            else:
-                raise ValueError(
-                    f"The length of fps ({len(fps) if hasattr(fps, '__len__') else fps}) must be equal to the length of video_grid_thw ({len(video_grid_thw)}) or fps should be a single number."
-                )
-            videos_inputs.update({"second_per_grid_ts": second_per_grid_ts})
-
-        else:
-            videos_inputs = {}
-            video_grid_thw = None
-
+        image_inputs = videos_inputs = {}
+        video_grid_thw = None
 
         if vision_embeddings:
-            # Put the shape of each vision embedding in tensor
             video_grid_thw = torch.tensor([v_e.shape[-3:] for v_e in vision_embeddings]).int()
-            # Flatten vision embeddings to [B, C, H*W*D] delete the batch dimension and transpose to [H*W*D, C]
-            list_of_vision_embeddings = [
-                torch.tensor(v_e).view(v_e.shape[0], v_e.shape[1], -1).squeeze(0).transpose(1, 0)
-                for v_e in vision_embeddings]
-            # Pad the vision embeddings to the same length and stack them in a tensor,
-            # then transpose to [B, C, H*W*D]
+            list_of_vision_embeddings = [torch.tensor(rearrange(v_e, 'b c h w d -> (b h w d) c')) for v_e in vision_embeddings]
+            # TODO fix the following padding (makes no sense right now (but works when all images have same size, otherwise crash with video_grid_thw above later))
             videos_input_embeddings = torch.nn.utils.rnn.pad_sequence(
-                list_of_vision_embeddings, batch_first=True, padding_value=0).transpose(2, 1)
-            # # Create padding mask for the vision embeddings for later reconstruction
-            # padding_mask = torch.nn.utils.rnn.pad_sequence([torch.ones(l) for l in len_of_vision_embeddings], batch_first=True, padding_value=0)
-
+               list_of_vision_embeddings, batch_first=True, padding_value=0).transpose(2, 1)
             videos_inputs = {
                 "pixel_values_videos": videos_input_embeddings,
-                # TODO: do we need this self.reduce_block. Further maybe we need ceil instead of // (floor).
-                # "video_grid_thw": torch.tensor((video_grid_thw // torch.tensor(self.reduce_block)).tolist())
-                "video_grid_thw": torch.tensor((video_grid_thw).tolist()),
-                # "padding_mask_vision_embeddings": padding_mask
+                "video_grid_thw": video_grid_thw
             }
-
-        else:
-            videos_inputs = {}
-            video_grid_thw = None
 
         if not isinstance(text, list):
             text = [text]
 
-        #Dirty solution. TODO use own text input so that we do not need to replace video token
+        text = text.copy()  # below lines change text in-place
+
+        # I just don't know why here is an image_pad token in the text (which needs
+        # to be replaced in the next lines of code.
         for i in range(0, len(text)):
             if self.image_token in text[i]:
                 text[i] = text[i].replace(self.image_token, self.video_token, 1)
-
-        if image_grid_thw is not None:
-            merge_length = self.image_processor.merge_size**2
-            index = 0
-            for i in range(len(text)):
-                while self.image_token in text[i]:
-                    text[i] = text[i].replace(
-                        self.image_token,
-                        "<|placeholder|>" * (image_grid_thw[index].prod() // merge_length),
-                        1,
-                    )
-                    index += 1
-                text[i] = text[i].replace("<|placeholder|>", self.image_token)
 
         if video_grid_thw is not None:
             merge_length = np.prod(self.reduce_block)
@@ -179,7 +128,18 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
 
         #text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
         # TODO check why it fails with the above line!
-        text_inputs = self.tokenizer(text, **{"padding":True, "return_tensors": "pt"})
+        #text_inputs = self.tokenizer(text, **{"padding":True, "return_tensors": "pt"})
 
+        # Original Qwen25VL stuff
+        return_tensors = output_kwargs["text_kwargs"].pop("return_tensors", None)
+        return_mm_token_type_ids = output_kwargs["text_kwargs"].pop("return_mm_token_type_ids", None)
+        text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
+        self._check_special_mm_tokens(text, text_inputs, modalities=["image", "video"])
 
-        return BatchFeature(data={**text_inputs, **image_inputs, **videos_inputs})
+        if return_mm_token_type_ids:
+            array_ids = np.array(text_inputs["input_ids"])
+            mm_token_type_ids = np.zeros_like(text_inputs["input_ids"])
+            mm_token_type_ids[array_ids == self.image_token_id] = 1
+            text_inputs["mm_token_type_ids"] = mm_token_type_ids.tolist()
+
+        return BatchFeature(data={**text_inputs, **image_inputs, **videos_inputs}, tensor_type=return_tensors)
