@@ -78,22 +78,23 @@ def save_embeddings_blosc2(embeddings, output_dir, img_file, clevel: int = 8, co
     else:
         embeddings_np = embeddings
 
-    print(f"Saving embeddings with shape: {embeddings_np.shape} to {output_filename_truncated + '.b2nd'}")
-        
-    # nnU-Net style cparams
-    cparams = {
-        'codec': codec,
-        'clevel': clevel,
-    }
+    print(f"Saving embeddings with shape: {embeddings_np.shape} to {output_filename_truncated}")
     
-    try:
-        blosc2.asarray(embeddings_np, 
-                      urlpath=output_filename_truncated + '.b2nd',
-                      cparams=cparams)
-        
-    except Exception as e:
-        raise
+    # Ensure array is contiguous
+    embeddings_np = np.ascontiguousarray(embeddings_np)
+    
 
+    output_path = output_filename_truncated + '.bl2'
+    cparams = {'codec': codec, 'clevel': clevel}
+    
+    bytes_saved = blosc2.save_array(
+        embeddings_np, 
+        output_path,
+        mode="w",
+        cparams=cparams
+    )
+    print(f"Successfully saved {bytes_saved}")
+    return
 
 def setup_model(base_path):
     plans_file = f"{base_path}/plans.json"
