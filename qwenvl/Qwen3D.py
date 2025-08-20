@@ -416,7 +416,7 @@ class QwenVLModel3D(Qwen2_5_VLModel):
 class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, GenerationMixin):
     _checkpoint_conversion_mapping = {
         "^visual": "model.visual",
-        r"^model(?!\.(language_model|visual))": "model.language_model",
+        r"^model(?!\.(language_model|visual|vision_adapter))": "model.language_model",
     }
     _tied_weights_keys = ["lm_head.weight"]
 
