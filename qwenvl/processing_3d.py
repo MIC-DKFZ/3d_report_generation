@@ -108,12 +108,6 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
 
         text = text.copy()  # below lines change text in-place
 
-        # I just don't know why here is an image_pad token in the text (which needs
-        # to be replaced in the next lines of code.
-        for i in range(0, len(text)):
-            if self.image_token in text[i]:
-                text[i] = text[i].replace(self.image_token, self.video_token, 1)
-
         if video_grid_thw is not None:
             merge_length = np.prod(self.reduce_block)
             index = 0

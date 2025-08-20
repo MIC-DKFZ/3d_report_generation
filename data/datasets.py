@@ -35,7 +35,7 @@ def format_into_message(
         user_message = {
             "role": "user",
             "content": [
-                {"type": "image", "embedding_path": embedding_path},
+                {"type": "video", "embedding_path": embedding_path},
                 {"type": "text", "text": question},
             ],
         }
