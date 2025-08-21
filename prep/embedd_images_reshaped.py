@@ -403,7 +403,72 @@ def process_region_from_segmentation_native_res(
         print(f"Error in process_image for {img_path}: {str(e)}")
         raise
 
+def process_image_center_crop(
+    img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"
+):
+    target_size = (192, 192, 192)
+    
+    blosc2_result = load_blosc2(img_path)
+    img_data, _ = blosc2_result 
+    img = np.array(img_data)
+    
+    # Add batch dimension
+    img = np.expand_dims(img, axis=0)
+    normalized_np = apply_normalization(
+        scheme=NormalizationScheme.Z_SCORE,
+        image=img,
+        target_dtype=np.float32,
+        use_mask_for_norm=False,
+    )
 
+    # Convert back to tensor
+    img_tensor = torch.from_numpy(normalized_np).to(device)
+    print(f"Tensor shape after adding batch/channel dims: {img_tensor.shape}")
+
+    # img_tensor shape is [B, C, H, W, D]
+    spatial_shape = img_tensor.shape[-3:]  # (H, W, D)
+    
+    # Calculate center crop coordinates
+    center_coords = [s // 2 for s in spatial_shape]
+    half_target = [t // 2 for t in target_size]
+    
+    # Calculate crop boundaries, ensuring we don't go outside image bounds
+    crop_start = [max(0, c - h) for c, h in zip(center_coords, half_target)]
+    crop_end = [min(s, c + h) for s, c, h in zip(spatial_shape, center_coords, half_target)]
+    
+    # Adjust crop_start if crop_end - crop_start < target_size and we have room
+    for i in range(3):
+        actual_size = crop_end[i] - crop_start[i]
+        if actual_size < target_size[i]:
+            # Try to expand the crop if possible
+            needed = target_size[i] - actual_size
+            expand_start = min(needed // 2, crop_start[i])
+            expand_end = min(needed - expand_start, spatial_shape[i] - crop_end[i])
+            crop_start[i] -= expand_start
+            crop_end[i] += expand_end
+    
+    # Extract center crop
+    center_crop = img_tensor[:, :, 
+                            crop_start[0]:crop_end[0],
+                            crop_start[1]:crop_end[1], 
+                            crop_start[2]:crop_end[2]]
+    
+
+    # we use split_image_into_patches to compute the attention mask (only one patch)
+    patches, attn_masks, num_patches = split_image_into_patches(
+        center_crop, [192, 192, 192], vit_patch_size=[8, 8, 8]
+    )
+
+    with torch.no_grad():
+        batch_patches = patches.view(-1, *patches.shape[2:])
+        batch_attn_masks = rearrange(attn_masks, "n h w d -> n 1 1 (h w d)").to(device)
+        batch_embeddings = model(batch_patches, batch_attn_masks)
+        embeddings = list(batch_embeddings.split(patches.shape[1], dim=0))    
+    embeddings = combine_patches_into_image(embeddings, attn_masks.to(device), num_patches)
+
+    return embeddings.cpu(), None
+    
+@torch.inference_mode()
 def process_image_native_res(
     img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"
 ):
@@ -434,15 +499,29 @@ def process_image_native_res(
             img_tensor, patch_size, vit_patch_size=[8, 8, 8]
         )
 
-        # Resize image to match patch size with additional checks
-        embeddings = []
-        # Generate embeddings
-        for i, (patch, attn_mask) in enumerate(zip(patches, attn_masks)):            
-            with torch.no_grad():
-                patch_embeddings = model(
-                    patch, rearrange(attn_mask, "h w d -> (h w d)").to(device)
-                )
-            embeddings.append(patch_embeddings)
+        # before: loop over windows
+        # for i, (patch, attn_mask) in enumerate(zip(patches, attn_masks)):            
+        #     with torch.no_grad():
+        #         #print(rearrange(attn_mask, "h w d -> 1 1 1 (h w d)").shape)
+        #         print("patch", patch.shape)
+        #         patch_embeddings = model(
+        #             patch, rearrange(attn_mask, "h w d -> (h w d)").to(device)
+        #         )
+        #         embeddings.append(patch_embeddings)
+        #         import napari, sys
+        #         viewer = napari.Viewer()
+        #         viewer.add_image(patch[0,0].detach().cpu().numpy(), name="patch")
+        #         viewer.add_image(patch_embeddings[0,0].detach().cpu().numpy(), name="reconst")
+        #         napari.run()
+        #         sys.exit(0)               
+
+        # All sliding windows at once (output is the same except some small numerical error < 1e-5)
+        with torch.no_grad():
+            batch_patches = patches.view(-1, *patches.shape[2:])
+            batch_attn_masks = rearrange(attn_masks, "n h w d -> n 1 1 (h w d)").to(device)
+            batch_embeddings = model(batch_patches, batch_attn_masks)
+            embeddings = list(batch_embeddings.split(patches.shape[1], dim=0))
+
         embeddings = combine_patches_into_image(embeddings, attn_masks.to(device), num_patches)
         
         return embeddings.cpu(), None
@@ -557,9 +636,7 @@ def process_image(img_path, model, config, device="cuda" if torch.cuda.is_availa
         img_data, affine = load_image_data_and_affine(img_path) # Load image data and affine
 
         # Add batch and channel dimensions
-        img_data = np.expand_dims(img_data, axis=(0, 1))
-
-        # print(f"Original image shape: {img_data.shape}")
+        img_data = np.expand_dims(img_data, axis=(0)) #TODO only use this for blosc2?!
 
         # Apply normalization using the provided scheme
         normalized_np = apply_normalization(
@@ -569,26 +646,20 @@ def process_image(img_path, model, config, device="cuda" if torch.cuda.is_availa
             use_mask_for_norm=False,
         )
 
-        # Convert back to tensor
         img_tensor = torch.from_numpy(normalized_np).to(device)
-        # print(f"Tensor shape after adding batch/channel dims: {img_tensor.shape}")
 
-        # Get patch size from config and ensure it's a tuple
-        patch_size = tuple(config["input_shape"])  # Should be (192, 192, 192)
 
-        # Resize image to match patch size with additional checks
+        patch_size = tuple(config["input_shape"])
+
         try:
-            # print(f"Attempting to resize from {img_tensor.shape} to {patch_size}")
+            print(f"Attempting to resize from {img_tensor.shape} to {patch_size}")
             if img_tensor.shape[-3:] != patch_size:
                 img_tensor = F.interpolate(
                     img_tensor, size=patch_size, mode="trilinear", align_corners=False
                 )
-            # else:
-                # print("Image already at target size, skipping resize")
         except Exception as e:
             print(f"Error during resize: {str(e)}")
             raise
-        # print(f"Input shape after resizing: {img_tensor.shape}")
 
         # Generate embeddings
         with torch.no_grad():
@@ -611,6 +682,7 @@ def main(args):
     processing_function_map = {
         "native": process_image_native_res,
         "resized": process_image,
+        "center_crop": process_image_center_crop,
         "region": process_region_from_segmentation_native_res,
     }
 
@@ -732,7 +804,7 @@ def parse_args():
         "--processing_function",
         required=True,
         type=str,
-        choices=["native", "resized", "region"],
+        choices=["native", "resized", "region", "center_crop"],
         help="Embedding generation method: 'native' (patch-based full image), 'resized' (resize full image), 'region' (patch-based region extraction).",
     )
     parser.add_argument(
