@@ -7,7 +7,8 @@ from transformers.processing_utils import Unpack
 from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
 
 from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import Qwen2_5_VLProcessor, Qwen2_5_VLProcessorKwargs
-
+import torch.nn.functional as F
+import random
 from einops import rearrange
 import torch
 import numpy as np
@@ -34,9 +35,10 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
     #video_processor_class = "AutoVideoProcessor"
     tokenizer_class = ("Qwen2Tokenizer", "Qwen2TokenizerFast")
 
-    def __init__(self, image_processor=None, tokenizer=None, chat_template=None, reduce_block = [2, 2, 2], **kwargs):
+    def __init__(self, image_processor=None, tokenizer=None, chat_template=None, reduce_block = [2, 2, 2], train_vision_encoder=False, **kwargs):
         super().__init__(image_processor, tokenizer, chat_template=chat_template)
         self.reduce_block = reduce_block
+        self.train_vision_encoder = train_vision_encoder
 
     def __call__(
         self,
@@ -92,12 +94,67 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
         image_inputs = videos_inputs = {}
         video_grid_thw = None
 
-        if vision_embeddings:
+        if vision_embeddings and not self.train_vision_encoder:
             video_grid_thw = torch.tensor([v_e.shape[-3:] for v_e in vision_embeddings]).int()
             list_of_vision_embeddings = [torch.tensor(rearrange(v_e, 'b c h w d -> (b h w d) c')) for v_e in vision_embeddings]
             # TODO fix the following padding (makes no sense right now (but works when all images have same size, otherwise crash with video_grid_thw above later))
             videos_input_embeddings = torch.nn.utils.rnn.pad_sequence(
                list_of_vision_embeddings, batch_first=True, padding_value=0).transpose(2, 1)
+            videos_inputs = {
+                "pixel_values_videos": videos_input_embeddings,
+                "video_grid_thw": video_grid_thw
+            }
+
+        elif self.train_vision_encoder:
+            patch_size = (192, 192, 192)
+            block_size = (8, 8, 8)
+            processed_images = []
+            
+            for i, image in enumerate(vision_embeddings):
+
+                image_tensor = torch.tensor(image)
+
+                # Get image dimensions (assuming format: H, W, D)
+                h, w, d = image_tensor.shape
+                
+
+                pad_h = max(0, patch_size[0] - h)
+                pad_w = max(0, patch_size[1] - w) 
+                pad_d = max(0, patch_size[2] - d)
+
+                if pad_h > 0 or pad_w > 0 or pad_d > 0:
+                    # Split padding evenly on both sides to center the image
+                    pad_h_before = pad_h // 2
+                    pad_h_after = pad_h - pad_h_before
+                    
+                    pad_w_before = pad_w // 2
+                    pad_w_after = pad_w - pad_w_before
+                    
+                    pad_d_before = pad_d // 2
+                    pad_d_after = pad_d - pad_d_before
+                    
+                    padding = (pad_d_before, pad_d_after, pad_w_before, pad_w_after, pad_h_before, pad_h_after)
+                    image_tensor = F.pad(image_tensor, padding, mode='constant', value=0)
+                                
+
+                max_starts = [max(0, image_tensor.shape[i] - patch_size[i]) for i in range(3)]
+                # randomly sample patch in the middle (TODO compare vs random sampling?)
+                start_h, start_w, start_d = [int(np.clip(np.random.normal(m/2, m*0.1), 0, m)) for m in max_starts]
+                                
+                # Extract patch
+                patch = image_tensor[
+                                start_h:start_h + patch_size[0],
+                                start_w:start_w + patch_size[1], 
+                                start_d:start_d + patch_size[2]]
+                
+                processed_images.append(patch)
+                del image_tensor
+                
+
+            # Stack all patches
+            videos_input_embeddings = torch.stack(processed_images)
+            video_grid_thw = torch.tensor([[24, 24, 24] for _ in range(len(processed_images))])# I am sorry for this
+            
             videos_inputs = {
                 "pixel_values_videos": videos_input_embeddings,
                 "video_grid_thw": video_grid_thw

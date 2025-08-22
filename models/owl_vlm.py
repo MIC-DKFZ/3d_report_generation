@@ -19,6 +19,10 @@ class OwlVLModel(AbstractVLMModel):
         output_dir="owl-vlm",
         vision_dim=864,
         embed_dim=896,
+        # the following are not used
+        reduce_block=[2,2,2],
+        train_vision_encoder=False,
+        vision_encoder_path=None
     ):
         super().__init__(model_id, train_only_vision_adapter)
         self._model_str = "owl"  # Used for logging and evaluation

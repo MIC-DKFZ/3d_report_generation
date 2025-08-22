@@ -9,10 +9,12 @@ from utils import logger
 
 
 class AbstractVLMModel(ABC):
-    def __init__(self, model_id, train_only_vision_adapter: bool, device=None):
+    def __init__(self, model_id, train_only_vision_adapter: bool, train_vision_encoder=False, vision_encoder_path=None, device=None):
         self.model_id = model_id
         # TODO: Make a default argument since its not needed for inference
         self.train_only_vision_adapter = train_only_vision_adapter
+        self.train_vision_encoder = train_vision_encoder
+        self.vision_encoder_path = vision_encoder_path
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
         self.tokenizer = None

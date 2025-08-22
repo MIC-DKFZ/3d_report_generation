@@ -4,7 +4,6 @@ import pickle
 import random
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, List, Tuple
 from tqdm import tqdm
 import yaml
 import blosc2
@@ -12,7 +11,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 import pickle
-
+import nrrd
 from data.extractors import (
     AMOSMMExtractor,
     AMOSMMRegionExtractor,
@@ -21,8 +20,30 @@ from data.extractors import (
     QAItemDict,
 )
 from utils import logger
+from typing import Type
+from numbers import Number
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
+
+
+def convert_dtype(image: np.ndarray, target_dtype: Type[Number]) -> np.ndarray:
+    return image.astype(target_dtype)
+
+
+def z_score_normalization(
+    image: np.ndarray, use_mask_for_norm: bool, non_zero_mask: np.ndarray, target_dtype: Type[Number]
+) -> np.ndarray:
+    image = convert_dtype(image, target_dtype)
+    if use_mask_for_norm:
+        mask = non_zero_mask >= 0
+        mean = image[mask].mean()
+        std = image[mask].std()
+        image[mask] = (image[mask] - mean) / max(std, 1e-8)
+    else:
+        mean = image.mean()
+        std = image.std()
+        image = (image - mean) / max(std, 1e-8)
+    return image
 
 
 def format_into_message(
@@ -81,6 +102,7 @@ class MedicalImageDataset(Dataset, ABC):
         embedding_constant=None,
         include_cls_text_gen=False,
         cls_aug_strength=0.0,
+        load_image=False
     ):
         super().__init__()
 
@@ -100,6 +122,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.include_cls_text_gen = include_cls_text_gen
         self.cls_aug_strength = cls_aug_strength
         self.cache_file = cache_file
+        self.load_image = load_image
 
         if isinstance(answer_types, str):
             answer_types = [
@@ -203,7 +226,7 @@ class MedicalImageDataset(Dataset, ABC):
 
         return filtered_samples
 
-    def _load_embedding(self, embedding_path):
+    def _load_embedding(self, embedding_path, is_image=True):
         """Load embedding from file"""
         try:
             if embedding_path.endswith(".npy"):
@@ -216,7 +239,7 @@ class MedicalImageDataset(Dataset, ABC):
                         embedding = npz_file["embeddings"].copy()  # Make a copy to avoid reference issues
                     else:
                         embedding = npz_file[npz_file.files[0]].copy()  # Make a copy to avoid reference issues
-                return embedding
+
             elif embedding_path.endswith(".b2nd"):
                 # Load b2nd file like nnUNet :)
                 dparams = {
@@ -224,11 +247,18 @@ class MedicalImageDataset(Dataset, ABC):
                 }
                 mmap_kwargs = {} if os.name == "nt" else {'mmap_mode': 'r'}
                 
-                embedding = blosc2.open(urlpath=embedding_path, mode='r', dparams=dparams, **mmap_kwargs)
+                embedding = np.array(blosc2.open(urlpath=embedding_path, mode='r', dparams=dparams, **mmap_kwargs))
                 
-                return np.array(embedding)
+            elif embedding_path.endswith(".nrrd"):     
+                embedding, header = nrrd.read(embedding_path)
+
             else:
                 raise ValueError(f"Unsupported embedding file format: {embedding_path}")
+            
+            if self.load_image:
+                embedding = z_score_normalization(embedding, False, None, np.float32)
+            return embedding
+        
         except Exception as e:
             logger.error(f"Error loading embedding from {embedding_path}: {e}")
             return None
@@ -474,8 +504,8 @@ class CTRATEDataset(MedicalImageDataset):
 
         for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
             for fl in fls_:
-                if fl.endswith(".npy") or fl.endswith(".npz") or fl.endswith(".b2nd"):
-                    image_id = fl.split("_embedding")[0]
+                if fl.endswith(".npy") or fl.endswith(".npz") or fl.endswith(".b2nd") or fl.endswith(".nrrd"):
+                    image_id = fl.split("_embedding")[0].split(".")[0]
                     self.embedding_dict[image_id] = os.path.join(flr_, fl)
 
         metadata_dir = os.path.join(dataset_path, "metadata")

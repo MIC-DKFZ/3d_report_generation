@@ -275,6 +275,14 @@ def parse_args(default_config=None):
         help="Train only the vision adapter (Qwen only)",
     )
     general_parser.add_argument(
+        "--train_vision_encoder",
+        action="store_true",
+        help="Train the vision encoder (then embedding paths are the paths to the actual images).",
+    )
+    general_parser.add_argument(
+        "--vision_encoder_path", type=str, help="Path to vision encoder checkpoint"
+    )
+    general_parser.add_argument(
         "--train_config", type=str, help="Path to config file (YAML or JSON)"
     )
     general_parser.add_argument(
@@ -530,7 +538,9 @@ def main():
         model_id=general_args.model_id,
         output_dir=general_args.output_dir,
         train_only_vision_adapter=general_args.train_only_vision_adapter,
-        reduce_block=general_args.reduce_block
+        reduce_block=general_args.reduce_block,
+        train_vision_encoder=general_args.train_vision_encoder,
+        vision_encoder_path=general_args.vision_encoder_path
     )
 
     # Create datasets
@@ -566,6 +576,7 @@ def main():
             include_cls_text_gen=general_args.include_cls_text_gen,
             cls_aug_strength=general_args.cls_aug_strength,
             cache_file=general_args.dataset_cache,  # Use cache file if provided
+            load_image=general_args.train_vision_encoder
         )
 
         val_dataset = CTRATEDataset(
@@ -579,6 +590,7 @@ def main():
             include_cls_text_gen=general_args.include_cls_text_gen,
             cls_aug_strength=general_args.cls_aug_strength,
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
+            load_image=general_args.train_vision_encoder
         )
     else:
         raise ValueError(f"Unsupported dataset name: {general_args.dataset_name}")

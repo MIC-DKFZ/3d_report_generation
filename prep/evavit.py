@@ -93,6 +93,9 @@ class EvaMAE(nn.Module):
         )
 
         # Patch embedding for decoder
+
+        decoder_eva_depth = 0
+        do_up_projection = False
         if do_up_projection:
             self.up_projection = PatchDecode(patch_embed_size, embed_dim, output_channels,
                                              norm=decoder_norm,
@@ -125,12 +128,10 @@ class EvaMAE(nn.Module):
             self.use_decoder = False
             # self.decoder = DecoderIdentity()
 
-        self.use_decoder = False #TODO make this less ugly
-
         self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         nn.init.normal_(self.mask_token, std=1e-6)
 
-        self.down_projection.apply(InitWeights_He(1e-2))
+        #self.down_projection.apply(InitWeights_He(1e-2))
 
     def restore_full_sequence(self, x, keep_indices, num_patches):
         """

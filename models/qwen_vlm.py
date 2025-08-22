@@ -21,11 +21,13 @@ class QwenVLModel(AbstractVLMModel):
         model_id,
         output_dir="qwen25-vlm",
         train_only_vision_adapter=False,
+        train_vision_encoder=True,
+        vision_encoder_path=None,
         reduce_block=[2,2,2],
         # base_model_id=None,
         checkpoint_path=None,
     ):
-        super().__init__(model_id, train_only_vision_adapter)
+        super().__init__(model_id, train_only_vision_adapter, train_vision_encoder, vision_encoder_path)
         self._model_str = "qwen"
         self.output_dir = output_dir
         self.batch_count = 0
@@ -45,6 +47,7 @@ class QwenVLModel(AbstractVLMModel):
             cache_dir=os.path.expanduser("~/.cache/huggingface/hub"),
             local_files_only=True,
             reduce_block=self.reduce_block,
+            train_vision_encoder = self.train_vision_encoder
         )
         self.tokenizer = self.processor.tokenizer
 
@@ -55,20 +58,26 @@ class QwenVLModel(AbstractVLMModel):
                 self.checkpoint_path,
                 torch_dtype=torch.bfloat16,
                 local_files_only=True,
-                reduce_block=self.reduce_block
+                reduce_block=self.reduce_block,
+                train_vision_encoder=self.train_vision_encoder,
+                vision_encoder_path=self.vision_encoder_path
             )
         elif bnb_config and not self.train_only_vision_adapter:
             self.model = QwenVLForConditionalGeneration3D.from_pretrained(
                 self.model_id,
                 torch_dtype=torch.bfloat16,
                 quantization_config=bnb_config,
-                reduce_block=self.reduce_block
+                reduce_block=self.reduce_block,
+                train_vision_encoder=self.train_vision_encoder,
+                vision_encoder_path=self.vision_encoder_path
             )
         else:
             self.model = QwenVLForConditionalGeneration3D.from_pretrained(
                 self.model_id, 
                 torch_dtype=torch.bfloat16,
-                reduce_block=self.reduce_block
+                reduce_block=self.reduce_block,
+                train_vision_encoder=self.train_vision_encoder,
+                vision_encoder_path=self.vision_encoder_path
             )
 
         if self.train_only_vision_adapter:
