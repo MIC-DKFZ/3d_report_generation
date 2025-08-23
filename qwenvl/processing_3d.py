@@ -108,20 +108,27 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
         elif self.train_vision_encoder:
             patch_size = (192, 192, 192)
             block_size = (8, 8, 8)
-            processed_images = []
+            
+            # Pre-allocate numpy array for all processed patches (more memory efficient than list of tensors)
+            num_images = len(vision_embeddings)
+            processed_patches = np.zeros((num_images, *patch_size), dtype=np.float32)
             
             for i, image in enumerate(vision_embeddings):
-
-                image_tensor = torch.tensor(image)
-
-                # Get image dimensions (assuming format: H, W, D)
-                h, w, d = image_tensor.shape
+                # Work with numpy array directly to avoid intermediate tensor creation
+                if not isinstance(image, np.ndarray):
+                    image_array = np.array(image, dtype=np.float32)
+                else:
+                    # Ensure float32 dtype without unnecessary copy
+                    image_array = image if image.dtype == np.float32 else image.astype(np.float32)
                 
-
+                # Get image dimensions (assuming format: H, W, D)
+                h, w, d = image_array.shape
+                
+                # Calculate padding
                 pad_h = max(0, patch_size[0] - h)
                 pad_w = max(0, patch_size[1] - w) 
                 pad_d = max(0, patch_size[2] - d)
-
+                
                 if pad_h > 0 or pad_w > 0 or pad_d > 0:
                     # Split padding evenly on both sides to center the image
                     pad_h_before = pad_h // 2
@@ -133,27 +140,27 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
                     pad_d_before = pad_d // 2
                     pad_d_after = pad_d - pad_d_before
                     
-                    padding = (pad_d_before, pad_d_after, pad_w_before, pad_w_after, pad_h_before, pad_h_after)
-                    image_tensor = F.pad(image_tensor, padding, mode='constant', value=0)
-                                
-
-                max_starts = [max(0, image_tensor.shape[i] - patch_size[i]) for i in range(3)]
-                # randomly sample patch in the middle (TODO compare vs random sampling?)
+                    # Use numpy padding (more memory efficient than torch F.pad for this case)
+                    padding = ((pad_h_before, pad_h_after), (pad_w_before, pad_w_after), (pad_d_before, pad_d_after))
+                    image_array = np.pad(image_array, padding, mode='constant', constant_values=0)
+                
+                # Random patch extraction
+                max_starts = [max(0, image_array.shape[i] - patch_size[i]) for i in range(3)]
                 start_h, start_w, start_d = [int(np.clip(np.random.normal(m/2, m*0.1), 0, m)) for m in max_starts]
-                                
-                # Extract patch
-                patch = image_tensor[
-                                start_h:start_h + patch_size[0],
-                                start_w:start_w + patch_size[1], 
-                                start_d:start_d + patch_size[2]]
                 
-                processed_images.append(patch)
-                del image_tensor
+                # Extract patch directly into pre-allocated array (no intermediate storage)
+                processed_patches[i] = image_array[
+                    start_h:start_h + patch_size[0],
+                    start_w:start_w + patch_size[1], 
+                    start_d:start_d + patch_size[2]
+                ]
                 
-
-            # Stack all patches
-            videos_input_embeddings = torch.stack(processed_images)
-            video_grid_thw = torch.tensor([[24, 24, 24] for _ in range(len(processed_images))])# I am sorry for this
+                # Explicitly clean up intermediate array
+                del image_array
+            
+            # Convert to tensor only at the very end (single allocation instead of multiple)
+            videos_input_embeddings = torch.from_numpy(processed_patches)
+            video_grid_thw = torch.tensor([[24, 24, 24] for _ in range(num_images)])
             
             videos_inputs = {
                 "pixel_values_videos": videos_input_embeddings,
