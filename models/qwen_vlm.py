@@ -80,6 +80,9 @@ class QwenVLModel(AbstractVLMModel):
                 vision_encoder_path=self.vision_encoder_path
             )
 
+        if self.train_vision_encoder:
+            self.model.model.setup_vision_encoder(self.vision_encoder_path)
+
         if self.train_only_vision_adapter:
             # For adapter-only training, don't use quantization for the adapter
             # Freeze all parameters except vision adapter
@@ -171,14 +174,31 @@ class QwenVLModel(AbstractVLMModel):
         if self.train_only_vision_adapter:
             return {"peft_config": None, "train_only_vision_adapter": True}
         else:
-            peft_config = LoraConfig(
-                lora_alpha=16,
-                lora_dropout=0.05,
-                r=8,
-                bias="none",
-                target_modules=["q_proj", "v_proj"],
-                task_type="CAUSAL_LM",
-            )
+            if self.train_vision_encoder:
+                peft_config = LoraConfig(
+                    task_type="CAUSAL_LM",
+                    r=8,
+                    lora_alpha=32,
+                    target_modules=[
+                        "q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj",
+                        "lm_head"
+                    ],
+                    exclude_modules=["vision_adapter"],
+                    modules_to_save=["vision_adapter"],
+                    lora_dropout=0.1,
+                    bias="none"
+                )
+            else:
+                peft_config = LoraConfig(
+                    lora_alpha=16,
+                    lora_dropout=0.05,
+                    r=8,
+                    bias="none",
+                    target_modules=["q_proj", "v_proj"],
+                    task_type="CAUSAL_LM",
+                )
+
             return {"peft_config": peft_config, "train_only_vision_adapter": False}
 
     def get_model_specific_training_args(self):

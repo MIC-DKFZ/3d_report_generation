@@ -7,7 +7,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from transformers.activations import QuickGELUActivation
 
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLModel, Qwen2_5_VLModelOutputWithPast, Qwen2RMSNorm
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLModel, Qwen2_5_VLModelOutputWithPast, Qwen2RMSNorm, Qwen2_5_VLPreTrainedModel, Qwen2_5_VLTextModel
 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig
 
 from transformers.cache_utils import Cache
@@ -260,24 +260,27 @@ class VisionAdapterReduceBlocks(nn.Module):
         return x
 
 
-class QwenVLModel3D(Qwen2_5_VLModel):
+class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
     base_model_prefix = ""
     _checkpoint_conversion_mapping = {"^model": "language_model"}
     config: Qwen2_5_VLConfig
     _no_split_modules = ["Qwen2_5_VLDecoderLayer", "Qwen2_5_VLVisionBlock"]
 
     def __init__(self, config, reduce_block=[2, 2, 2], train_vision_encoder=False, vision_encoder_path=None):
-        super().__init__(config)
-
+        # we need to replace Qwen25VL init because it inits 'visual'
+        Qwen2_5_VLPreTrainedModel.__init__(self, config)
+        self.language_model = Qwen2_5_VLTextModel._from_config(config.text_config)
         self.reduce_block = reduce_block
+        self.rope_deltas = None  # cache rope_deltas here
+
+        # Initialize weights and apply final processing
+        self.post_init()
         # Added by us
         self.vision_adapter = VisionAdapterReduceBlocks(
             embedding_dim=864, embed_dim=2048, reduce_block=reduce_block
         )
 
         self.train_vision_encoder = train_vision_encoder
-        if self.train_vision_encoder:
-            self.setup_vision_encoder(vision_encoder_path)
 
         # self.vision_adapter = VisionAdapterHeterogeneous(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
 
@@ -334,7 +337,7 @@ class QwenVLModel3D(Qwen2_5_VLModel):
             ##########
             # Only these 3 lines (and bellow two lines) are different from the original Qwen2_5_VLModel
             #pixel_values_videos = torch.rand_like(pixel_values_videos) #TODO RANDOM IMAGE HERE!!!
-            pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
+            #pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
             if self.train_vision_encoder:
                 video_embeds = self.vision_encoder(pixel_values_videos.unsqueeze(1))
                 video_embeds = rearrange(video_embeds, 'b c h w d -> b c (h w d )')
