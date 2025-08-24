@@ -230,10 +230,16 @@ class VisionAdapterReduceBlocks(nn.Module):
         x = x.to(torch.bfloat16)
 
         # Input shape is (batch_size, embedding_dim, sequence_length)
-        batch_size, embedding_dim, _ = x.shape
+        batch_size= x.shape[0]
+        embedding_dim = x.shape[1]
+
+
+        if x.ndim == 3: # this is the case if we load embeddings
+            x = x.reshape(batch_size, embedding_dim, *video_grid_thw[0])
+            #x = x.permute(0, 2, 3, 4, 1)  # Move embedding_dim to last dimension
+
 
         # TODO how to handle cases where each image has different size i.e. video_grid_thw has size (B, 3) and this only works for B==1?
-        x = x.reshape(batch_size, embedding_dim, *video_grid_thw[0])
 
         # Use unfold to create reduce_block
         x = x.unfold(2, self.reduce_block[0], self.reduce_block[0])
@@ -340,7 +346,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
             #pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
             if self.train_vision_encoder:
                 video_embeds = self.vision_encoder(pixel_values_videos.unsqueeze(1))
-                video_embeds = rearrange(video_embeds, 'b c h w d -> b c (h w d )')
+                #video_embeds = rearrange(video_embeds, 'b c h w d -> b c (h w d )')
                 video_embeds = self.vision_adapter(video_embeds, video_grid_thw)
             else:
                 video_embeds = self.vision_adapter(pixel_values_videos, video_grid_thw)

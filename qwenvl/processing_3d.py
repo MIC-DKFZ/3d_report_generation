@@ -106,65 +106,23 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
             }
 
         elif self.train_vision_encoder:
-            patch_size = (192, 192, 192)
-            block_size = (8, 8, 8)
-            
-            # Pre-allocate numpy array for all processed patches (more memory efficient than list of tensors)
+            # Images are already preprocessed and cropped to final size in dataset!
             num_images = len(vision_embeddings)
-            processed_patches = np.zeros((num_images, *patch_size), dtype=np.float32)
+            processed_images = []
             
-            for i, image in enumerate(vision_embeddings):
-                # Work with numpy array directly to avoid intermediate tensor creation
-                if not isinstance(image, np.ndarray):
-                    image_array = np.array(image, dtype=np.float32)
-                else:
-                    # Ensure float32 dtype without unnecessary copy
-                    image_array = image if image.dtype == np.float32 else image.astype(np.float32)
-                
-                # Remove singleton first dimension if present
+            for image_array in vision_embeddings:
+                # Remove singleton first dimension if present (wieso auch immer brauchen wir das bei blosc2, nicht aber bei nrrd)
                 if image_array.ndim == 4 and image_array.shape[0] == 1:
                     image_array = image_array.squeeze(0)
-                
-                # Get image dimensions (assuming format: H, W, D)
-                h, w, d = image_array.shape
-                
-                # Calculate padding
-                pad_h = max(0, patch_size[0] - h)
-                pad_w = max(0, patch_size[1] - w) 
-                pad_d = max(0, patch_size[2] - d)
-                
-                if pad_h > 0 or pad_w > 0 or pad_d > 0:
-                    # Split padding evenly on both sides to center the image
-                    pad_h_before = pad_h // 2
-                    pad_h_after = pad_h - pad_h_before
-                    
-                    pad_w_before = pad_w // 2
-                    pad_w_after = pad_w - pad_w_before
-                    
-                    pad_d_before = pad_d // 2
-                    pad_d_after = pad_d - pad_d_before
-                    
-                    # Use numpy padding (more memory efficient than torch F.pad for this case)
-                    padding = ((pad_h_before, pad_h_after), (pad_w_before, pad_w_after), (pad_d_before, pad_d_after))
-                    image_array = np.pad(image_array, padding, mode='constant', constant_values=0)
-                
-                # Random patch extraction
-                max_starts = [max(0, image_array.shape[i] - patch_size[i]) for i in range(3)]
-                start_h, start_w, start_d = [int(np.clip(np.random.normal(m/2, m*0.1), 0, m)) for m in max_starts]
-                
-                # Extract patch directly into pre-allocated array (no intermediate storage)
-                processed_patches[i] = image_array[
-                    start_h:start_h + patch_size[0],
-                    start_w:start_w + patch_size[1], 
-                    start_d:start_d + patch_size[2]
-                ]
-                
-                # Explicitly clean up intermediate array
-                del image_array
+                processed_images.append(image_array)
             
-            # Convert to tensor only at the very end (single allocation instead of multiple)
-            videos_input_embeddings = torch.from_numpy(processed_patches)
-            video_grid_thw = torch.tensor([[24, 24, 24] for _ in range(num_images)])
+            processed_patches = np.stack(processed_images, axis=0)
+            
+            # Convert to tensor
+            videos_input_embeddings = processed_patches#orch.from_numpy(processed_patches)
+            video_grid_thw = torch.tensor([[videos_input_embeddings[i].shape[0]//(self.reduce_block[0] * 8), 
+                                            videos_input_embeddings[i].shape[1]//(self.reduce_block[1] * 8), 
+                                            videos_input_embeddings[i].shape[2]//(self.reduce_block[2] * 8)] for i in range(num_images)])
             
             videos_inputs = {
                 "pixel_values_videos": videos_input_embeddings,
@@ -181,10 +139,13 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
             index = 0
             for i in range(len(text)):
                 while self.video_token in text[i]:
-                    text[i] = text[i].replace(
-                        # TODO: In the adapter we use unfold to create merger patches. If the image size is not divisible by the reduce block the last row/column will be dropped.
-                        self.video_token, "<|placeholder|>" * ((video_grid_thw[index] - video_grid_thw[index] % torch.as_tensor(self.reduce_block)).prod() // merge_length), 1
-                    )
+                    if not self.train_vision_encoder:
+                        text[i] = text[i].replace(
+                            # TODO: In the adapter we use unfold to create merger patches. If the image size is not divisible by the reduce block the last row/column will be dropped.
+                            self.video_token, "<|placeholder|>" * ((video_grid_thw[index] - video_grid_thw[index] % torch.as_tensor(self.reduce_block)).prod() // merge_length), 1)
+                    else:
+                            #TODO fix this so that we dont need an else block... this is just a quick fix for now
+                            text[i] = text[i].replace(self.video_token, "<|placeholder|>" * video_grid_thw.prod(), 1)
                     index += 1
                 text[i] = text[i].replace("<|placeholder|>", self.video_token)
 

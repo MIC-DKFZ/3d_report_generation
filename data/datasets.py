@@ -316,7 +316,7 @@ class MedicalImageDataset(Dataset, ABC):
         """Load embedding from file"""
         try:
             if embedding_path.endswith(".npy"):
-                return np.load(embedding_path)
+                embedding = np.load(embedding_path)
             elif embedding_path.endswith(".npz"):
                 # Use context manager to ensure proper file closure
                 with np.load(embedding_path) as npz_file:
@@ -343,15 +343,72 @@ class MedicalImageDataset(Dataset, ABC):
             
             if self.load_image:
                 embedding = z_score_normalization(embedding, False, None, np.float32)
+                embedding = self._preprocess_3d_image(embedding)
+
             return embedding
-        
+            
         except Exception as e:
             logger.error(f"Error loading embedding from {embedding_path}: {e}")
             return None
 
+
+    def _preprocess_3d_image(self, image_array):
+        """Preprocess 3D image: convert to float32, remove singleton dims, pad if needed, and random crop to final patch size"""
+        # Ensure float32 dtype
+        if not isinstance(image_array, np.ndarray):
+            image_array = np.array(image_array, dtype=np.float32)
+        else:
+            image_array = image_array if image_array.dtype == np.float32 else image_array.astype(np.float32)
+        
+        # Remove singleton first dimension if present
+        if image_array.ndim == 4 and image_array.shape[0] == 1:
+            image_array = image_array.squeeze(0)
+        
+        # Final patch size
+        patch_size = (192, 192, 192)
+        
+        # Get image dimensions (assuming format: H, W, D)
+        h, w, d = image_array.shape
+        
+        # Pad if image is smaller than patch_size
+        pad_h = max(0, patch_size[0] - h)
+        pad_w = max(0, patch_size[1] - w) 
+        pad_d = max(0, patch_size[2] - d)
+        
+        if pad_h > 0 or pad_w > 0 or pad_d > 0:
+            # Split padding evenly on both sides to center the image
+            pad_h_before = pad_h // 2
+            pad_h_after = pad_h - pad_h_before
+            
+            pad_w_before = pad_w // 2
+            pad_w_after = pad_w - pad_w_before
+            
+            pad_d_before = pad_d // 2
+            pad_d_after = pad_d - pad_d_before
+            
+            # Pad the image
+            padding = ((pad_h_before, pad_h_after), (pad_w_before, pad_w_after), (pad_d_before, pad_d_after))
+            image_array = np.pad(image_array, padding, mode='constant', constant_values=0)
+        
+        # Random crop to exact patch size (if larger than patch_size)
+        h, w, d = image_array.shape
+        if h > patch_size[0] or w > patch_size[1] or d > patch_size[2]:
+            # Random patch extraction (same logic as was in processor)
+            max_starts = [max(0, image_array.shape[i] - patch_size[i]) for i in range(3)]
+            start_h, start_w, start_d = [int(np.clip(np.random.normal(m/2, m*0.1), 0, m)) for m in max_starts]
+            
+            # Extract random patch
+            image_array = image_array[
+                start_h:start_h + patch_size[0],
+                start_w:start_w + patch_size[1], 
+                start_d:start_d + patch_size[2]
+            ]
+        
+        return image_array
+
     def _embedding_2_tensor(self, embedding):
         """Convert embedding to tensor"""
-
+        # TODO check if we can remove this function!
         if embedding is None:
             logger.error("Embedding is None, cannot convert to tensor.")
             return None
@@ -398,13 +455,20 @@ class MedicalImageDataset(Dataset, ABC):
                     result["embedding"] = np.random.rand(*(self._load_embedding(sample["embedding_path"])).shape)
                 else:
                     raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
-            result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
-            if result["embedding_tensor"] is not None:
-                result["embedding_tensor"] = result["embedding_tensor"].half()  # Ensure tensor is
-            if result["embedding"] is not None:
-                result["embedding"] = result["embedding"].astype(
-                    np.float16
-                )  # Convert to float16 for memory efficiency
+                
+            if self.load_image:
+                result["embedding_tensor"] = result["embedding"]
+            else:
+                # do we really need this function? why do reshaping and why use torch.tensor()?
+                result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
+
+            # TODO check if we can remove this stuff!
+            #if result["embedding_tensor"] is not None:
+            #    result["embedding_tensor"] = result["embedding_tensor"].half()  # Ensure tensor is
+            #if result["embedding"] is not None:
+            #    result["embedding"] = result["embedding"].astype(
+            #        np.float16
+            #    )  # Convert to float16 for memory efficiency
 
         return result
 
