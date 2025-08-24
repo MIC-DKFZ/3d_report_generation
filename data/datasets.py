@@ -434,11 +434,17 @@ class MedicalImageDataset(Dataset, ABC):
         # Random crop to exact patch size (if larger than patch_size)
         h, w, d = image_array.shape
         if h > patch_size[0] or w > patch_size[1] or d > patch_size[2]:
-            # Random patch extraction (same logic as was in processor)
-            max_starts = [max(0, image_array.shape[i] - patch_size[i]) for i in range(3)]
-            start_h, start_w, start_d = [int(np.clip(np.random.normal(m/2, m*0.1), 0, m)) for m in max_starts]
+            if self.split != "train":
+                # Center crop
+                start_h = (h - patch_size[0]) // 2
+                start_w = (w - patch_size[1]) // 2
+                start_d = (d - patch_size[2]) // 2
+            else:
+                # Random patch
+                max_starts = [max(0, image_array.shape[i] - patch_size[i]) for i in range(3)]
+                start_h, start_w, start_d = [int(np.clip(np.random.normal(m/2, m*0.1), 0, m)) for m in max_starts]
             
-            # Extract random patch
+            # Extract patch
             image_array = image_array[
                 start_h:start_h + patch_size[0],
                 start_w:start_w + patch_size[1], 
