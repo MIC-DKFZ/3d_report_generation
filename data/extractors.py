@@ -418,6 +418,22 @@ class CTRATEExtractor:
                     # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
                 extracted_samples.append(extracted_sample)
 
+            if "vqa_data" in sample:
+                for qa_pair in sample["vqa_data"]:
+                    vqa_sample = {
+                        "image_id": sample["image_id"],
+                        "image_path": sample["embedding_path"],
+                        "question": qa_pair["question"],
+                        "answer": qa_pair["answer"],
+                        "full_answer": qa_pair["answer"],
+                        "answer_type": "TEXT",
+                        "answer_subtype": "VQA",
+                        "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                    }
+                    if include_cls_text_gen:
+                        vqa_sample["cls_text_gen"] = sample["tasks"]["classification"]
+                    extracted_samples.append(vqa_sample)  
+
         # convert to QAItemDict
         extracted_samples = [QAItemDict(sample) for sample in extracted_samples]
 

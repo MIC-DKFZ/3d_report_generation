@@ -102,7 +102,7 @@ def _tokenize_single_sample(sample_data, tokenize_fn):
 
 def _load_yaml_file(file_info):
     """Helper function to load a single YAML file for CTRATEDataset"""
-    metadata_file, metadata_dir, data_dir, embedding_dict, split = file_info
+    metadata_file, metadata_dir, data_dir, embedding_dict, split, vqa_path = file_info
     
     metadata_path = os.path.join(metadata_dir, metadata_file)
     
@@ -137,6 +137,45 @@ def _load_yaml_file(file_info):
             "diagnosis": impressions,
         },
     }
+    
+    # Load VQA data if vqa_path is provided
+    if vqa_path is not None:
+        try:
+            # Extract case identifier from image filepath
+            image_filepaths = metadata.get("image_filepaths", [])
+            if image_filepaths:
+                # Get the filename from the first filepath
+                # Example: .../train_14008_a_2.nii.gz -> train_14008_a_2.nii.gz
+                filepath = image_filepaths[0]
+                filename = os.path.basename(filepath)
+                
+                # Remove file extension and trailing number+underscore
+                # train_14008_a_2.nii.gz -> train_14008_a_2 -> train_14008_a
+                case_dir = filename.split('.')[0]  # Remove .nii.gz
+                case_dir = '_'.join(case_dir.split('_')[:-1])  # Remove _2 (last part)
+                
+                # Determine VQA folder based on case type
+                if case_dir.startswith('train_'):
+                    vqa_folder = "train_cases"
+                elif case_dir.startswith('valid_'):
+                    vqa_folder = "validation_cases"
+                else:
+                    vqa_folder = None
+                
+                if vqa_folder:
+                    vqa_file_path = os.path.join(vqa_path, vqa_folder, f"{case_dir}.json")
+                    
+                    if os.path.exists(vqa_file_path):
+                        with open(vqa_file_path, "r") as f:
+                            vqa_data = json.load(f)
+                        sample["vqa_data"] = vqa_data.get("qa_pairs", [])
+                    else:
+                        print(f"VQA file not found: {vqa_file_path}")
+                        logger.debug(f"VQA file not found: {vqa_file_path}")
+                            
+        except Exception as e:
+            logger.error(f"Error loading VQA data for {image_id}: {e}")
+    
     return sample
 
 
@@ -168,7 +207,8 @@ class MedicalImageDataset(Dataset, ABC):
         include_cls_text_gen=False,
         cls_aug_strength=0.0,
         load_image=False,
-        max_workers=None
+        max_workers=None,
+        vqa_path=None,
     ):
         super().__init__()
 
@@ -180,6 +220,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.embeddings_path = (
             Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
         )
+        self.vqa_path = vqa_path
         self.n_samples = n_samples
         self.tokenize_fn = tokenize_fn
         self.split_files = split_files
@@ -626,6 +667,7 @@ class CTRATEDataset(MedicalImageDataset):
         embeddings_path (str | Path): Path to the vision embeddings directory
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of answers to include
+        vqa_path (str, optional): Path to the VQA data directory
     """
 
     def _load_data(self, dataset_path):
@@ -673,8 +715,7 @@ class CTRATEDataset(MedicalImageDataset):
 
         logger.info(f"Processing {len(metadata_files)} metadata files in parallel...")
         
-        # Prepare data for parallel processing
-        file_info_list = [(metadata_file, metadata_dir, data_dir, self.embedding_dict, self.split) 
+        file_info_list = [(metadata_file, metadata_dir, data_dir, self.embedding_dict, self.split, self.vqa_path) 
                          for metadata_file in metadata_files]
         
         # Use ThreadPoolExecutor for I/O bound YAML reading

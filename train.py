@@ -233,6 +233,9 @@ def parse_args(default_config=None):
         "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
     )
     general_parser.add_argument(
+        "--vqa_path", type=str, default=None, help="Path to generated CTRATE VQA data",
+    )
+    general_parser.add_argument(
         "--output_dir",
         type=str,
         default="output/vlm_output",
@@ -570,6 +573,7 @@ def main():
             dataset_json_path=general_args.dataset_path,
             model_name=general_args.model_type,
             split="train" if general_args.split_idx is None else f"train_{general_args.split_idx}",
+            vqa_path=general_args.vqa_path,
             embeddings_path=general_args.embeddings_path,
             split_files=general_args.split_file,
             answer_types=("TEXT",),
