@@ -12,6 +12,9 @@ import torch
 from torch.utils.data import Dataset
 import pickle
 import nrrd
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
+import multiprocessing as mp
 from data.extractors import (
     AMOSMMExtractor,
     AMOSMMRegionExtractor,
@@ -75,6 +78,68 @@ def format_into_message(
     return full_conversation, prompt_only_conversation
 
 
+def _process_sample_for_formatting(sample, get_embedding_path_func):
+    """Helper function to process a single sample for formatting"""
+    embedding_path = get_embedding_path_func(sample["image_id"])
+    
+    # Skip if embedding file doesn't exist
+    if not os.path.exists(embedding_path):
+        return None
+    
+    sample["embedding_path"] = embedding_path
+    return sample
+
+
+def _tokenize_single_sample(sample_data, tokenize_fn):
+    """Helper function to tokenize a single sample"""
+    sample, formatted_qa, formatted_qa_prompt_only = sample_data
+    sample["formatted_qa"] = formatted_qa
+    sample["formatted_qa_prompt_only"] = formatted_qa_prompt_only
+    sample["tokenized_qa_text_tokens"] = tokenize_fn(formatted_qa)
+    sample["tokenized_qa_text_prompt_only_tokens"] = tokenize_fn(formatted_qa_prompt_only)
+    return sample
+
+
+def _load_yaml_file(file_info):
+    """Helper function to load a single YAML file for CTRATEDataset"""
+    metadata_file, metadata_dir, data_dir, embedding_dict, split = file_info
+    
+    metadata_path = os.path.join(metadata_dir, metadata_file)
+    
+    try:
+        with open(metadata_path, "r") as f:
+            metadata = yaml.safe_load(f)
+    except Exception as e:
+        logger.error(f"Error loading {metadata_path}: {e}")
+        return None
+
+    image_id = metadata["image_id"]
+    embedding_path = embedding_dict.get(image_id)
+
+    if embedding_path is None:
+        return None
+
+    if split == "train" and not metadata["metadata"].get("train_set", False):
+        return None
+    elif split == "val" and metadata["metadata"].get("train_set", True):
+        return None
+
+    findings = metadata["metadata"]["Findings_EN"]
+    impressions = metadata["metadata"]["Impressions_EN"]
+    classifications = {c: metadata["metadata"].get(c) for c in CTRATEExtractor.CONDITIONS}
+
+    sample = {
+        "image_id": metadata["image_id"],
+        "embedding_path": embedding_path,
+        "tasks": {
+            "classification": classifications,
+            "report_gen": findings,
+            "diagnosis": impressions,
+        },
+    }
+    return sample
+
+
 class MedicalImageDataset(Dataset, ABC):
     """
     Base class for medical imaging datasets with vision-language models
@@ -102,7 +167,8 @@ class MedicalImageDataset(Dataset, ABC):
         embedding_constant=None,
         include_cls_text_gen=False,
         cls_aug_strength=0.0,
-        load_image=False
+        load_image=False,
+        max_workers=None
     ):
         super().__init__()
 
@@ -123,7 +189,8 @@ class MedicalImageDataset(Dataset, ABC):
         self.cls_aug_strength = cls_aug_strength
         self.cache_file = cache_file
         self.load_image = load_image
-
+        self.max_workers = max_workers or min(48, (os.cpu_count() or 1))
+        logger.info(f"Using {self.max_workers} for dataset loading.")
         if isinstance(answer_types, str):
             answer_types = [
                 answer_types
@@ -181,31 +248,50 @@ class MedicalImageDataset(Dataset, ABC):
         pass
 
     def format_data(self):
-        """Format raw data into structured samples"""
-        formatted_data = []
-
+        """Format raw data into structured samples with parallel processing"""
         extracted_samples = self.extract_sample_list(self.data)
+        
+        logger.info(f"Processing {len(extracted_samples)} samples with parallel formatting...")
+        
+        # Use ThreadPoolExecutor for I/O bound operations (file existence checks)
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all tasks
+            process_func = partial(_process_sample_for_formatting, get_embedding_path_func=self.get_embedding_path)
+            future_to_sample = {executor.submit(process_func, sample): sample for sample in extracted_samples}
+            
+            formatted_data = []
+            for future in tqdm(as_completed(future_to_sample), total=len(extracted_samples), desc="Formatting samples"):
+                result = future.result()
+                if result is not None:
+                    formatted_data.append(result)
 
-        for sample in tqdm(extracted_samples, desc="Formatting samples"):
-            embedding_path = self.get_embedding_path(sample["image_id"])
-
-            # Skip if embedding file doesn't exist
-            if not os.path.exists(embedding_path):
-                continue
-
-            sample["embedding_path"] = embedding_path
-
-            formatted_data.append(sample)
-
+        logger.info(f"Formatted {len(formatted_data)} samples successfully")
         return formatted_data
 
     def _tokenize_samples(self):
-        for sample in tqdm(self.samples, desc="Tokenizing samples"):
-            # sample["tokenized"] = {}
-            sample["tokenized_qa_text_tokens"] = self.tokenize_fn(sample["formatted_qa"])
-            sample["tokenized_qa_text_prompt_only_tokens"] = self.tokenize_fn(
-                sample["formatted_qa_prompt_only"]
+        """Tokenize samples with parallel processing"""
+        logger.info("Preparing samples for tokenization...")
+        
+        # Prepare data for tokenization
+        sample_data = []
+        for sample in self.samples:
+            formatted_qa, formatted_qa_prompt_only = format_into_message(
+                sample["question"],
+                sample["full_answer"],
+                self.model_name,
+                system_text=sample["system_text"],
             )
+            sample_data.append((sample, formatted_qa, formatted_qa_prompt_only))
+        
+        logger.info(f"Tokenizing {len(sample_data)} samples in parallel...")
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            tokenize_func = partial(_tokenize_single_sample, tokenize_fn=self.tokenize_fn)
+            future_to_idx = {executor.submit(tokenize_func, data): idx for idx, data in enumerate(sample_data)}
+            
+            for future in tqdm(as_completed(future_to_idx), total=len(sample_data), desc="Tokenizing samples"):
+                idx = future_to_idx[future]
+                self.samples[idx] = future.result()
 
     def _filter_samples(self, samples):
         """Filter samples based on answer type"""
@@ -478,35 +564,26 @@ class CTRATEDataset(MedicalImageDataset):
         answer_types (tuple, optional): Types of answers to include
     """
 
-    # def __init__(
-    #     self,
-    #     dataset_path,
-    #     model_name,
-    #     split="train",
-    #     embeddings_path=None,
-    #     n_samples=None,
-    #     tokenize_fn=None,
-    #     answer_types=("CHOICE", "TEXT"),
-    # ):
-    #     super().__init__(
-    #         dataset_path,
-    #         model_name,
-    #         split=split,
-    #         embeddings_path=embeddings_path,
-    #         n_samples=n_samples,
-    #         tokenize_fn=tokenize_fn,
-    #         answer_types=answer_types,
-    #     )
-
     def _load_data(self, dataset_path):
-
+        logger.info("Building embedding dictionary...")
+        
+        # Build embedding dictionary with parallel processing
         self.embedding_dict = {}
-
+        
+        # Collect all embedding files first
+        embedding_files = []
         for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
             for fl in fls_:
-                if fl.endswith(".npy") or fl.endswith(".npz") or fl.endswith(".b2nd") or fl.endswith(".nrrd"):
-                    image_id = fl.split("_embedding")[0].split(".")[0]
-                    self.embedding_dict[image_id] = os.path.join(flr_, fl)
+                if fl.endswith((".npy", ".npz", ".b2nd", ".nrrd")):
+                    embedding_files.append(os.path.join(flr_, fl))
+        
+        logger.info(f"Found {len(embedding_files)} embedding files")
+        
+        # Process embedding files to build dictionary
+        for embedding_path in tqdm(embedding_files, desc="Building embedding dictionary"):
+            fl = os.path.basename(embedding_path)
+            image_id = fl.split("_embedding")[0].split(".")[0]
+            self.embedding_dict[image_id] = embedding_path
 
         metadata_dir = os.path.join(dataset_path, "metadata")
         data_dir = os.path.join(dataset_path, "images")
@@ -530,44 +607,24 @@ class CTRATEDataset(MedicalImageDataset):
             else:
                 metadata_files = [f for f in metadata_files if f.replace(".yml", "") in train_ids]
 
+        logger.info(f"Processing {len(metadata_files)} metadata files in parallel...")
+        
+        # Prepare data for parallel processing
+        file_info_list = [(metadata_file, metadata_dir, data_dir, self.embedding_dict, self.split) 
+                         for metadata_file in metadata_files]
+        
+        # Use ThreadPoolExecutor for I/O bound YAML reading
         samples = []
-        for metadata_file in tqdm(metadata_files, desc="Loading metadata files"):
-            metadata_path = os.path.join(metadata_dir, metadata_file)
-            # data_path = os.path.join(data_dir, metadata_file.replace(".yml", ".nrrd"))
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_file = {executor.submit(_load_yaml_file, file_info): file_info[0] 
+                             for file_info in file_info_list}
+            
+            for future in tqdm(as_completed(future_to_file), total=len(file_info_list), desc="Loading metadata files"):
+                result = future.result()
+                if result is not None:
+                    samples.append(result)
 
-            # if not os.path.exists(data_path):
-            #     continue
-
-            with open(metadata_path, "r") as f:
-                metadata = yaml.safe_load(f)
-
-            image_id = metadata["image_id"]
-
-            embedding_path = self.embedding_dict.get(image_id)
-
-            if embedding_path is None:
-                continue
-
-            if self.split == "train" and not metadata["metadata"].get("train_set", False):
-                continue
-            elif self.split == "val" and metadata["metadata"].get("train_set", True):
-                continue
-
-            findings = metadata["metadata"]["Findings_EN"]
-            impressions = metadata["metadata"]["Impressions_EN"]
-            classifications = {c: metadata["metadata"].get(c) for c in CTRATEExtractor.CONDITIONS}
-
-            sample = {
-                "image_id": metadata["image_id"],
-                "embedding_path": embedding_path,
-                "tasks": {
-                    "classification": classifications,
-                    "report_gen": findings,
-                    "diagnosis": impressions,
-                },
-            }
-            samples.append(sample)
-
+        logger.info(f"Successfully loaded {len(samples)} samples")
         return samples
 
     def get_embedding_path(self, embedding_path):

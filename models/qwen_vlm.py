@@ -184,7 +184,7 @@ class QwenVLModel(AbstractVLMModel):
                         "gate_proj", "up_proj", "down_proj",
                         "lm_head"
                     ],
-                    exclude_modules=["vision_adapter"],
+                    #exclude_modules=["vision_adapter"],
                     modules_to_save=["vision_adapter"],
                     lora_dropout=0.1,
                     bias="none"

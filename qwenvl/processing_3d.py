@@ -121,6 +121,10 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
                     # Ensure float32 dtype without unnecessary copy
                     image_array = image if image.dtype == np.float32 else image.astype(np.float32)
                 
+                # Remove singleton first dimension if present
+                if image_array.ndim == 4 and image_array.shape[0] == 1:
+                    image_array = image_array.squeeze(0)
+                
                 # Get image dimensions (assuming format: H, W, D)
                 h, w, d = image_array.shape
                 
