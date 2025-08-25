@@ -245,7 +245,7 @@ class PretrainedEvaEncFromEvaMAE(EvaMAE):
     def load_pretrained_weights(self, pretrained_weights_file, verbose=True):
         # Load weights
         if dist.is_initialized():
-            saved_model = torch.load(pretrained_weights_file, map_location=torch.device('cuda', dist.get_rank()), weights_only=False)
+            saved_model = torch.load(pretrained_weights_file, weights_only=False)
         else:
             saved_model = torch.load(pretrained_weights_file, weights_only=False)
 
