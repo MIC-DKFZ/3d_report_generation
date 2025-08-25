@@ -118,17 +118,6 @@ class UnifiedVLMTrainer:
             "ddp_bucket_cap_mb": 25,  # Reduce bucket size for better memory usage
         }
         
-        # Add distributed-specific optimizations
-        if self.is_distributed:
-            # Scale learning rate with world size (as recommended in JSC tutorial)
-            base_lr = self.sft_trainer_config.get("learning_rate", 2e-4)
-            if self.world_size > 4:
-                # Scale learning rate for large world sizes
-                scaled_lr = base_lr * (self.world_size / 4) ** 0.5  # Square root scaling
-                self.sft_trainer_config["learning_rate"] = scaled_lr
-                if is_main_process():
-                    logger.info(f"Scaled learning rate from {base_lr} to {scaled_lr} for {self.world_size} GPUs")
-        
         base_args.update(self.sft_trainer_config)
 
         # Add model-specific arguments
