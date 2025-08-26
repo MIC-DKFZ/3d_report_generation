@@ -26,6 +26,10 @@ from utils import logger
 from typing import Type
 from numbers import Number
 
+import SimpleITK as sitk
+import pandas as pd
+import math
+
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
 
@@ -47,6 +51,68 @@ def z_score_normalization(
         std = image.std()
         image = (image - mean) / max(std, 1e-8)
     return image
+
+
+def _load_csv_row(row_data):
+    """Helper function to load a single CSV row for CTRATEDataset"""
+    row, embedding_dict, split, vqa_path = row_data
+    
+    volume_name = row['VolumeName']
+    # Extract image_id from volume name (e.g., valid_1_a_1.nii.gz -> valid_1_a_1)
+    image_id = volume_name.replace('.nii.gz', '')
+    
+    embedding_path = embedding_dict.get(image_id)
+    if embedding_path is None:
+        return None
+
+    # Map CSV columns to expected structure
+    findings = row.get('Findings_EN', '')
+    impressions = row.get('Impressions_EN', '')
+    clinical_info = row.get('ClinicalInformation_EN', '')
+    technique = row.get('Technique_EN', '')
+
+    sample = {
+        "image_id": image_id,
+        "embedding_path": embedding_path,
+        "tasks": {
+            "classification": {},  # CSV doesn't have classification data
+            "report_gen": findings,
+            "diagnosis": impressions,
+        },
+        # Store additional CSV fields if needed
+        "clinical_information": clinical_info,
+        "technique": technique,
+    }
+    
+    # Load VQA data if vqa_path is provided (reuse existing logic)
+    if vqa_path is not None:
+        try:
+            # Extract case identifier from volume name
+            # valid_1_a_1.nii.gz -> valid_1_a
+            case_dir = '_'.join(image_id.split('_')[:-1])
+            
+            # Determine VQA folder based on case type
+            if case_dir.startswith('train_'):
+                vqa_folder = "train_cases"
+            elif case_dir.startswith('valid_'):
+                vqa_folder = "validation_cases"
+            else:
+                vqa_folder = None
+            
+            if vqa_folder:
+                vqa_file_path = os.path.join(vqa_path, vqa_folder, f"{case_dir}.json")
+                
+                if os.path.exists(vqa_file_path):
+                    with open(vqa_file_path, "r") as f:
+                        vqa_data = json.load(f)
+                    sample["vqa_data"] = vqa_data.get("qa_pairs", [])
+                else:
+                    logger.debug(f"VQA file not found: {vqa_file_path}")
+                        
+        except Exception as e:
+            logger.error(f"Error loading VQA data for {image_id}: {e}")
+    
+    return sample
 
 
 def format_into_message(
@@ -209,6 +275,7 @@ class MedicalImageDataset(Dataset, ABC):
         load_image=False,
         max_workers=None,
         vqa_path=None,
+        do_resize=False,
     ):
         super().__init__()
 
@@ -230,6 +297,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.cls_aug_strength = cls_aug_strength
         self.cache_file = cache_file
         self.load_image = load_image
+        self.do_resize = do_resize
         self.max_workers = max_workers or min(48, (os.cpu_count() or 1))
         logger.info(f"Using {self.max_workers} for dataset loading.")
         if isinstance(answer_types, str):
@@ -379,6 +447,51 @@ class MedicalImageDataset(Dataset, ABC):
             elif embedding_path.endswith(".nrrd"):     
                 embedding, header = nrrd.read(embedding_path)
 
+            elif embedding_path.endswith((".nii.gz", ".nii")):
+
+                embedding = sitk.GetArrayFromImage(sitk.ReadImage(embedding_path))
+                #embedding_full = embedding.copy()
+                print("raw image shape", embedding.shape)
+                lung_segmentation_path = embedding_path.replace("valid_fixed", "ts_seg/ts_total/valid_fixed")
+                #"doesnotexist" # 
+                if os.path.exists(lung_segmentation_path):
+                    # we have no cropped images locally, therefore this if block is here
+                    # use with:
+                    # "--dataset_path",
+                    # "/mnt/e230-thrp-data/mic_rocket/data/raw/CTRATEv2/CT-RATE/dataset",
+                    # "--embeddings_path",
+                    # "/mnt/e230-thrp-data/mic_rocket/data/raw/CTRATEv2/CT-RATE/dataset/valid_fixed",
+                    lung_segmentation = sitk.GetArrayFromImage(sitk.ReadImage(lung_segmentation_path))
+
+                    lung_indices = [10, 11, 12, 13, 14]
+                    # Create a mask for the lung regions
+                    lung_mask = np.isin(lung_segmentation, lung_indices)
+                    # Crop the embedding to the bounding box of the lung mask with 4% offset
+                    coords = np.argwhere(lung_mask)
+                    if coords.size > 0:
+                        min_coords = coords.min(axis=0)
+                        max_coords = coords.max(axis=0) + 1  # +1 because slicing is exclusive
+                        
+                        # Calculate dimensions and 4% expansion (scale/2 on each side)
+                        dx, dy, dz = max_coords - min_coords
+                        ex, ey, ez = dx * 0.02, dy * 0.02, dz * 0.02  # 0.04/2 = 0.02 for each side
+                        
+                        # Apply expansion with bounds checking using floor/ceil
+                        new_min_x = max(0, math.floor(min_coords[0] - ex))
+                        new_max_x = min(embedding.shape[0], math.ceil(max_coords[0] + ex))
+                        new_min_y = max(0, math.floor(min_coords[1] - ey))
+                        new_max_y = min(embedding.shape[1], math.ceil(max_coords[1] + ey))
+                        new_min_z = max(0, math.floor(min_coords[2] - ez))
+                        new_max_z = min(embedding.shape[2], math.ceil(max_coords[2] + ez))
+                        
+                        embedding = embedding[new_min_x:new_max_x, new_min_y:new_max_y, new_min_z:new_max_z]
+
+                        print("embeddings shape after lung crop", embedding.shape)
+                # viewer = napari.Viewer()
+                # viewer.add_image(embedding, name="CT Patch")
+                # viewer.add_image(embedding_full, name="CT Full")
+                # napari.run()
+
             else:
                 raise ValueError(f"Unsupported embedding file format: {embedding_path}")
             
@@ -431,25 +544,34 @@ class MedicalImageDataset(Dataset, ABC):
             padding = ((pad_h_before, pad_h_after), (pad_w_before, pad_w_after), (pad_d_before, pad_d_after))
             image_array = np.pad(image_array, padding, mode='constant', constant_values=0)
         
-        # Random crop to exact patch size (if larger than patch_size)
-        h, w, d = image_array.shape
-        if h > patch_size[0] or w > patch_size[1] or d > patch_size[2]:
-            if self.split != "train":
-                # Center crop
-                start_h = (h - patch_size[0]) // 2
-                start_w = (w - patch_size[1]) // 2
-                start_d = (d - patch_size[2]) // 2
-            else:
-                # Random patch
-                max_starts = [max(0, image_array.shape[i] - patch_size[i]) for i in range(3)]
-                start_h, start_w, start_d = [int(np.clip(np.random.normal(m/2, m*0.1), 0, m)) for m in max_starts]
-            
-            # Extract patch
-            image_array = image_array[
-                start_h:start_h + patch_size[0],
-                start_w:start_w + patch_size[1], 
-                start_d:start_d + patch_size[2]
-            ]
+        if self.do_resize:
+            image_array = torch.nn.functional.interpolate(
+                torch.from_numpy(image_array).unsqueeze(0).unsqueeze(0), 
+                size=patch_size, 
+                mode='trilinear', 
+                align_corners=False
+            ).squeeze().numpy()
+
+        else:
+            # Random crop to exact patch size (if larger than patch_size)
+            h, w, d = image_array.shape
+            if h > patch_size[0] or w > patch_size[1] or d > patch_size[2]:
+                if self.split != "train":
+                    # Center crop
+                    start_h = (h - patch_size[0]) // 2
+                    start_w = (w - patch_size[1]) // 2
+                    start_d = (d - patch_size[2]) // 2
+                else:
+                    # Random patch
+                    max_starts = [max(0, image_array.shape[i] - patch_size[i]) for i in range(3)]
+                    start_h, start_w, start_d = [int(np.clip(np.random.normal(m/2, m*0.1), 0, m)) for m in max_starts]
+                
+                # Extract patch
+                image_array = image_array[
+                    start_h:start_h + patch_size[0],
+                    start_w:start_w + patch_size[1], 
+                    start_d:start_d + patch_size[2]
+                ]
         
         return image_array
 
@@ -674,9 +796,79 @@ class CTRATEDataset(MedicalImageDataset):
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of answers to include
         vqa_path (str, optional): Path to the VQA data directory
+        use_csv_reports (bool, optional): If True, load from CSV files instead of YML files
     """
 
+    def __init__(self, *args, use_csv_reports=False, **kwargs):
+        self.use_csv_reports = use_csv_reports
+        super().__init__(*args, **kwargs)
+
     def _load_data(self, dataset_path):
+        if self.use_csv_reports:
+            return self._load_data_from_csv(dataset_path)
+        else:
+            return self._load_data_from_yml(dataset_path)
+
+    def _load_data_from_csv(self, dataset_path):
+        """Load data from CSV reports instead of YML files"""
+        logger.info("Loading data from CSV reports...")
+        
+        # Build embedding dictionary with parallel processing
+        logger.info("Building embedding dictionary...")
+        self.embedding_dict = {}
+        
+        # Collect all embedding files first
+        embedding_files = []
+        for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
+            for fl in fls_:
+                if fl.endswith((".npy", ".npz", ".b2nd", ".nrrd", "nii.gz")):
+                    embedding_files.append(os.path.join(flr_, fl))
+        
+        logger.info(f"Found {len(embedding_files)} embedding files")
+        
+        # Process embedding files to build dictionary
+        for embedding_path in tqdm(embedding_files, desc="Building embedding dictionary"):
+            fl = os.path.basename(embedding_path)
+            image_id = fl.split("_embedding")[0].split(".")[0]
+            self.embedding_dict[image_id] = embedding_path
+
+        # Load appropriate CSV file based on split
+        reports_dir = os.path.join(dataset_path, "radiology_text_reports")
+        
+        if self.split == "train":
+            csv_file = os.path.join(reports_dir, "train_reports.csv")
+        elif self.split == "val":
+            csv_file = os.path.join(reports_dir, "validation_reports.csv")
+        else:
+            raise ValueError(f"Invalid split name {self.split} for CSV loading")
+
+        if not os.path.exists(csv_file):
+            raise FileNotFoundError(f"CSV file not found: {csv_file}")
+
+        logger.info(f"Loading CSV file: {csv_file}")
+        df = pd.read_csv(csv_file)
+        
+        logger.info(f"Processing {len(df)} CSV rows in parallel...")
+        
+        row_data_list = [(row, self.embedding_dict, self.split, self.vqa_path) 
+                        for _, row in df.iterrows()]
+        
+        # Use ThreadPoolExecutor for parallel processing
+        samples = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_row = {executor.submit(_load_csv_row, row_data): idx 
+                           for idx, row_data in enumerate(row_data_list)}
+            
+            for future in tqdm(as_completed(future_to_row), total=len(row_data_list), desc="Loading CSV rows"):
+                result = future.result()
+                if result is not None:
+                    samples.append(result)
+
+        logger.info(f"Successfully loaded {len(samples)} samples from CSV")
+        return samples
+
+    def _load_data_from_yml(self, dataset_path):
+        """Original YML loading method"""
         logger.info("Building embedding dictionary...")
         
         # Build embedding dictionary with parallel processing

@@ -103,6 +103,7 @@ class UnifiedVLMInference:
         with torch.no_grad():
             # Iterate over the test dataset
             for i, inputs in tqdm(enumerate(test_loader), total=len(test_loader)):
+                if i > 10: break
                 raw_samples = inputs["raw_samples"]
                 del inputs["raw_samples"]
                 inputs = extract_batch_prompt_only(inputs)
@@ -125,7 +126,7 @@ class UnifiedVLMInference:
                         inputs["image_embeds"] = model.vision2text_model(inputs["image_embeds"])
                         outputs = model.language_model.generate(
                             **inputs,
-                            max_new_tokens=256,  # Adjust max_new_tokens as needed
+                            max_new_tokens=1024,  # Adjust max_new_tokens as needed
                         )
 
                 # otherwise, image embeddings are already contained in input_ids
@@ -133,12 +134,12 @@ class UnifiedVLMInference:
                     if self.ddp_available:
                         outputs = model.module.generate(
                             **inputs,
-                            max_new_tokens=256,  # Adjust max_new_tokens as needed
+                            max_new_tokens=1024,  # Adjust max_new_tokens as needed
                         )
                     else:
                         outputs = model.generate(
                             **inputs,
-                            max_new_tokens=256,  # Adjust max_new_tokens as needed
+                            max_new_tokens=1024,  # Adjust max_new_tokens as needed
                         )
                 trimmed_generated_ids = [
                     out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], outputs)
@@ -310,6 +311,9 @@ def parse_args(default_config=None):
         "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
     )
     general_parser.add_argument(
+        "--vision_encoder_path", type=str, required=False, help="Path to the dataset JSON file"
+    )
+    general_parser.add_argument(
         "--output_dir",
         type=str,
         default="output/vlm_inference",
@@ -358,6 +362,17 @@ def parse_args(default_config=None):
     )
     general_parser.add_argument(
         "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
+    )
+    general_parser.add_argument(
+        "--load_image",
+        action="store_true",
+        default=False,
+        help="Load image data during inference (default: False)",
+    )
+    general_parser.add_argument(
+        "--use_csv_reports",
+        action="store_true",
+        help="Get reports from CSV file instead of yml files",
     )
     # general_parser.add_argument(
     #     "--no_calculate_metrics",
@@ -414,7 +429,7 @@ def main():
         if args.model_type == "owl":
             args.model_id = "mPLUG/mPLUG-Owl3-1B-241014"
         elif args.model_type == "qwen":
-            args.model_id = "Qwen/Qwen2-VL-2B-Instruct"
+            args.model_id = "Qwen/Qwen2.5-VL-3B-Instruct"
 
     # Create the appropriate VLM model based on the model type
     model_specific_args = {}
@@ -423,14 +438,14 @@ def main():
         model_specific_args = {"checkpoint_path": args.checkpoint_path}
     elif args.model_type == "qwen":
         vlm_model_class = QwenVLModel
-        model_specific_args = {"checkpoint_path": args.checkpoint_path}
+        model_specific_args = {"checkpoint_path": args.checkpoint_path, "vision_encoder_path": args.vision_encoder_path}
     else:
         raise ValueError(f"Unsupported model type: {args.model_type}")
 
     vlm_model = vlm_model_class(
         model_id=args.model_id,
         output_dir=args.output_dir,
-        train_only_vision_adapter=True,
+        train_only_vision_adapter=False,
         **model_specific_args,
     )
     if args.dataset_name == "amosmm":
@@ -461,12 +476,14 @@ def main():
                 model_name=args.model_type,
                 split="val",
                 embeddings_path=args.embeddings_path,
+                use_csv_reports=args.use_csv_reports,
                 # n_samples=args.n_val_samples,  # Limit the validation set size
                 # split_files=args.split_file,
                 answer_types=("TEXT",),
                 include_cls_text_gen=args.include_cls_text_gen,
                 cls_aug_strength=args.cls_aug_strength,
                 cache_file=args.dataset_cache_val,  # Use cache file if provided
+                load_image=args.load_image
             )
     else:
         raise ValueError(f"Unsupported dataset name: {args.dataset_name}")

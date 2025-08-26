@@ -55,13 +55,15 @@ class QwenVLModel(AbstractVLMModel):
             # If a checkpoint path is provided, load the model from the checkpoint
             logger.info(f"Loading model from checkpoint: {self.checkpoint_path}")
             self.model = QwenVLForConditionalGeneration3D.from_pretrained(
-                self.checkpoint_path,
+                self.model_id,
                 torch_dtype=torch.bfloat16,
+                quantization_config=bnb_config,
                 local_files_only=True,
                 reduce_block=self.reduce_block,
                 train_vision_encoder=self.train_vision_encoder,
                 vision_encoder_path=self.vision_encoder_path
             )
+
         elif bnb_config and not self.train_only_vision_adapter:
             self.model = QwenVLForConditionalGeneration3D.from_pretrained(
                 self.model_id,
@@ -87,6 +89,9 @@ class QwenVLModel(AbstractVLMModel):
             # For adapter-only training, don't use quantization for the adapter
             # Freeze all parameters except vision adapter
             self._set_trainable_params()
+
+        if self.checkpoint_path:
+            self.model.load_adapter(self.checkpoint_path)
 
         return self.model
 
