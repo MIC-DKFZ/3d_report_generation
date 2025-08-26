@@ -120,6 +120,7 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
             
             # Convert to tensor
             videos_input_embeddings = processed_patches#orch.from_numpy(processed_patches)
+            #TODO load block size from VE config
             video_grid_thw = torch.tensor([[videos_input_embeddings[i].shape[0]//(self.reduce_block[0] * 8), 
                                             videos_input_embeddings[i].shape[1]//(self.reduce_block[1] * 8), 
                                             videos_input_embeddings[i].shape[2]//(self.reduce_block[2] * 8)] for i in range(num_images)])

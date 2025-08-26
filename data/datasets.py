@@ -14,7 +14,6 @@ import pickle
 import nrrd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
-import multiprocessing as mp
 from data.extractors import (
     AMOSMMExtractor,
     AMOSMMRegionExtractor,
@@ -29,6 +28,18 @@ from numbers import Number
 import SimpleITK as sitk
 import pandas as pd
 import math
+
+from scipy.ndimage import zoom
+from batchgeneratorsv2.transforms.base.basic_transform import BasicTransform
+from batchgeneratorsv2.transforms.intensity.brightness import MultiplicativeBrightnessTransform
+from batchgeneratorsv2.transforms.intensity.contrast import ContrastTransform, BGContrast
+from batchgeneratorsv2.transforms.intensity.gamma import GammaTransform
+from batchgeneratorsv2.transforms.intensity.gaussian_noise import GaussianNoiseTransform
+from batchgeneratorsv2.transforms.noise.gaussian_blur import GaussianBlurTransform
+from batchgeneratorsv2.transforms.spatial.low_resolution import SimulateLowResolutionTransform
+from batchgeneratorsv2.transforms.spatial.spatial import SpatialTransform
+from batchgeneratorsv2.transforms.utils.compose import ComposeTransforms
+from batchgeneratorsv2.transforms.utils.random import RandomTransform
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
@@ -276,6 +287,7 @@ class MedicalImageDataset(Dataset, ABC):
         max_workers=None,
         vqa_path=None,
         do_resize=False,
+        do_transforms=False
     ):
         super().__init__()
 
@@ -298,6 +310,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.cache_file = cache_file
         self.load_image = load_image
         self.do_resize = do_resize
+        self.do_transforms = do_transforms
         self.max_workers = max_workers or min(48, (os.cpu_count() or 1))
         logger.info(f"Using {self.max_workers} for dataset loading.")
         if isinstance(answer_types, str):
@@ -340,6 +353,9 @@ class MedicalImageDataset(Dataset, ABC):
             with open(self.cache_file, "wb") as f:
                 pickle.dump(self.samples, f)
             logger.info(f"Cached {len(self.samples)} samples.")
+
+        if self.do_transforms:
+            self.training_transforms = self.get_training_transforms()
 
     @abstractmethod
     def _load_data(self, dataset_json_path):
@@ -451,11 +467,9 @@ class MedicalImageDataset(Dataset, ABC):
 
                 embedding = sitk.GetArrayFromImage(sitk.ReadImage(embedding_path))
                 #embedding_full = embedding.copy()
-                print("raw image shape", embedding.shape)
                 lung_segmentation_path = embedding_path.replace("valid_fixed", "ts_seg/ts_total/valid_fixed")
-                #"doesnotexist" # 
                 if os.path.exists(lung_segmentation_path):
-                    # we have no cropped images locally, therefore this if block is here
+                    # we have no cropped images on dkfz drives, therefore this if block is here
                     # use with:
                     # "--dataset_path",
                     # "/mnt/e230-thrp-data/mic_rocket/data/raw/CTRATEv2/CT-RATE/dataset",
@@ -468,6 +482,8 @@ class MedicalImageDataset(Dataset, ABC):
                     lung_mask = np.isin(lung_segmentation, lung_indices)
                     # Crop the embedding to the bounding box of the lung mask with 4% offset
                     coords = np.argwhere(lung_mask)
+
+                    # same computation as Stefan used for Dataset802_LungCrop on juwels
                     if coords.size > 0:
                         min_coords = coords.min(axis=0)
                         max_coords = coords.max(axis=0) + 1  # +1 because slicing is exclusive
@@ -545,12 +561,13 @@ class MedicalImageDataset(Dataset, ABC):
             image_array = np.pad(image_array, padding, mode='constant', constant_values=0)
         
         if self.do_resize:
-            image_array = torch.nn.functional.interpolate(
-                torch.from_numpy(image_array).unsqueeze(0).unsqueeze(0), 
-                size=patch_size, 
-                mode='trilinear', 
-                align_corners=False
-            ).squeeze().numpy()
+
+            # interpolate braucht 5D
+            image_array = torch.from_numpy(image_array).unsqueeze(0).unsqueeze(0)
+            image_array = torch.nn.functional.interpolate(image_array, size=patch_size, mode='trilinear', align_corners=False)
+        
+            if self.do_transforms:
+                image_array = torch.squeeze(self.training_transforms(**{'image': image_array.squeeze(0)})['image'], dim=0)
 
         else:
             # Random crop to exact patch size (if larger than patch_size)
@@ -574,6 +591,87 @@ class MedicalImageDataset(Dataset, ABC):
                 ]
         
         return image_array
+    
+    # from nnUNetv2
+    @staticmethod
+    def get_training_transforms(
+            # TODO make this adaptive
+            patch_size= [192, 192, 192],
+    ) -> BasicTransform:
+        transforms = []
+        patch_size_spatial = patch_size
+        ignore_axes = None
+        # not too much zoom because otherwise not everything visible from lung
+        # the rest is nnunet default
+        transforms.append(
+            SpatialTransform(
+                patch_size_spatial, patch_center_dist_from_border=0, random_crop=False, p_elastic_deform=0,
+                p_rotation=0.2, p_scaling=0.2, scaling=(0.95, 1.05), p_synchronize_scaling_across_axes=1,
+                bg_style_seg_sampling=False  # , mode_seg='nearest'
+            )
+        )
+
+        transforms.append(RandomTransform(
+            GaussianNoiseTransform(
+                noise_variance=(0, 0.1),
+                p_per_channel=1,
+                synchronize_channels=True
+            ), apply_probability=0.1
+        ))
+        transforms.append(RandomTransform(
+            GaussianBlurTransform(
+                blur_sigma=(0.5, 1.),
+                synchronize_channels=False,
+                synchronize_axes=False,
+                p_per_channel=0.5, benchmark=True
+            ), apply_probability=0.2
+        ))
+        transforms.append(RandomTransform(
+            MultiplicativeBrightnessTransform(
+                multiplier_range=BGContrast((0.75, 1.25)),
+                synchronize_channels=False,
+                p_per_channel=1
+            ), apply_probability=0.15
+        ))
+        transforms.append(RandomTransform(
+            ContrastTransform(
+                contrast_range=BGContrast((0.75, 1.25)),
+                preserve_range=True,
+                synchronize_channels=False,
+                p_per_channel=1
+            ), apply_probability=0.15
+        ))
+        transforms.append(RandomTransform(
+            SimulateLowResolutionTransform(
+                scale=(0.5, 1),
+                synchronize_channels=False,
+                synchronize_axes=True,
+                ignore_axes=ignore_axes,
+                allowed_channels=None,
+                p_per_channel=0.5
+            ), apply_probability=0.25
+        ))
+        transforms.append(RandomTransform(
+            GammaTransform(
+                gamma=BGContrast((0.7, 1.5)),
+                p_invert_image=1,
+                synchronize_channels=False,
+                p_per_channel=1,
+                p_retain_stats=1
+            ), apply_probability=0.1
+        ))
+        transforms.append(RandomTransform(
+            GammaTransform(
+                gamma=BGContrast((0.7, 1.5)),
+                p_invert_image=0,
+                synchronize_channels=False,
+                p_per_channel=1,
+                p_retain_stats=1
+            ), apply_probability=0.3
+        ))
+
+        return ComposeTransforms(transforms)
+
 
     def _embedding_2_tensor(self, embedding):
         """Convert embedding to tensor"""

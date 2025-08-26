@@ -374,6 +374,22 @@ def parse_args(default_config=None):
         action="store_true",
         help="Get reports from CSV file instead of yml files",
     )
+    general_parser.add_argument(
+        "--do_resize",
+        action="store_true",
+        help="Resize the input image to 192x192x192",
+    )
+    general_parser.add_argument(
+        "--do_training_transforms",
+        action="store_true",
+        help="Wheather or not to do data augmentation to the image during training",
+    )
+    general_parser.add_argument(
+        "--do_validation_transforms",
+        action="store_true",
+        help="Wheather or not to do data augmentation to the image during training",
+    )
+    
     # general_parser.add_argument(
     #     "--no_calculate_metrics",
     #     action="store_true",
@@ -483,7 +499,9 @@ def main():
                 include_cls_text_gen=args.include_cls_text_gen,
                 cls_aug_strength=args.cls_aug_strength,
                 cache_file=args.dataset_cache_val,  # Use cache file if provided
-                load_image=args.load_image
+                load_image=args.load_image,
+                do_resize=args.do_resize,
+                do_transforms=args.do_validation_transforms
             )
     else:
         raise ValueError(f"Unsupported dataset name: {args.dataset_name}")

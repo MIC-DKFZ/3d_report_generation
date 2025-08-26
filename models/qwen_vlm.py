@@ -124,7 +124,7 @@ class QwenVLModel(AbstractVLMModel):
         ]
 
         embeddings = [
-            example["embedding"].astype(np.float32)
+            example["embedding"]#.astype(np.float32)
             for example in examples
             if "embedding" in example and example["embedding"] is not None
         ]
