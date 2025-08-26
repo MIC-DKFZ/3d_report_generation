@@ -382,6 +382,16 @@ def parse_args(default_config=None):
         default=4,
         help="Batch size for training (default: 4)",
     )
+    general_parser.add_argument(
+        "--do_resize",
+        action="store_true",
+        help="Resize images to 192x192x192 cubes (use this in combination with lung crops)",
+    )
+    general_parser.add_argument(
+        "--do_transforms",
+        action="store_true",
+        help="If true, we do nnUNetv2 image augmentation.",
+    )
 
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
@@ -665,7 +675,9 @@ def main():
             include_cls_text_gen=general_args.include_cls_text_gen,
             cls_aug_strength=general_args.cls_aug_strength,
             cache_file=general_args.dataset_cache,  # Use cache file if provided
-            load_image=general_args.train_vision_encoder
+            load_image=general_args.train_vision_encoder,
+            do_resize=general_args.do_resize,
+            do_transforms=general_args.do_transforms,
         )
 
         val_dataset = CTRATEDataset(
@@ -679,7 +691,9 @@ def main():
             include_cls_text_gen=general_args.include_cls_text_gen,
             cls_aug_strength=general_args.cls_aug_strength,
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
-            load_image=general_args.train_vision_encoder
+            load_image=general_args.train_vision_encoder,
+            do_resize=general_args.do_resize
+            # no transforms for val dataset
         )
     else:
         raise ValueError(f"Unsupported dataset name: {general_args.dataset_name}")

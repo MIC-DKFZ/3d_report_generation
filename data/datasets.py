@@ -568,6 +568,8 @@ class MedicalImageDataset(Dataset, ABC):
         
             if self.do_transforms:
                 image_array = torch.squeeze(self.training_transforms(**{'image': image_array.squeeze(0)})['image'], dim=0)
+            else:
+                image_array = image_array.squeeze(0).squeeze(0)
 
         else:
             # Random crop to exact patch size (if larger than patch_size)
