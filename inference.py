@@ -103,7 +103,6 @@ class UnifiedVLMInference:
         with torch.no_grad():
             # Iterate over the test dataset
             for i, inputs in tqdm(enumerate(test_loader), total=len(test_loader)):
-                if i > 10: break
                 raw_samples = inputs["raw_samples"]
                 del inputs["raw_samples"]
                 inputs = extract_batch_prompt_only(inputs)
