@@ -1061,10 +1061,22 @@ class CTRATEDataset_Submission(MedicalImageDataset):
     """
 
     def _load_data(self, dataset_path):
-        self.embedding_dict = {
-            p.stem.split("_embedding")[0]: str(p)
-            for p in Path(self.embeddings_path).rglob("*_embedding.npz")
-        }
+        self.embedding_dict = {}
+        embedding_files = []
+        for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
+            for fl in fls_:
+                if fl.endswith((".npy", ".npz", ".b2nd", ".nrrd", ".nii.gz", ".nii")):
+                    embedding_files.append(os.path.join(flr_, fl))
+        
+        for embedding_path in tqdm(embedding_files, desc="Building embedding dictionary"):
+            fl = os.path.basename(embedding_path)
+            # Handle files with or without "_embedding" suffix
+            if "_embedding" in fl:
+                image_id = fl.split("_embedding")[0].split(".")[0]
+            else:
+                # For files without _embedding suffix, use the base name
+                image_id = fl.split(".")[0]
+            self.embedding_dict[image_id] = embedding_path
 
         samples = []
         for file_name, embedding_path in tqdm(
@@ -1092,29 +1104,15 @@ class CTRATEDataset_Submission(MedicalImageDataset):
         extracted_samples = []
 
         for sample in samples:
-            # Report generation sample
             extracted_samples.append(
                 {
                     "image_id": sample["image_id"],
                     "image_path": sample["embedding_path"],
-                    "question": "Generate a detailed report for this CT scan.",
-                    "answer": "",  # sample["tasks"]["report_gen"],
-                    "full_answer": "",  # sample["tasks"]["report_gen"],
+                    "question": "Generate a detailed report and diagnosis for this CT scan.",
+                    "answer": "", #, full_answer,
+                    "full_answer": "", #full_answer,
                     "answer_type": "TEXT",
-                    "answer_subtype": "REPORT",
-                    "system_text": "You are a medical imaging AI trained to analyze CT scans.",
-                }
-            )
-
-            extracted_samples.append(
-                {
-                    "image_id": sample["image_id"],
-                    "image_path": sample["embedding_path"],
-                    "question": "What is the diagnosis for this CT scan?",
-                    "answer": "",  # sample["tasks"]["diagnosis"],
-                    "full_answer": "",  # sample["tasks"]["diagnosis"],
-                    "answer_type": "TEXT",
-                    "answer_subtype": "DIAGNOSIS",
+                    "answer_subtype": "REPORT_DIAGNOSIS",
                     "system_text": "You are a medical imaging AI trained to analyze CT scans.",
                 }
             )
