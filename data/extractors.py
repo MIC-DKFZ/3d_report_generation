@@ -337,28 +337,40 @@ class CTRATEExtractor:
         """
         self.shuffle_sentences = shuffle_sentences
 
-    def _shuffle_sentences(self, text: str) -> str:
+    def _shuffle_sentences(self, text: str, p: float = 0.5) -> str:
         """
-        Randomly shuffle sentences in a text while preserving meaning structure
+        Randomly shuffle sentences in a text with given probability
         
         Args:
             text (str): Input text to shuffle
+            p (float): Probability of shuffling (default 0.5)
             
         Returns:
-            str: Text with shuffled sentences
+            str: Text with potentially shuffled sentences
         """
-        if not self.shuffle_sentences or not text:
-            return text
+        # Handle non-string inputs and missing values
+        if text is None:
+            return ""
+        
+        # Convert to string and handle NaN values
+        text_str = str(text).strip()
+        if text_str.lower() in ['nan', 'none', '']:
+            return ""
+        
+        if not self.shuffle_sentences or not text_str:
+            return text_str
         
         # Split text into sentences using regex to handle various punctuation
-        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        sentences = re.split(r'(?<=[.!?])\s+', text_str)
         
         # Only shuffle if there are multiple sentences
         if len(sentences) > 1:
-            random.shuffle(sentences)
-            return ' '.join(sentences)
+            # Randomly decide whether to shuffle based on probability p
+            if random.uniform(0, 1) < p:
+                random.shuffle(sentences)
+                return ' '.join(sentences)
         
-        return text
+        return text_str
 
     @staticmethod
     def extract_sample_list(samples, include_cls_text_gen: bool = False, shuffle_sentences: bool = False):
