@@ -1042,7 +1042,9 @@ class CTRATEDataset(MedicalImageDataset):
     def extract_sample_list(self, samples):
         """Extract sample list from raw data"""
         extracted_samples = CTRATEExtractor.extract_sample_list(
-            samples, include_cls_text_gen=self.include_cls_text_gen
+            samples, 
+            include_cls_text_gen=self.include_cls_text_gen,
+            shuffle_sentences=self.do_transforms  # Enable sentence shuffling when transforms are enabled (in train split)
         )
         return extracted_samples
 
