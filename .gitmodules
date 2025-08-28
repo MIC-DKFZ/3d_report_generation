@@ -1,0 +1,3 @@
+[submodule "reportgen_evaluation"]
+	path = reportgen_evaluation
+	url = https://git.dkfz.de/s037r/reportgen_evaluation.git

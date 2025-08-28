@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import re
 from datetime import datetime
 from uuid import uuid4
@@ -18,7 +19,7 @@ from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
 from utils import logger, rank_zero_filter
 from utils.filter_batch import extract_batch_prompt_only
-
+from eval_ctrate import main as eval_ctrate
 
 class UnifiedVLMInference:
     def __init__(self, vlm_model, output_dir="vlm_inference", config_file_path: str = None):
@@ -513,7 +514,16 @@ def main():
     inference = UnifiedVLMInference(vlm_model, output_dir=args.output_dir)
     # calculate_metrics = not args.no_calculate_metrics
     inference.inference(test_dataset, challenge_submission=args.challenge_submission)
-
+    
+    gt_report_csv_path = Path(args.dataset_path, "radiology_text_reports", "validation_reports.csv")
+    if not gt_report_csv_path.exists():
+        logger.warning(f"We assumed the CTRATE validation set to be evaluated but the groundtruth CSV is not found at {gt_report_csv_path}")
+        logger.warning(f"Therfore, skipping ctrate validation evaluation.")
+    else:
+        eval_ctrate(
+            results_path=Path(args.output_dir, "inference_results.json" if not args.challenge_submission else "results.json"),
+            gt_report_csv_path=gt_report_csv_path,
+        )
 
 if __name__ == "__main__":
     main()
