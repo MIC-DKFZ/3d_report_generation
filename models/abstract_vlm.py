@@ -15,6 +15,7 @@ class AbstractVLMModel(ABC):
         self.train_only_vision_adapter = train_only_vision_adapter
         self.train_vision_encoder = train_vision_encoder
         self.vision_encoder_path = vision_encoder_path
+        self.freeze_vision_encoder = freeze_vision_encoder
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
         self.tokenizer = None
