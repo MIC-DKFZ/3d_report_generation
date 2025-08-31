@@ -717,14 +717,20 @@ class MedicalImageDataset(Dataset, ABC):
                 if "embedding_path" not in sample:
                     raise ValueError(f"Sample {index} does not have an embedding path.")
                 result["embedding"] = self._load_embedding(sample["embedding_path"])
+                if self.load_image:
+                    result["embedding"] = z_score_normalization(result["embedding"], False, None, np.float32)
             else:
+                embd = self._load_embedding(sample["embedding_path"])
+                    
                 if type(self.embedding_constant) is float:
-                    result["embedding"] = np.full((self._load_embedding(sample["embedding_path"])).shape, self.embedding_constant)
+                    result["embedding"] = np.full(embd.shape, self.embedding_constant, dtype=np.float32)
                 elif type(self.embedding_constant) is str and self.embedding_constant == "random":
-                    result["embedding"] = np.random.rand(*(self._load_embedding(sample["embedding_path"])).shape)
+                    result["embedding"] = np.random.rand(*embd.shape).astype(np.float32)
                 else:
                     raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
-                
+
+            result["embedding"] = self._preprocess_3d_image(result["embedding"])
+
             if self.load_image:
                 result["embedding_tensor"] = result["embedding"]
             else:

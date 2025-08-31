@@ -656,6 +656,7 @@ def main():
             split="train",
             embeddings_path=general_args.embeddings_path,
             cache_file=general_args.dataset_cache,  # Use cache file if provided
+            embedding_constant=general_args.embedding_constant,
         )
 
         val_dataset = AMOSMMDataset(
@@ -665,6 +666,7 @@ def main():
             embeddings_path=general_args.embeddings_path,
             n_samples=general_args.n_val_samples,  # Limit the validation set size
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
+            embedding_constant=general_args.embedding_constant,
         )
     elif general_args.dataset_name == "ctrate":
         if general_args.include_cls_text_gen and is_main_process():
@@ -684,6 +686,7 @@ def main():
             load_image=general_args.train_vision_encoder,
             do_resize=general_args.do_resize,
             do_transforms=general_args.do_transforms,
+            embedding_constant=general_args.embedding_constant,
         )
 
         val_dataset = CTRATEDataset(
@@ -698,18 +701,16 @@ def main():
             cls_aug_strength=general_args.cls_aug_strength,
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
             load_image=general_args.train_vision_encoder,
-            do_resize=general_args.do_resize
+            do_resize=general_args.do_resize,
+            embedding_constant=general_args.embedding_constant,
             # no transforms for val dataset
         )
     else:
         raise ValueError(f"Unsupported dataset name: {general_args.dataset_name}")
 
-    if general_args.embedding_constant is not None:
-        if is_main_process():
-            logger.info(f"Setting embedding constant to {general_args.embedding_constant}")
-            print(f"Setting embedding constant to {general_args.embedding_constant}")
-        train_dataset.embedding_constant = general_args.embedding_constant
-        val_dataset.embedding_constant = general_args.embedding_constant
+    if general_args.embedding_constant is not None and is_main_process():
+        logger.info(f"Using embedding constant: {general_args.embedding_constant}")
+        print(f"Using embedding constant: {general_args.embedding_constant}")
 
     if is_main_process():
         logger.info(
