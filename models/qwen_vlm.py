@@ -23,11 +23,12 @@ class QwenVLModel(AbstractVLMModel):
         train_only_vision_adapter=False,
         train_vision_encoder=True,
         vision_encoder_path=None,
+        freeze_vision_encoder=False,
         reduce_block=[2,2,2],
         # base_model_id=None,
         checkpoint_path=None,
     ):
-        super().__init__(model_id, train_only_vision_adapter, train_vision_encoder, vision_encoder_path)
+        super().__init__(model_id, train_only_vision_adapter, train_vision_encoder, vision_encoder_path, freeze_vision_encoder)
         self._model_str = "qwen"
         self.output_dir = output_dir
         self.batch_count = 0
@@ -84,6 +85,9 @@ class QwenVLModel(AbstractVLMModel):
 
         if self.train_vision_encoder:
             self.model.model.setup_vision_encoder(self.vision_encoder_path)
+        if self.freeze_vision_encoder:
+            for param in self.model.model.vision_encoder.parameters():
+                    param.requires_grad = False
 
         if self.train_only_vision_adapter:
             # For adapter-only training, don't use quantization for the adapter
@@ -91,6 +95,7 @@ class QwenVLModel(AbstractVLMModel):
             self._set_trainable_params()
 
         if self.checkpoint_path:
+            # this is the peft adapter, not the adapter between vision encoder and language model
             self.model.load_adapter(self.checkpoint_path)
 
         return self.model
@@ -179,7 +184,8 @@ class QwenVLModel(AbstractVLMModel):
         if self.train_only_vision_adapter:
             return {"peft_config": None, "train_only_vision_adapter": True}
         else:
-            if self.train_vision_encoder:
+            if self.train_vision_encoder and not self.freeze_vision_encoder:
+                # Train both language model and vision encoder
                 peft_config = LoraConfig(
                     task_type="CAUSAL_LM",
                     r=8,
@@ -189,19 +195,41 @@ class QwenVLModel(AbstractVLMModel):
                         "gate_proj", "up_proj", "down_proj",
                         "lm_head"
                     ],
-                    #exclude_modules=["vision_adapter"],
+                    modules_to_save=["vision_adapter"],
+                    lora_dropout=0.1,
+                    bias="none"
+                )
+            elif self.train_vision_encoder and self.freeze_vision_encoder:
+                # Only train language model, exclude vision encoder modules
+                peft_config = LoraConfig(
+                    task_type="CAUSAL_LM",
+                    r=8,
+                    lora_alpha=32,
+                    # Use specific module paths to target only language model components
+                    # TODO use exclude_modules (only available in newest transformers dev right now)
+                    target_modules=[
+                        "model.language_model.layers.*.self_attn.q_proj",
+                        "model.language_model.layers.*.self_attn.k_proj", 
+                        "model.language_model.layers.*.self_attn.v_proj",
+                        "model.language_model.layers.*.self_attn.o_proj",
+                        "model.language_model.layers.*.mlp.gate_proj",
+                        "model.language_model.layers.*.mlp.up_proj",
+                        "model.language_model.layers.*.mlp.down_proj",
+                        "lm_head"
+                    ],
                     modules_to_save=["vision_adapter"],
                     lora_dropout=0.1,
                     bias="none"
                 )
             else:
+                # TODO check why we used only q_proj and v_proj
                 peft_config = LoraConfig(
-                    lora_alpha=16,
-                    lora_dropout=0.05,
-                    r=8,
-                    bias="none",
-                    target_modules=["q_proj", "v_proj"],
                     task_type="CAUSAL_LM",
+                    r=8,
+                    lora_alpha=32,
+                    target_modules=["q_proj", "v_proj"],
+                    lora_dropout=0.1,
+                    bias="none",
                 )
 
             return {"peft_config": peft_config, "train_only_vision_adapter": False}

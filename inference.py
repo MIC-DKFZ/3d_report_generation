@@ -119,7 +119,7 @@ class UnifiedVLMInference:
                         )
                         outputs = model.module.language_model.generate(
                             **inputs,
-                            max_new_tokens=256,  # Adjust max_new_tokens as needed
+                            max_new_tokens=1024,  # Adjust max_new_tokens as needed
                         )
                     else:
                         inputs["image_embeds"] = model.vision2text_model(inputs["image_embeds"])

@@ -9,7 +9,7 @@ from utils import logger
 
 
 class AbstractVLMModel(ABC):
-    def __init__(self, model_id, train_only_vision_adapter: bool, train_vision_encoder=False, vision_encoder_path=None, device=None):
+    def __init__(self, model_id, train_only_vision_adapter: bool, train_vision_encoder=False, vision_encoder_path=None, freeze_vision_encoder=True, device=None):
         self.model_id = model_id
         # TODO: Make a default argument since its not needed for inference
         self.train_only_vision_adapter = train_only_vision_adapter

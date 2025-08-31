@@ -342,9 +342,14 @@ def parse_args(default_config=None):
         help="Train only the vision adapter (Qwen only)",
     )
     general_parser.add_argument(
-        "--train_vision_encoder",
+        "--train_vision_encoder", #TODO fix that this means use a vision encoder instead of loading frozen embeddings
         action="store_true",
         help="Train the vision encoder (then embedding paths are the paths to the actual images).",
+    )
+    general_parser.add_argument(
+        "--freeze_vision_encoder",
+        action="store_true",
+        help="freeze vision encoder (and no lora adapter)",
     )
     general_parser.add_argument(
         "--vision_encoder_path", type=str, help="Path to vision encoder checkpoint"
@@ -638,7 +643,8 @@ def main():
         train_only_vision_adapter=general_args.train_only_vision_adapter,
         reduce_block=general_args.reduce_block,
         train_vision_encoder=general_args.train_vision_encoder,
-        vision_encoder_path=general_args.vision_encoder_path
+        vision_encoder_path=general_args.vision_encoder_path,
+        freeze_vision_encoder=general_args.freeze_vision_encoder
     )
 
     # Create datasets
