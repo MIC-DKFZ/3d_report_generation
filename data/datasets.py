@@ -711,39 +711,30 @@ class MedicalImageDataset(Dataset, ABC):
         result["formatted_qa"] = formatted_qa
         result["formatted_qa_prompt_only"] = formatted_qa_prompt_only
 
-        if self.return_embedding:
-            # Load embedding and convert to tensor
-            if self.embedding_constant is None:
-                if "embedding_path" not in sample:
-                    raise ValueError(f"Sample {index} does not have an embedding path.")
-                result["embedding"] = self._load_embedding(sample["embedding_path"])
-                if self.load_image:
-                    result["embedding"] = z_score_normalization(result["embedding"], False, None, np.float32)
+        # Load embedding
+        sample["embedding"] = self._load_embedding(sample["embedding_path"])
+                
+        if self.embedding_constant is not None:
+            if type(self.embedding_constant) is float:
+                result["embedding"] = np.full(sample["embedding"].shape, self.embedding_constant, dtype=np.float32)
+            elif type(self.embedding_constant) is str and self.embedding_constant == "random":
+                result["embedding"] = np.random.rand(sample["embedding"].shape).astype(np.float32)
             else:
-                embd = self._load_embedding(sample["embedding_path"])
-                    
-                if type(self.embedding_constant) is float:
-                    result["embedding"] = np.full(embd.shape, self.embedding_constant, dtype=np.float32)
-                elif type(self.embedding_constant) is str and self.embedding_constant == "random":
-                    result["embedding"] = np.random.rand(*embd.shape).astype(np.float32)
-                else:
-                    raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
+                raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
 
-            result["embedding"] = self._preprocess_3d_image(result["embedding"])
+        if self.load_image:
+            result["embedding_tensor"] = sample["embedding"]
+        else:
+            # do we really need this function? why do reshaping and why use torch.tensor()?
+            result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
 
-            if self.load_image:
-                result["embedding_tensor"] = result["embedding"]
-            else:
-                # do we really need this function? why do reshaping and why use torch.tensor()?
-                result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
-
-            # TODO check if we can remove this stuff!
-            #if result["embedding_tensor"] is not None:
-            #    result["embedding_tensor"] = result["embedding_tensor"].half()  # Ensure tensor is
-            #if result["embedding"] is not None:
-            #    result["embedding"] = result["embedding"].astype(
-            #        np.float16
-            #    )  # Convert to float16 for memory efficiency
+        # TODO check if we can remove this stuff!
+        #if result["embedding_tensor"] is not None:
+        #    result["embedding_tensor"] = result["embedding_tensor"].half()  # Ensure tensor is
+        #if result["embedding"] is not None:
+        #    result["embedding"] = result["embedding"].astype(
+        #        np.float16
+        #    )  # Convert to float16 for memory efficiency
 
         return result
 
