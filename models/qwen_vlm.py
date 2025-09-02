@@ -27,8 +27,9 @@ class QwenVLModel(AbstractVLMModel):
         reduce_block=[2,2,2],
         # base_model_id=None,
         checkpoint_path=None,
+        local_files_only=False
     ):
-        super().__init__(model_id, train_only_vision_adapter, train_vision_encoder, vision_encoder_path, freeze_vision_encoder)
+        super().__init__(model_id, train_only_vision_adapter, train_vision_encoder, vision_encoder_path, freeze_vision_encoder, local_files_only)
         self._model_str = "qwen"
         self.output_dir = output_dir
         self.batch_count = 0
@@ -46,7 +47,7 @@ class QwenVLModel(AbstractVLMModel):
         self.processor = QwenVLProcessor3D.from_pretrained(
             self.model_id,
             cache_dir=os.path.expanduser("~/.cache/huggingface/hub"),
-            local_files_only=True,
+            local_files_only=self.local_files_only,
             reduce_block=self.reduce_block,
             train_vision_encoder = self.train_vision_encoder
         )
@@ -59,7 +60,6 @@ class QwenVLModel(AbstractVLMModel):
                 self.model_id,
                 torch_dtype=torch.bfloat16,
                 quantization_config=bnb_config,
-                local_files_only=True,
                 reduce_block=self.reduce_block,
                 train_vision_encoder=self.train_vision_encoder,
                 vision_encoder_path=self.vision_encoder_path

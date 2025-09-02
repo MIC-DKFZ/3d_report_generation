@@ -22,9 +22,10 @@ class OwlVLModel(AbstractVLMModel):
         # the following are not used
         reduce_block=[2,2,2],
         train_vision_encoder=False,
-        vision_encoder_path=None
+        vision_encoder_path=None,
+        local_files_only=False
     ):
-        super().__init__(model_id, train_only_vision_adapter)
+        super().__init__(model_id=model_id, train_only_vision_adapter=train_only_vision_adapter, local_files_only=local_files_only)
         self._model_str = "owl"  # Used for logging and evaluation
         self.output_dir = output_dir
         self.vision_dim = vision_dim
@@ -89,7 +90,7 @@ class OwlVLModel(AbstractVLMModel):
                 embed_dim=self.embed_dim,
                 tokenizer=self.tokenizer,
                 debug=False,
-                local_files_only=True,
+                local_files_only=self.local_files_only,
             )
 
             # Log the parameters of the vision2text_model

@@ -291,14 +291,10 @@ class MedicalImageDataset(Dataset, ABC):
     ):
         super().__init__()
 
-        if embeddings_path is None:
-            embeddings_path = os.environ.get("ROCKET_VLM_VISION_EMBEDDINGS")
-
+        self.embeddings_path = Path(embeddings_path)
+        self.dataset_path = Path(dataset_json_path)
         self.model_name = model_name
         self.split = split
-        self.embeddings_path = (
-            Path(embeddings_path) if isinstance(embeddings_path, str) else embeddings_path
-        )
         self.vqa_path = vqa_path
         self.n_samples = n_samples
         self.tokenize_fn = tokenize_fn
@@ -337,13 +333,14 @@ class MedicalImageDataset(Dataset, ABC):
             return
 
         # Load and process data
-        self.data = self._load_data(dataset_json_path)
+        self.data = self._load_data()
 
         self.samples = self.format_data()
         self.samples = self._filter_samples(self.samples)
 
-        if self.n_samples:
-            self.samples = self.samples[: self.n_samples]
+        #if self.n_samples:
+        #    self.samples = self.samples[: self.n_samples]
+
 
         if self.tokenize_fn:
             self._tokenize_samples()
@@ -358,7 +355,7 @@ class MedicalImageDataset(Dataset, ABC):
             self.training_transforms = self.get_training_transforms()
 
     @abstractmethod
-    def _load_data(self, dataset_json_path):
+    def _load_data(self):
         """Load data from JSON file(s)"""
         pass
 
@@ -467,9 +464,14 @@ class MedicalImageDataset(Dataset, ABC):
 
                 embedding = sitk.GetArrayFromImage(sitk.ReadImage(embedding_path))
                 #embedding_full = embedding.copy()
-                lung_segmentation_path = embedding_path.replace("valid_fixed", "ts_seg/ts_total/valid_fixed")
+                lung_segmentation_path = None
+                if "valid_fixed" in embedding_path:
+                    lung_segmentation_path = embedding_path.replace("valid_fixed", "ts_seg/ts_total/valid_fixed")
+                if "train_fixed" in embedding_path:
+                    lung_segmentation_path = embedding_path.replace("train_fixed", "ts_seg/ts_total/train_fixed")
+
                 if os.path.exists(lung_segmentation_path):
-                    # we have no cropped images on dkfz drives, therefore this if block is here
+                    # we have no cropped images on dkfz drives, therefore this if block is here. This is only used for prototyping and is not io efficient.
                     # use with:
                     # "--dataset_path",
                     # "/mnt/e230-thrp-data/mic_rocket/data/raw/CTRATEv2/CT-RATE/dataset",
@@ -712,29 +714,22 @@ class MedicalImageDataset(Dataset, ABC):
         result["formatted_qa_prompt_only"] = formatted_qa_prompt_only
 
         # Load embedding
-        sample["embedding"] = self._load_embedding(sample["embedding_path"])
+        embd = self._load_embedding(sample["embedding_path"])
                 
         if self.embedding_constant is not None:
             if type(self.embedding_constant) is float:
-                result["embedding"] = np.full(sample["embedding"].shape, self.embedding_constant, dtype=np.float32)
+                result["embedding"] = np.full(embd.shape, self.embedding_constant, dtype=np.float32)
             elif type(self.embedding_constant) is str and self.embedding_constant == "random":
-                result["embedding"] = np.random.rand(sample["embedding"].shape).astype(np.float32)
+                result["embedding"] = np.random.rand(embd.shape).astype(np.float32)
             else:
                 raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
 
         if self.load_image:
-            result["embedding_tensor"] = sample["embedding"]
+            if self.embedding_constant is None:
+                result["embedding"] = embd
         else:
             # do we really need this function? why do reshaping and why use torch.tensor()?
-            result["embedding_tensor"] = self._embedding_2_tensor(result["embedding"])
-
-        # TODO check if we can remove this stuff!
-        #if result["embedding_tensor"] is not None:
-        #    result["embedding_tensor"] = result["embedding_tensor"].half()  # Ensure tensor is
-        #if result["embedding"] is not None:
-        #    result["embedding"] = result["embedding"].astype(
-        #        np.float16
-        #    )  # Convert to float16 for memory efficiency
+            result["embedding"] = self._embedding_2_tensor(result["embedding"])
 
         return result
 
@@ -766,8 +761,8 @@ class AMOSMMDataset(MedicalImageDataset):
         n_samples (int, optional): Number of samples to load (for debugging)
     """
 
-    def _load_data(self, dataset_json_path):
-        json_file_path = os.path.join(dataset_json_path, "dataset.json")
+    def _load_data(self):
+        json_file_path = os.path.join(self.dataset_path, "dataset.json")
         with open(json_file_path, "r") as f:
             data = json.load(f)
 
@@ -857,13 +852,13 @@ class LIDCDataset(MedicalImageDataset):
         n_samples (int, optional): Number of samples to load (for debugging)
     """
 
-    def _load_data(self, dataset_json_path):
+    def _load_data(self):
         if self.split == "train":
-            file_path = os.path.join(dataset_json_path, "train_questions.json")
+            file_path = os.path.join(self.dataset_path, "train_questions.json")
         elif self.split == "val":
-            file_path = os.path.join(dataset_json_path, "val_questions.json")
+            file_path = os.path.join(self.dataset_path, "val_questions.json")
         elif self.split == "test":
-            file_path = os.path.join(dataset_json_path, "test_questions.json")
+            file_path = os.path.join(self.dataset_path, "test_questions.json")
         else:
             raise ValueError(f"Invalid split name {self.split}")
 
@@ -898,73 +893,26 @@ class CTRATEDataset(MedicalImageDataset):
 
     def __init__(self, *args, use_csv_reports=False, **kwargs):
         self.use_csv_reports = use_csv_reports
+        
+        # Modify embeddings_path before calling parent init
+        if use_csv_reports and 'embeddings_path' in kwargs:
+            embeddings_path = kwargs['embeddings_path']
+            split = kwargs.get('split', 'train')  # Get split from kwargs
+            
+            if split == "train":
+                kwargs['embeddings_path'] = os.path.join(embeddings_path, "train_fixed")
+            else:
+                kwargs['embeddings_path'] = os.path.join(embeddings_path, "valid_fixed")
+        
         super().__init__(*args, **kwargs)
 
-    def _load_data(self, dataset_path):
+    def _load_data(self):
         if self.use_csv_reports:
-            return self._load_data_from_csv(dataset_path)
+            return self._load_data_from_csv()
         else:
-            return self._load_data_from_yml(dataset_path)
+            return self._load_data_from_yml()
 
-    def _load_data_from_csv(self, dataset_path):
-        """Load data from CSV reports instead of YML files"""
-        logger.info("Loading data from CSV reports...")
-        
-        # Build embedding dictionary with parallel processing
-        logger.info("Building embedding dictionary...")
-        self.embedding_dict = {}
-        
-        # Collect all embedding files first
-        embedding_files = []
-        for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
-            for fl in fls_:
-                if fl.endswith((".npy", ".npz", ".b2nd", ".nrrd", "nii.gz")):
-                    embedding_files.append(os.path.join(flr_, fl))
-        
-        logger.info(f"Found {len(embedding_files)} embedding files")
-        
-        # Process embedding files to build dictionary
-        for embedding_path in tqdm(embedding_files, desc="Building embedding dictionary"):
-            fl = os.path.basename(embedding_path)
-            image_id = fl.split("_embedding")[0].split(".")[0]
-            self.embedding_dict[image_id] = embedding_path
-
-        # Load appropriate CSV file based on split
-        reports_dir = os.path.join(dataset_path, "radiology_text_reports")
-        
-        if self.split == "train":
-            csv_file = os.path.join(reports_dir, "train_reports.csv")
-        elif self.split == "val":
-            csv_file = os.path.join(reports_dir, "validation_reports.csv")
-        else:
-            raise ValueError(f"Invalid split name {self.split} for CSV loading")
-
-        if not os.path.exists(csv_file):
-            raise FileNotFoundError(f"CSV file not found: {csv_file}")
-
-        logger.info(f"Loading CSV file: {csv_file}")
-        df = pd.read_csv(csv_file)
-        
-        logger.info(f"Processing {len(df)} CSV rows in parallel...")
-        
-        row_data_list = [(row, self.embedding_dict, self.split, self.vqa_path) 
-                        for _, row in df.iterrows()]
-        
-        # Use ThreadPoolExecutor for parallel processing
-        samples = []
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_row = {executor.submit(_load_csv_row, row_data): idx 
-                           for idx, row_data in enumerate(row_data_list)}
-            
-            for future in tqdm(as_completed(future_to_row), total=len(row_data_list), desc="Loading CSV rows"):
-                result = future.result()
-                if result is not None:
-                    samples.append(result)
-
-        logger.info(f"Successfully loaded {len(samples)} samples from CSV")
-        return samples
-
-    def _load_data_from_yml(self, dataset_path):
+    def _load_data_from_yml(self):
         """Original YML loading method"""
         logger.info("Building embedding dictionary...")
         
@@ -986,8 +934,8 @@ class CTRATEDataset(MedicalImageDataset):
             image_id = fl.split("_embedding")[0].split(".")[0]
             self.embedding_dict[image_id] = embedding_path
 
-        metadata_dir = os.path.join(dataset_path, "metadata")
-        data_dir = os.path.join(dataset_path, "images")
+        metadata_dir = os.path.join(self.dataset_path, "metadata")
+        data_dir = os.path.join(self.dataset_path, "images")
 
         metadata_files = [f for f in os.listdir(metadata_dir) if f.endswith(".yml")]
 
@@ -1027,13 +975,83 @@ class CTRATEDataset(MedicalImageDataset):
         logger.info(f"Successfully loaded {len(samples)} samples")
         return samples
 
+    def _load_data_from_csv(self):
+        """Load data from CSV reports instead of YML files"""
+        print("Loading data from CSV reports...")
+        
+        # Load appropriate CSV file based on split
+        reports_dir = os.path.join(self.dataset_path, "radiology_text_reports")
+        
+        if self.split == "train":
+            csv_file = os.path.join(reports_dir, "train_reports.csv")
+        elif self.split == "val":
+            csv_file = os.path.join(reports_dir, "validation_reports.csv")
+        else:
+            raise ValueError(f"Invalid split name {self.split} for CSV loading")
+
+        if not os.path.exists(csv_file):
+            raise FileNotFoundError(f"CSV file not found: {csv_file}")
+
+        print(f"Loading CSV file: {csv_file}")
+        df = pd.read_csv(csv_file)
+        
+        # Apply n_samples limit if specified
+        if hasattr(self, 'n_samples') and self.n_samples is not None and self.n_samples < len(df):
+            df = df.head(self.n_samples)
+            logger.info(f"Limited to {self.n_samples} samples")
+        
+        # Build embedding dictionary with direct path construction
+        print("Building embedding dictionary...")
+        self.embedding_dict = {}
+        
+        for _, row in tqdm(df.iterrows(), total=len(df), desc="Building embedding dictionary"):
+            volume_name = row['VolumeName']  # e.g., "valid_1_a_1.nii.gz"
+            file_base = volume_name.replace('.nii.gz', '')  # "valid_1_a_1"
+            
+            parts = file_base.split('_')
+            if len(parts) >= 3:
+                patient_folder = '_'.join(parts[:-2])  # "valid_1"
+                patient_id = '_'.join(parts[:-1])      # "valid_1_a"
+                
+                embedding_path = os.path.join(self.embeddings_path, patient_folder, patient_id, f"{file_base}.nii.gz")
+                
+                if os.path.exists(embedding_path):
+                    self.embedding_dict[file_base] = embedding_path
+                else:
+                    print("Embedding path not found!")
+
+        logger.info(f"Found embeddings for {len(self.embedding_dict)}/{len(df)} samples")
+        
+        logger.info(f"Processing {len(df)} CSV rows in parallel...")
+        
+        row_data_list = [(row, self.embedding_dict, self.split, self.vqa_path) 
+                        for _, row in df.iterrows()]
+        
+        # Use ThreadPoolExecutor for parallel processing
+        samples = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_row = {executor.submit(_load_csv_row, row_data): idx 
+                        for idx, row_data in enumerate(row_data_list)}
+            
+            for future in tqdm(as_completed(future_to_row), total=len(row_data_list), desc="Loading CSV rows"):
+                result = future.result()
+                if result is not None:
+                    samples.append(result)
+
+        print(f"Successfully loaded {len(samples)} samples from CSV")
+        return samples
+
     def get_embedding_path(self, embedding_path):
         """Convert image ID to embedding path"""
         if not hasattr(self, "embedding_dict"):
             logger.error("embedding_dict not found. Ensure _load_data is called first.")
             return os.path.join(str(self.embeddings_path), embedding_path + "_embedding.npz")
 
-        return self.embedding_dict.get(embedding_path, None)
+        if embedding_path in self.embedding_dict:
+            return self.embedding_dict[embedding_path]
+        else:
+            print(f"Warning: embedding path for {embedding_path} not found in embedding_dict")
+            return None
         # return os.path.join(self.embeddings_path, embedding_path + "_embedding.npz")
 
     def extract_sample_list(self, samples):
@@ -1059,7 +1077,7 @@ class CTRATEDataset_Submission(MedicalImageDataset):
         answer_types (tuple, optional): Types of answers to include
     """
 
-    def _load_data(self, dataset_path):
+    def _load_data(self):
         self.embedding_dict = {}
         embedding_files = []
         for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
