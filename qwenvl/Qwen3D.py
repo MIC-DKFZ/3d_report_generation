@@ -291,6 +291,8 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         # self.vision_adapter = VisionAdapterHeterogeneous(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
 
     def setup_vision_encoder(self, base_path):
+        # currently only working with MAE 
+        # TODO implement other vision encoders
         plans_file = f"{base_path}/plans.json"
         checkpoint_path = f"{base_path}/fold_all/checkpoint_final.pth"
 

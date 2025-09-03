@@ -342,9 +342,14 @@ def parse_args(default_config=None):
         help="Train only the vision adapter (Qwen only)",
     )
     general_parser.add_argument(
-        "--train_vision_encoder",
+        "--train_vision_encoder", #TODO fix that this means use a vision encoder instead of loading frozen embeddings
         action="store_true",
         help="Train the vision encoder (then embedding paths are the paths to the actual images).",
+    )
+    general_parser.add_argument(
+        "--freeze_vision_encoder",
+        action="store_true",
+        help="freeze vision encoder (and no lora adapter)",
     )
     general_parser.add_argument(
         "--vision_encoder_path", type=str, help="Path to vision encoder checkpoint"
@@ -368,7 +373,15 @@ def parse_args(default_config=None):
         "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
     )
     general_parser.add_argument(
+        "--n_train_samples", type=int, default=None, help="Number of training samples to use"
+    )
+    general_parser.add_argument(
         "--n_val_samples", type=int, default=50, help="Number of validation samples to use"
+    )
+    general_parser.add_argument(
+        "--use_csv_reports",
+        action="store_true",
+        help="Get reports from CSV file instead of yml files",
     )
     general_parser.add_argument(
         "--reduce_block",
@@ -391,6 +404,11 @@ def parse_args(default_config=None):
         "--do_transforms",
         action="store_true",
         help="If true, we do nnUNetv2 image augmentation.",
+    )
+    general_parser.add_argument(
+        "--local_files_only",
+        action="store_true",
+        help="If true, only use local files for qwen from_pretrained method.",
     )
 
     # First parse just the config argument to load the file
@@ -638,7 +656,9 @@ def main():
         train_only_vision_adapter=general_args.train_only_vision_adapter,
         reduce_block=general_args.reduce_block,
         train_vision_encoder=general_args.train_vision_encoder,
-        vision_encoder_path=general_args.vision_encoder_path
+        vision_encoder_path=general_args.vision_encoder_path,
+        freeze_vision_encoder=general_args.freeze_vision_encoder,
+        local_files_only=general_args.local_files_only
     )
 
     # Create datasets
@@ -650,6 +670,7 @@ def main():
             split="train",
             embeddings_path=general_args.embeddings_path,
             cache_file=general_args.dataset_cache,  # Use cache file if provided
+            embedding_constant=general_args.embedding_constant,
         )
 
         val_dataset = AMOSMMDataset(
@@ -659,6 +680,7 @@ def main():
             embeddings_path=general_args.embeddings_path,
             n_samples=general_args.n_val_samples,  # Limit the validation set size
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
+            embedding_constant=general_args.embedding_constant,
         )
     elif general_args.dataset_name == "ctrate":
         if general_args.include_cls_text_gen and is_main_process():
@@ -670,6 +692,7 @@ def main():
             split="train" if general_args.split_idx is None else f"train_{general_args.split_idx}",
             vqa_path=general_args.vqa_path,
             embeddings_path=general_args.embeddings_path,
+            n_samples=general_args.n_train_samples,
             split_files=general_args.split_file,
             answer_types=("TEXT",),
             include_cls_text_gen=general_args.include_cls_text_gen,
@@ -678,6 +701,8 @@ def main():
             load_image=general_args.train_vision_encoder,
             do_resize=general_args.do_resize,
             do_transforms=general_args.do_transforms,
+            embedding_constant=general_args.embedding_constant,
+            use_csv_reports=general_args.use_csv_reports
         )
 
         val_dataset = CTRATEDataset(
@@ -692,18 +717,15 @@ def main():
             cls_aug_strength=general_args.cls_aug_strength,
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
             load_image=general_args.train_vision_encoder,
-            do_resize=general_args.do_resize
+            do_resize=general_args.do_resize,
+            embedding_constant=general_args.embedding_constant,
+            use_csv_reports=general_args.use_csv_reports
             # no transforms for val dataset
         )
-    else:
-        raise ValueError(f"Unsupported dataset name: {general_args.dataset_name}")
 
-    if general_args.embedding_constant is not None:
-        if is_main_process():
-            logger.info(f"Setting embedding constant to {general_args.embedding_constant}")
-            print(f"Setting embedding constant to {general_args.embedding_constant}")
-        train_dataset.embedding_constant = general_args.embedding_constant
-        val_dataset.embedding_constant = general_args.embedding_constant
+    if general_args.embedding_constant is not None and is_main_process():
+        logger.info(f"Using embedding constant: {general_args.embedding_constant}")
+        print(f"Using embedding constant: {general_args.embedding_constant}")
 
     if is_main_process():
         logger.info(

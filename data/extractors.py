@@ -1,6 +1,6 @@
-import os
-from typing import Any, Dict, List, Optional, Set, Tuple, Type, TypedDict, TypeVar
-
+from typing import Any, Dict, List, Type, TypedDict, TypeVar
+import random
+import re
 ExtractorType = TypeVar("ExtractorType", bound="AMOSMMExtractor")
 
 
@@ -328,9 +328,56 @@ class CTRATEExtractor:
         "Interlobular septal thickening",
     ]
 
+    def __init__(self, shuffle_sentences: bool = False):
+        """
+        Initialize the extractor
+        
+        Args:
+            shuffle_sentences (bool): If True, randomly shuffle sentences in text answers
+        """
+        self.shuffle_sentences = shuffle_sentences
+
+    def _shuffle_sentences(self, text: str, p: float = 0.5) -> str:
+        """
+        Randomly shuffle sentences in a text with given probability
+        
+        Args:
+            text (str): Input text to shuffle
+            p (float): Probability of shuffling (default 0.5)
+            
+        Returns:
+            str: Text with potentially shuffled sentences
+        """
+        # Handle non-string inputs and missing values
+        if text is None:
+            return ""
+        
+        # Convert to string and handle NaN values
+        text_str = str(text).strip()
+        if text_str.lower() in ['nan', 'none', '']:
+            return ""
+        
+        if not self.shuffle_sentences or not text_str:
+            return text_str
+        
+        # Split text into sentences using regex to handle various punctuation
+        sentences = re.split(r'(?<=[.!?])\s+', text_str)
+        
+        # Only shuffle if there are multiple sentences
+        if len(sentences) > 1:
+            # Randomly decide whether to shuffle based on probability p
+            if random.uniform(0, 1) < p:
+                random.shuffle(sentences)
+                return ' '.join(sentences)
+        
+        return text_str
+
     @staticmethod
-    def extract_sample_list(samples, include_cls_text_gen: bool = False):
+    def extract_sample_list(samples, include_cls_text_gen: bool = False, shuffle_sentences: bool = False):
         """Extract sample list from raw data"""
+        # Create extractor instance with shuffle parameter
+        extractor = CTRATEExtractor(shuffle_sentences=shuffle_sentences)
+        
         extracted_samples = []
 
         for sample in samples:
@@ -356,12 +403,13 @@ class CTRATEExtractor:
 
             # Report generation sample
             if "report_gen" in sample["tasks"] and sample["tasks"]["report_gen"]:
+                report_text = extractor._shuffle_sentences(sample["tasks"]["report_gen"])
                 extracted_sample = {
                     "image_id": sample["image_id"],
                     "image_path": sample["embedding_path"],
                     "question": "Generate a detailed report for this CT scan.",
-                    "answer": sample["tasks"]["report_gen"],
-                    "full_answer": sample["tasks"]["report_gen"],
+                    "answer": report_text,
+                    "full_answer": report_text,
                     "answer_type": "TEXT",
                     "answer_subtype": "REPORT",
                     "system_text": "You are a medical imaging AI trained to analyze CT scans.",
@@ -375,12 +423,13 @@ class CTRATEExtractor:
 
             # Diagnosis sample
             if "diagnosis" in sample["tasks"] and sample["tasks"]["diagnosis"]:
+                diagnosis_text = extractor._shuffle_sentences(sample["tasks"]["diagnosis"])
                 extracted_sample = {
                     "image_id": sample["image_id"],
                     "image_path": sample["embedding_path"],
                     "question": "What is the diagnosis for this CT scan?",
-                    "answer": sample["tasks"]["diagnosis"],
-                    "full_answer": sample["tasks"]["diagnosis"],
+                    "answer": diagnosis_text,
+                    "full_answer": diagnosis_text,
                     "answer_type": "TEXT",
                     "answer_subtype": "DIAGNOSIS",
                     "system_text": "You are a medical imaging AI trained to analyze CT scans.",
@@ -399,7 +448,10 @@ class CTRATEExtractor:
                 and sample["tasks"]["diagnosis"]
             ):
                 # If both report generation and diagnosis are present, we can combine them
-                full_answer = f"Findings: {sample['tasks']['report_gen']}\nImpression: {sample['tasks']['diagnosis']}"
+                report_text = extractor._shuffle_sentences(sample["tasks"]["report_gen"])
+                diagnosis_text = extractor._shuffle_sentences(sample["tasks"]["diagnosis"])
+                full_answer = f"Findings: {report_text}\nImpression: {diagnosis_text}"
+                
                 extracted_sample = {
                     "image_id": sample["image_id"],
                     "image_path": sample["embedding_path"],
@@ -420,12 +472,13 @@ class CTRATEExtractor:
 
             if "vqa_data" in sample:
                 for qa_pair in sample["vqa_data"]:
+                    answer_text = extractor._shuffle_sentences(qa_pair["answer"])
                     vqa_sample = {
                         "image_id": sample["image_id"],
                         "image_path": sample["embedding_path"],
                         "question": qa_pair["question"],
-                        "answer": qa_pair["answer"],
-                        "full_answer": qa_pair["answer"],
+                        "answer": answer_text,
+                        "full_answer": answer_text,
                         "answer_type": "TEXT",
                         "answer_subtype": "VQA",
                         "system_text": "You are a medical imaging AI trained to analyze CT scans.",
