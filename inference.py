@@ -1,9 +1,9 @@
 import argparse
 import json
 import os
-from pathlib import Path
 import re
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 import torch
@@ -14,12 +14,13 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from data.datasets import AMOSMMDataset, CTRATEDataset, CTRATEDataset_Submission
+from eval_ctrate import main as eval_ctrate
 from evaluation.metrics import bleu_score, meteor_score, rouge_score
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
 from utils import logger, rank_zero_filter
 from utils.filter_batch import extract_batch_prompt_only
-from eval_ctrate import main as eval_ctrate
+
 
 class UnifiedVLMInference:
     def __init__(self, vlm_model, output_dir="vlm_inference", config_file_path: str = None):
@@ -521,7 +522,7 @@ def main():
     # calculate_metrics = not args.no_calculate_metrics
     inference.inference(test_dataset, challenge_submission=args.challenge_submission)
     
-    gt_report_csv_path = Path(args.dataset_path, "radiology_text_reports", "validation_reports.csv")
+    gt_report_csv_path = Path("reportgen_evaluation/ctrate", "radiology_text_reports", "validation_reports.csv")
     if not gt_report_csv_path.exists():
         logger.warning(f"We assumed the CTRATE validation set to be evaluated but the groundtruth CSV is not found at {gt_report_csv_path}")
         logger.warning(f"Therfore, skipping ctrate validation evaluation.")
