@@ -1,6 +1,7 @@
-from typing import Any, Dict, List, Type, TypedDict, TypeVar
 import random
 import re
+from typing import Any, Dict, List, Type, TypedDict, TypeVar
+
 ExtractorType = TypeVar("ExtractorType", bound="AMOSMMExtractor")
 
 
@@ -400,47 +401,6 @@ class CTRATEExtractor:
                                 "system_text": "You are a medical imaging AI trained to analyze CT scans.",
                             }
                         )
-
-            # Report generation sample
-            if "report_gen" in sample["tasks"] and sample["tasks"]["report_gen"]:
-                report_text = extractor._shuffle_sentences(sample["tasks"]["report_gen"])
-                extracted_sample = {
-                    "image_id": sample["image_id"],
-                    "image_path": sample["embedding_path"],
-                    "question": "Generate a detailed report for this CT scan.",
-                    "answer": report_text,
-                    "full_answer": report_text,
-                    "answer_type": "TEXT",
-                    "answer_subtype": "REPORT",
-                    "system_text": "You are a medical imaging AI trained to analyze CT scans.",
-                }
-                if include_cls_text_gen:
-                    extracted_sample["cls_text_gen"] = sample["tasks"]["classification"]
-                    # extracted_sample[
-                    #     "question"
-                    # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
-                extracted_samples.append(extracted_sample)
-
-            # Diagnosis sample
-            if "diagnosis" in sample["tasks"] and sample["tasks"]["diagnosis"]:
-                diagnosis_text = extractor._shuffle_sentences(sample["tasks"]["diagnosis"])
-                extracted_sample = {
-                    "image_id": sample["image_id"],
-                    "image_path": sample["embedding_path"],
-                    "question": "What is the diagnosis for this CT scan?",
-                    "answer": diagnosis_text,
-                    "full_answer": diagnosis_text,
-                    "answer_type": "TEXT",
-                    "answer_subtype": "DIAGNOSIS",
-                    "system_text": "You are a medical imaging AI trained to analyze CT scans.",
-                }
-                if include_cls_text_gen:
-                    extracted_sample["cls_text_gen"] = sample["tasks"]["classification"]
-                    # extracted_sample[
-                    #     "question"
-                    # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
-                extracted_samples.append(extracted_sample)
-
             if (
                 "report_gen" in sample["tasks"]
                 and sample["tasks"]["report_gen"]
@@ -469,6 +429,46 @@ class CTRATEExtractor:
                     #     "question"
                     # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
                 extracted_samples.append(extracted_sample)
+            else:
+                # Report generation sample
+                if "report_gen" in sample["tasks"] and sample["tasks"]["report_gen"]:
+                    report_text = extractor._shuffle_sentences(sample["tasks"]["report_gen"])
+                    extracted_sample = {
+                        "image_id": sample["image_id"],
+                        "image_path": sample["embedding_path"],
+                        "question": "Generate a detailed report for this CT scan.",
+                        "answer": report_text,
+                        "full_answer": report_text,
+                        "answer_type": "TEXT",
+                        "answer_subtype": "REPORT",
+                        "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                    }
+                    if include_cls_text_gen:
+                        extracted_sample["cls_text_gen"] = sample["tasks"]["classification"]
+                        # extracted_sample[
+                        #     "question"
+                        # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
+                    extracted_samples.append(extracted_sample)
+
+                # Diagnosis sample
+                if "diagnosis" in sample["tasks"] and sample["tasks"]["diagnosis"]:
+                    diagnosis_text = extractor._shuffle_sentences(sample["tasks"]["diagnosis"])
+                    extracted_sample = {
+                        "image_id": sample["image_id"],
+                        "image_path": sample["embedding_path"],
+                        "question": "What is the diagnosis for this CT scan?",
+                        "answer": diagnosis_text,
+                        "full_answer": diagnosis_text,
+                        "answer_type": "TEXT",
+                        "answer_subtype": "DIAGNOSIS",
+                        "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                    }
+                    if include_cls_text_gen:
+                        extracted_sample["cls_text_gen"] = sample["tasks"]["classification"]
+                        # extracted_sample[
+                        #     "question"
+                        # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
+                    extracted_samples.append(extracted_sample)
 
             if "vqa_data" in sample:
                 for qa_pair in sample["vqa_data"]:
