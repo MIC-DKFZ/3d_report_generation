@@ -1,23 +1,35 @@
+import glob
 from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
+from einops import rearrange
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
-
 from transformers.activations import QuickGELUActivation
-
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLModel, Qwen2_5_VLModelOutputWithPast, Qwen2RMSNorm, Qwen2_5_VLPreTrainedModel, Qwen2_5_VLTextModel
-from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig
-
 from transformers.cache_utils import Cache
-from transformers.processing_utils import Unpack
 from transformers.generation import GenerationMixin
-from  transformers.utils import auto_docstring, can_return_tuple, TransformersKwargs, is_torchdynamo_compiling, logging
+from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+    Qwen2_5_VLForConditionalGeneration,
+    Qwen2_5_VLModel,
+    Qwen2_5_VLModelOutputWithPast,
+    Qwen2_5_VLPreTrainedModel,
+    Qwen2_5_VLTextModel,
+    Qwen2RMSNorm,
+)
+from transformers.processing_utils import Unpack
+from transformers.utils import (
+    TransformersKwargs,
+    auto_docstring,
+    can_return_tuple,
+    is_torchdynamo_compiling,
+    logging,
+)
 
 from prep.evavit import PretrainedEvaEncFromEvaMAE, get_config_from_plans
+from utils import logger
 
-from einops import rearrange
 
 class VisionAdapterHeterogeneous(nn.Module):
     """
@@ -294,7 +306,15 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         # currently only working with MAE 
         # TODO implement other vision encoders
         plans_file = f"{base_path}/plans.json"
-        checkpoint_path = f"{base_path}/fold_all/checkpoint_final.pth"
+        checkpoint_paths = glob.glob(f"{base_path}/fold_all/checkpoint_*.pth")
+        if len(checkpoint_paths) > 1:
+            checkpoint_path = [c for c in checkpoint_paths if "best" in c][0]
+            logger.info(f"Multiple checkpoints found, using best: {checkpoint_path}")
+            if len(checkpoint_path) == 0:
+                checkpoint_path = checkpoint_paths[0]
+                logger.info(f"Multiple checkpoints found, using first: {checkpoint_path}")
+        else:
+            checkpoint_path = checkpoint_paths[0]            
 
         config = get_config_from_plans(plans_file)
         self.vision_encoder = PretrainedEvaEncFromEvaMAE(
