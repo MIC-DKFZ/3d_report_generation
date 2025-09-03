@@ -29,7 +29,7 @@ class QwenVLModel(AbstractVLMModel):
         checkpoint_path=None,
         local_files_only=False
     ):
-        super().__init__(model_id, train_only_vision_adapter, train_vision_encoder, vision_encoder_path, freeze_vision_encoder, local_files_only)
+        super().__init__(model_id=model_id, train_only_vision_adapter=train_only_vision_adapter, train_vision_encoder=train_vision_encoder, vision_encoder_path=vision_encoder_path, freeze_vision_encoder=freeze_vision_encoder, local_files_only=local_files_only)
         self._model_str = "qwen"
         self.output_dir = output_dir
         self.batch_count = 0
