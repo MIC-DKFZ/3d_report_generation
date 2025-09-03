@@ -400,6 +400,12 @@ def parse_args(default_config=None):
         action="store_true",
         help="Set this flag if you want to run inference for challenge submission (no metrics calculation, different output format)",
     )
+    general_parser.add_argument(
+        "--n_val_samples",
+        type=int,
+        default=None,
+        help="Number of validation samples to use (for quick testing). Default: None (use all samples)",
+    )
 
     # First parse just the config argument to load the file
     general_args, _ = general_parser.parse_known_args()
@@ -493,7 +499,7 @@ def main():
                 split="val",
                 embeddings_path=args.embeddings_path,
                 use_csv_reports=args.use_csv_reports,
-                # n_samples=args.n_val_samples,  # Limit the validation set size
+                n_samples=args.n_val_samples,  # Limit the validation set size
                 # split_files=args.split_file,
                 answer_types=("TEXT",),
                 include_cls_text_gen=args.include_cls_text_gen,
