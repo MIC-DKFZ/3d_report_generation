@@ -308,11 +308,11 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         plans_file = f"{base_path}/plans.json"
         checkpoint_paths = glob.glob(f"{base_path}/fold_all/checkpoint_*.pth")
         if len(checkpoint_paths) > 1:
-            checkpoint_path = [c for c in checkpoint_paths if "best" in c][0]
-            logger.info(f"Multiple checkpoints found, using best: {checkpoint_path}")
+            checkpoint_path = [c for c in checkpoint_paths if "final" in c][0]
+            logger.info(f"Multiple VE checkpoints found, using final: {checkpoint_path}")
             if len(checkpoint_path) == 0:
                 checkpoint_path = checkpoint_paths[0]
-                logger.info(f"Multiple checkpoints found, using first: {checkpoint_path}")
+                logger.info(f"Multiple VE checkpoints found, using first: {checkpoint_path}")
         else:
             checkpoint_path = checkpoint_paths[0]            
 
