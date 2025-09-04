@@ -251,44 +251,6 @@ class UnifiedVLMInference:
             f"Saved inference results to {os.path.join(self.output_dir, results_filename)}"
         )
 
-        if not challenge_submission:
-            # Calculate and log metrics
-            # Log the Bleu score
-            bleu_score_1 = bleu_score(preds, gts, max_order=1)["bleu"]
-            bleu_score_2 = bleu_score(preds, gts, max_order=2)["bleu"]
-            bleu_score_3 = bleu_score(preds, gts, max_order=3)["bleu"]
-            bleu_score_4 = bleu_score(preds, gts, max_order=4)["bleu"]
-            logger.info(f"Bleu1 score: {bleu_score_1}")
-            logger.info(f"Bleu2 score: {bleu_score_2}")
-            logger.info(f"Bleu3 score: {bleu_score_3}")
-            logger.info(f"Bleu4 score: {bleu_score_4}")
-
-            # Log the METOR score
-            meteor_score_val = meteor_score(preds, gts)["meteor"]
-            logger.info(f"METEOR score: {meteor_score_val}")
-
-            # Log the ROUGE score
-            rouge_score_val = rouge_score(preds, gts)["rougeL"]
-            logger.info(f"ROUGE score: {rouge_score_val}")
-
-            with open(os.path.join(self.output_dir, "inference_metrics.json"), "w") as f:
-                json.dump(
-                    {
-                        "bleu_score_1": bleu_score_1,
-                        "bleu_score_2": bleu_score_2,
-                        "bleu_score_3": bleu_score_3,
-                        "bleu_score_4": bleu_score_4,
-                        "meteor_score": meteor_score_val,
-                        "rouge_score": rouge_score_val,
-                    },
-                    f,
-                    indent=4,
-                )
-
-            logger.info(
-                f"Saved inference metrics to {os.path.join(self.output_dir, 'inference_metrics.json')}"
-            )
-
 
 def parse_args(default_config=None):
     if default_config is None:
@@ -521,16 +483,6 @@ def main():
     inference = UnifiedVLMInference(vlm_model, output_dir=args.output_dir)
     # calculate_metrics = not args.no_calculate_metrics
     inference.inference(test_dataset, challenge_submission=args.challenge_submission)
-    
-    gt_report_csv_path = Path("reportgen_evaluation/ctrate", "radiology_text_reports", "validation_reports.csv")
-    if not gt_report_csv_path.exists():
-        logger.warning(f"We assumed the CTRATE validation set to be evaluated but the groundtruth CSV is not found at {gt_report_csv_path}")
-        logger.warning(f"Therfore, skipping ctrate validation evaluation.")
-    else:
-        eval_ctrate(
-            results_path=Path(args.output_dir, "inference_results.json" if not args.challenge_submission else "results.json"),
-            gt_report_csv_path=gt_report_csv_path,
-        )
 
 if __name__ == "__main__":
     main()
