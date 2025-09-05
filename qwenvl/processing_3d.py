@@ -146,7 +146,7 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
                             self.video_token, "<|placeholder|>" * ((video_grid_thw[index] - video_grid_thw[index] % torch.as_tensor(self.reduce_block)).prod() // merge_length), 1)
                     else:
                             #TODO fix this so that we dont need an else block... this is just a quick fix for now
-                            text[i] = text[i].replace(self.video_token, "<|placeholder|>" * video_grid_thw.prod(), 1)
+                            text[i] = text[i].replace(self.video_token, "<|placeholder|>" * video_grid_thw[index].prod(), 1)
                     index += 1
                 text[i] = text[i].replace("<|placeholder|>", self.video_token)
 
