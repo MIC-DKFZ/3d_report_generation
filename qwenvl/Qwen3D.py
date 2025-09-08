@@ -412,11 +412,10 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
                 #########
                 # This loop is also added by us
                 for video in video_grid_thw:
-                    # Since we use the time dimension as spatial dimension we have to apply the reduce factor already here since it is not done in the rope function below
-                    # For reduceblocks different to 2,2,2 we have to also adjus dim 1 and 2
-                    video[0] = torch.floor_divide(video[0], torch.tensor(self.reduce_block[0], device=video.device, dtype=video.dtype))
-                    video[1] = torch.floor_divide(video[1], torch.tensor(self.reduce_block[1] // 2, device=video.device, dtype=video.dtype))
-                    video[2] = torch.floor_divide(video[2], torch.tensor(self.reduce_block[2] // 2, device=video.device, dtype=video.dtype))
+                    # We multiply dimension 1 (height) and dimension 2 (width) by 2 in order to nullify the division
+                    # by the spatial_merge_size=2 in the get_rope_index() function below
+                    video[1] = video[1]*2
+                    video[2] = video[2]*2
                 #########
                 position_ids, rope_deltas = self.get_rope_index(
                     input_ids,
