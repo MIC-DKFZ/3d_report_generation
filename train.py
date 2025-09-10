@@ -190,7 +190,7 @@ class UnifiedVLMTrainer:
         if is_main_process():
             wandb.init(
                 entity="mic-rocket-vlm",
-                project="qwen25_sweep_v3",
+                project=self.wandb_project,
                 name=datetime.now().strftime(
                     f"%Y-%m-%d_%H-%M-%S_train_{type(self.vlm_model).__name__}_run_{uuid4()}"
                 ),
