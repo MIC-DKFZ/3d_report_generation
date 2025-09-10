@@ -326,17 +326,6 @@ def parse_args(default_config=None):
         help="Constant value for training language only baseline (! Do not set this when training a VLM !). Can either be a float to set the whole embedding to a constant value or 'random' to set the embedding to a random values.",
     )
     general_parser.add_argument(
-        "--include_cls_text_gen",
-        action="store_true",
-        help="Include classes from classification for text generation (report/diagnosis) (CTRATE only)",
-    )
-    general_parser.add_argument(
-        "--cls_aug_strength",
-        type=float,
-        default=0.0,
-        help="Strength of the class augmentation for text generation, meaning probability of flipping labels for individual classes. E.g. 0.05 means 5 percent of the time a class label will be flipped to another class label.  Only used for training dataset. (CTRATE only)",
-    )
-    general_parser.add_argument(
         "--train_only_vision_adapter",
         action="store_true",
         help="Train only the vision adapter (Qwen only)",
@@ -683,8 +672,6 @@ def main():
             embedding_constant=general_args.embedding_constant,
         )
     elif general_args.dataset_name == "ctrate":
-        if general_args.include_cls_text_gen and is_main_process():
-            logger.info(f"Including classes in text generation for CTRate with augmentation strength {general_args.cls_aug_strength}")
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
             dataset_json_path=general_args.dataset_path,
@@ -695,8 +682,6 @@ def main():
             n_samples=general_args.n_train_samples,
             split_files=general_args.split_file,
             answer_types=("TEXT",),
-            include_cls_text_gen=general_args.include_cls_text_gen,
-            cls_aug_strength=general_args.cls_aug_strength,
             cache_file=general_args.dataset_cache,  # Use cache file if provided
             load_image=general_args.train_vision_encoder,
             do_resize=general_args.do_resize,
@@ -713,8 +698,6 @@ def main():
             n_samples=general_args.n_val_samples,  # Limit the validation set size
             split_files=general_args.split_file,
             answer_types=("TEXT",),
-            include_cls_text_gen=general_args.include_cls_text_gen,
-            cls_aug_strength=general_args.cls_aug_strength,
             cache_file=general_args.dataset_cache_val,  # Use cache file if provided
             load_image=general_args.train_vision_encoder,
             do_resize=general_args.do_resize,

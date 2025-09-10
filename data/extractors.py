@@ -374,7 +374,7 @@ class CTRATEExtractor:
         return text_str
 
     @staticmethod
-    def extract_sample_list(samples, include_cls_text_gen: bool = False, shuffle_sentences: bool = False):
+    def extract_sample_list(samples, shuffle_sentences: bool = False):
         """Extract sample list from raw data"""
         # Create extractor instance with shuffle parameter
         extractor = CTRATEExtractor(shuffle_sentences=shuffle_sentences)
@@ -422,12 +422,6 @@ class CTRATEExtractor:
                     "answer_subtype": "REPORT_DIAGNOSIS",
                     "system_text": "You are a medical imaging AI trained to analyze CT scans.",
                 }
-
-                if include_cls_text_gen:
-                    extracted_sample["cls_text_gen"] = sample["tasks"]["classification"]
-                    # extracted_sample[
-                    #     "question"
-                    # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
                 extracted_samples.append(extracted_sample)
             else:
                 # Report generation sample
@@ -443,11 +437,6 @@ class CTRATEExtractor:
                         "answer_subtype": "REPORT",
                         "system_text": "You are a medical imaging AI trained to analyze CT scans.",
                     }
-                    if include_cls_text_gen:
-                        extracted_sample["cls_text_gen"] = sample["tasks"]["classification"]
-                        # extracted_sample[
-                        #     "question"
-                        # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
                     extracted_samples.append(extracted_sample)
 
                 # Diagnosis sample
@@ -463,11 +452,6 @@ class CTRATEExtractor:
                         "answer_subtype": "DIAGNOSIS",
                         "system_text": "You are a medical imaging AI trained to analyze CT scans.",
                     }
-                    if include_cls_text_gen:
-                        extracted_sample["cls_text_gen"] = sample["tasks"]["classification"]
-                        # extracted_sample[
-                        #     "question"
-                        # ] += f' The image scan is classified into the following classes {str(sample["tasks"]["classification"])}, where 1 means presence of a disease and 0 means absence.'
                     extracted_samples.append(extracted_sample)
 
             if "vqa_data" in sample:
@@ -483,8 +467,6 @@ class CTRATEExtractor:
                         "answer_subtype": "VQA",
                         "system_text": "You are a medical imaging AI trained to analyze CT scans.",
                     }
-                    if include_cls_text_gen:
-                        vqa_sample["cls_text_gen"] = sample["tasks"]["classification"]
                     extracted_samples.append(vqa_sample)  
 
         # convert to QAItemDict
