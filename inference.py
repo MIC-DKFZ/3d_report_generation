@@ -58,7 +58,7 @@ class UnifiedVLMInference:
             self.local_rank = 0  # or handle as single process
             self.world_size = 1
 
-    def inference(self, test_dataset, challenge_submission=False):
+    def inference(self, test_dataset):
         """
         Main inference function that runs inference on the VLM model.
         Args:
@@ -183,66 +183,7 @@ class UnifiedVLMInference:
                 outputs_text = re.search(r"'text':\s*'([^']*)'", outputs_text).group(1)
             result["output_text_clean"] = outputs_text
 
-        preds = [result["output_text_clean"] for result in results]
-        gts = [result["answer"] for result in results]
-
-        if challenge_submission:
-            results_report = [r for r in results if r["answer_subtype"] == "REPORT"]
-            results_diagnosis = [r for r in results if r["answer_subtype"] == "DIAGNOSIS"]
-            results_concat = []
-            image_ids = set([r["image_id"] for r in results])
-            for image_id in image_ids:
-                if image_id not in [r["image_id"] for r in results_report]:
-                    logger.warning(f"Image ID {image_id} has no report generation result.")
-                    finding = [r for r in results_report if r["image_id"] == image_id]
-                    if len(finding) > 1:
-                        logger.warning(
-                            f"Multiple report results for image ID {image_id}. Using the first one."
-                        )
-                    results_concat.append(
-                        {
-                            "input_image_name": image_id,
-                            "report": f"Findings: {finding[0]['output_text_clean']}",
-                        }
-                    )
-                if image_id not in [r["image_id"] for r in results_diagnosis]:
-                    logger.warning(f"Image ID {image_id} has no diagnosis generation result.")
-                    impression = [r for r in results_diagnosis if r["image_id"] == image_id]
-                    if len(impression) > 1:
-                        logger.warning(
-                            f"Multiple diagnosis results for image ID {image_id}. Using the first one."
-                        )
-                    results_concat.append(
-                        {
-                            "input_image_name": image_id,
-                            "report": f"Impression: {impression[0]['output_text_clean']}",
-                        }
-                    )
-                else:
-                    finding = [r for r in results_report if r["image_id"] == image_id]
-                    if len(finding) > 1:
-                        logger.warning(
-                            f"Multiple diagnosis results for image ID {image_id}. Using the first one."
-                        )
-                    impression = [r for r in results_diagnosis if r["image_id"] == image_id]
-                    if len(impression) > 1:
-                        logger.warning(
-                            f"Multiple report results for image ID {image_id}. Using the first one."
-                        )
-                    results_concat.append(
-                        {
-                            "input_image_name": image_id,
-                            "report": f"Findings: {finding[0]['output_text_clean']}\nImpression: {impression[0]['output_text_clean']}",
-                        }
-                    )
-            results = {
-                "name": "Generated reports",
-                "type": "Report generation",
-                "generated_reports": results_concat,
-                "version": {"major": 1, "minor": 0},
-            }
-
-        results_filename = "inference_results.json" if not challenge_submission else "results.json"
+        results_filename = "inference_results.json"
 
         with open(os.path.join(self.output_dir, results_filename), "w") as f:
             json.dump(results, f, indent=4)
@@ -296,17 +237,6 @@ def parse_args(default_config=None):
         help="Constant value for training language only baseline (! Do not set this when training a VLM !). Can either be a float to set the whole embedding to a constant value or 'random' to set the embedding to a random values.",
     )
     general_parser.add_argument(
-        "--include_cls_text_gen",
-        action="store_true",
-        help="Include classes from classification for text generation (report/diagnosis) (CTRATE only)",
-    )
-    general_parser.add_argument(
-        "--cls_aug_strength",
-        type=float,
-        default=0.0,
-        help="Strength of the class augmentation for text generation, meaning probability of flipping labels for individual classes. E.g. 0.05 means 5 percent of the time a class label will be flipped to another class label.  Only used for training dataset. (CTRATE only)",
-    )
-    general_parser.add_argument(
         "--inference_config", type=str, help="Path to config file (YAML or JSON)"
     )
     general_parser.add_argument(
@@ -351,17 +281,6 @@ def parse_args(default_config=None):
         "--do_validation_transforms",
         action="store_true",
         help="Wheather or not to do data augmentation to the image during training",
-    )
-    
-    # general_parser.add_argument(
-    #     "--no_calculate_metrics",
-    #     action="store_true",
-    #     help="Not calculate and store metrics",
-    # )
-    general_parser.add_argument(
-        "--challenge_submission",
-        action="store_true",
-        help="Set this flag if you want to run inference for challenge submission (no metrics calculation, different output format)",
     )
     general_parser.add_argument(
         "--n_val_samples",
@@ -442,36 +361,20 @@ def main():
         )
         logger.info(f"Loaded {len(test_dataset)} test samples")
     elif args.dataset_name == "ctrate":
-        if args.challenge_submission: 
-            test_dataset = CTRATEDataset_Submission(
-                dataset_json_path=args.dataset_path,
-                model_name=args.model_type,
-                split="test",
-                embeddings_path=args.embeddings_path,
-                # n_samples=args.n_test_samples,  # Limit the test set size
-                # split_files=args.split_file,
-                answer_types=("TEXT",),
-                cache_file=args.dataset_cache_val,  # Use cache file if provided
-            )
-        else:
-            if args.include_cls_text_gen:
-                logger.info(f"Including classes in text generation for CTRate with augmentation strength {args.cls_aug_strength}")
-            test_dataset = CTRATEDataset(
-                dataset_json_path=args.dataset_path,
-                model_name=args.model_type,
-                split="val",
-                embeddings_path=args.embeddings_path,
-                use_csv_reports=args.use_csv_reports,
-                n_samples=args.n_val_samples,  # Limit the validation set size
-                # split_files=args.split_file,
-                answer_types=("TEXT",),
-                include_cls_text_gen=args.include_cls_text_gen,
-                cls_aug_strength=args.cls_aug_strength,
-                cache_file=args.dataset_cache_val,  # Use cache file if provided
-                load_image=args.load_image,
-                do_resize=args.do_resize,
-                do_transforms=args.do_validation_transforms
-            )
+        test_dataset = CTRATEDataset(
+            dataset_json_path=args.dataset_path,
+            model_name=args.model_type,
+            split="val",
+            embeddings_path=args.embeddings_path,
+            use_csv_reports=args.use_csv_reports,
+            n_samples=args.n_val_samples,  # Limit the validation set size
+            # split_files=args.split_file,
+            answer_types=("TEXT",),
+            cache_file=args.dataset_cache_val,  # Use cache file if provided
+            load_image=args.load_image,
+            do_resize=args.do_resize,
+            do_transforms=args.do_validation_transforms
+        )
     else:
         raise ValueError(f"Unsupported dataset name: {args.dataset_name}")
     if args.embedding_constant is not None:
@@ -482,7 +385,7 @@ def main():
     # Create inference object and run inference
     inference = UnifiedVLMInference(vlm_model, output_dir=args.output_dir)
     # calculate_metrics = not args.no_calculate_metrics
-    inference.inference(test_dataset, challenge_submission=args.challenge_submission)
+    inference.inference(test_dataset)
 
 if __name__ == "__main__":
     main()

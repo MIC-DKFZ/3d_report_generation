@@ -281,8 +281,6 @@ class MedicalImageDataset(Dataset, ABC):
         return_embedding=True,
         cache_file=None,
         embedding_constant=None,
-        include_cls_text_gen=False,
-        cls_aug_strength=0.0,
         load_image=False,
         max_workers=None,
         vqa_path=None,
@@ -301,8 +299,6 @@ class MedicalImageDataset(Dataset, ABC):
         self.split_files = split_files
         self.return_embedding = return_embedding
         self.embedding_constant = embedding_constant
-        self.include_cls_text_gen = include_cls_text_gen
-        self.cls_aug_strength = cls_aug_strength
         self.cache_file = cache_file
         self.load_image = load_image
         self.do_resize = do_resize
@@ -696,13 +692,6 @@ class MedicalImageDataset(Dataset, ABC):
         # Create a new dictionary instead of modifying the stored one
         result = dict(sample)
 
-        if self.include_cls_text_gen and "cls_text_gen" in sample:
-            for key in result["cls_text_gen"]:
-                if random.random() < self.cls_aug_strength:
-                    result["cls_text_gen"][key] = 1 - result["cls_text_gen"][key]  # flip 0 to 1
-            result["question"] += f' The scan is classified into the following classes {str(result["cls_text_gen"])}, where 1 means presence of a disease and 0 means absence.'
-            # result["cls_text_gen"] = sample["cls_text_gen"]
-
         formatted_qa, formatted_qa_prompt_only = format_into_message(
                 result["question"],
                 result["full_answer"],
@@ -1058,7 +1047,6 @@ class CTRATEDataset(MedicalImageDataset):
         """Extract sample list from raw data"""
         extracted_samples = CTRATEExtractor.extract_sample_list(
             samples, 
-            include_cls_text_gen=self.include_cls_text_gen,
             shuffle_sentences=self.do_transforms  # Enable sentence shuffling when transforms are enabled (in train split)
         )
         return extracted_samples
