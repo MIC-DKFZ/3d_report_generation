@@ -237,17 +237,6 @@ def parse_args(default_config=None):
         help="Constant value for training language only baseline (! Do not set this when training a VLM !). Can either be a float to set the whole embedding to a constant value or 'random' to set the embedding to a random values.",
     )
     general_parser.add_argument(
-        "--include_cls_text_gen",
-        action="store_true",
-        help="Include classes from classification for text generation (report/diagnosis) (CTRATE only)",
-    )
-    general_parser.add_argument(
-        "--cls_aug_strength",
-        type=float,
-        default=0.0,
-        help="Strength of the class augmentation for text generation, meaning probability of flipping labels for individual classes. E.g. 0.05 means 5 percent of the time a class label will be flipped to another class label.  Only used for training dataset. (CTRATE only)",
-    )
-    general_parser.add_argument(
         "--inference_config", type=str, help="Path to config file (YAML or JSON)"
     )
     general_parser.add_argument(
@@ -372,8 +361,6 @@ def main():
         )
         logger.info(f"Loaded {len(test_dataset)} test samples")
     elif args.dataset_name == "ctrate":
-        if args.include_cls_text_gen:
-            logger.info(f"Including classes in text generation for CTRate with augmentation strength {args.cls_aug_strength}")
         test_dataset = CTRATEDataset(
             dataset_json_path=args.dataset_path,
             model_name=args.model_type,
@@ -383,8 +370,6 @@ def main():
             n_samples=args.n_val_samples,  # Limit the validation set size
             # split_files=args.split_file,
             answer_types=("TEXT",),
-            include_cls_text_gen=args.include_cls_text_gen,
-            cls_aug_strength=args.cls_aug_strength,
             cache_file=args.dataset_cache_val,  # Use cache file if provided
             load_image=args.load_image,
             do_resize=args.do_resize,
