@@ -1,18 +1,18 @@
 import os
 from pathlib import Path
 
+import numpy as np
 import torch
 import transformers
 from peft import LoraConfig
 
 from qwenvl.processing_3d import QwenVLProcessor3D
 from qwenvl.Qwen3D import QwenVLForConditionalGeneration3D
+from utils import logger
 from utils.filter_batch import extract_raw_samples_from_batch
+from utils.vision_input_type import VisionInputType
 
 from .abstract_vlm import AbstractVLMModel
-from utils import logger
-
-import numpy as np
 
 
 class QwenVLModel(AbstractVLMModel):
@@ -23,33 +23,28 @@ class QwenVLModel(AbstractVLMModel):
         train_only_vision_adapter=False,
         train_vision_encoder=True,
         vision_encoder_path=None,
-        freeze_vision_encoder=False,
         reduce_block=[2,2,2],
-        # base_model_id=None,
         checkpoint_path=None,
         local_files_only=False
     ):
-        super().__init__(model_id=model_id, train_only_vision_adapter=train_only_vision_adapter, train_vision_encoder=train_vision_encoder, vision_encoder_path=vision_encoder_path, freeze_vision_encoder=freeze_vision_encoder, local_files_only=local_files_only)
+        super().__init__(model_id=model_id, train_only_vision_adapter=train_only_vision_adapter, train_vision_encoder=train_vision_encoder, vision_encoder_path=vision_encoder_path, local_files_only=local_files_only)
         self._model_str = "qwen"
         self.output_dir = output_dir
         self.batch_count = 0
         self.reduce_block = reduce_block
-        # if base_model_id is None:
-        #     self.base_model_id = model_id
-        # else:
-        #     self.base_model_id = base_model_id
 
         self.checkpoint_path = checkpoint_path
 
     def setup_model(self, bnb_config=None):
         """Initialize model, processor and PEFT configuration"""
         
+        vision_input_type = VisionInputType.IMAGE if self.vision_encoder_path is not None else VisionInputType.EMBEDDING
         self.processor = QwenVLProcessor3D.from_pretrained(
             self.model_id,
             cache_dir=os.path.expanduser("~/.cache/huggingface/hub"),
             local_files_only=self.local_files_only,
             reduce_block=self.reduce_block,
-            train_vision_encoder = self.train_vision_encoder
+            vision_input_type=vision_input_type
         )
         self.tokenizer = self.processor.tokenizer
 
@@ -61,7 +56,6 @@ class QwenVLModel(AbstractVLMModel):
                 torch_dtype=torch.bfloat16,
                 quantization_config=bnb_config,
                 reduce_block=self.reduce_block,
-                train_vision_encoder=self.train_vision_encoder,
                 vision_encoder_path=self.vision_encoder_path
             )
 
@@ -71,7 +65,6 @@ class QwenVLModel(AbstractVLMModel):
                 torch_dtype=torch.bfloat16,
                 quantization_config=bnb_config,
                 reduce_block=self.reduce_block,
-                train_vision_encoder=self.train_vision_encoder,
                 vision_encoder_path=self.vision_encoder_path
             )
         else:
@@ -79,13 +72,14 @@ class QwenVLModel(AbstractVLMModel):
                 self.model_id, 
                 torch_dtype=torch.bfloat16,
                 reduce_block=self.reduce_block,
-                train_vision_encoder=self.train_vision_encoder,
                 vision_encoder_path=self.vision_encoder_path
             )
+        
+        if self.vision_encoder_path is not None:
+            self.model.model.setup_vision_encoder()
 
-        if self.train_vision_encoder:
-            self.model.model.setup_vision_encoder(self.vision_encoder_path)
-        if self.freeze_vision_encoder:
+        if not self.train_vision_encoder:
+            # Freeze vision encoder if not training it
             for param in self.model.model.vision_encoder.parameters():
                     param.requires_grad = False
 
@@ -185,7 +179,7 @@ class QwenVLModel(AbstractVLMModel):
         if self.train_only_vision_adapter:
             return {"peft_config": None, "train_only_vision_adapter": True}
         else:
-            if self.train_vision_encoder and not self.freeze_vision_encoder:
+            if self.train_vision_encoder:
                 # Train both language model and vision encoder
                 peft_config = LoraConfig(
                     task_type="CAUSAL_LM",
@@ -200,7 +194,7 @@ class QwenVLModel(AbstractVLMModel):
                     lora_dropout=0.1,
                     bias="none"
                 )
-            elif self.train_vision_encoder and self.freeze_vision_encoder:
+            else:
                 # Only train language model, exclude vision encoder modules
                 peft_config = LoraConfig(
                     task_type="CAUSAL_LM",
@@ -221,16 +215,6 @@ class QwenVLModel(AbstractVLMModel):
                     modules_to_save=["vision_adapter"],
                     lora_dropout=0.1,
                     bias="none"
-                )
-            else:
-                # TODO check why we used only q_proj and v_proj
-                peft_config = LoraConfig(
-                    task_type="CAUSAL_LM",
-                    r=8,
-                    lora_alpha=32,
-                    target_modules=["q_proj", "v_proj"],
-                    lora_dropout=0.1,
-                    bias="none",
                 )
 
             return {"peft_config": peft_config, "train_only_vision_adapter": False}

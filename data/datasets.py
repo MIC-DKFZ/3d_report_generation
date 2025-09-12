@@ -1,45 +1,21 @@
 import json
+import math
 import os
-import pickle
-import random
 from abc import ABC, abstractmethod
+from numbers import Number
 from pathlib import Path
-from tqdm import tqdm
-import yaml
+from typing import Type
+
 import blosc2
+import nrrd
 import numpy as np
+import SimpleITK as sitk
 import torch
 from torch.utils.data import Dataset
-import pickle
-import nrrd
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import partial
-from data.extractors import (
-    AMOSMMExtractor,
-    AMOSMMRegionExtractor,
-    CTRATEExtractor,
-    LIDCExtractor,
-    QAItemDict,
-)
+
 from utils import logger
-from typing import Type
-from numbers import Number
-
-import SimpleITK as sitk
-import pandas as pd
-import math
-
-from scipy.ndimage import zoom
-from batchgeneratorsv2.transforms.base.basic_transform import BasicTransform
-from batchgeneratorsv2.transforms.intensity.brightness import MultiplicativeBrightnessTransform
-from batchgeneratorsv2.transforms.intensity.contrast import ContrastTransform, BGContrast
-from batchgeneratorsv2.transforms.intensity.gamma import GammaTransform
-from batchgeneratorsv2.transforms.intensity.gaussian_noise import GaussianNoiseTransform
-from batchgeneratorsv2.transforms.noise.gaussian_blur import GaussianBlurTransform
-from batchgeneratorsv2.transforms.spatial.low_resolution import SimulateLowResolutionTransform
-from batchgeneratorsv2.transforms.spatial.spatial import SpatialTransform
-from batchgeneratorsv2.transforms.utils.compose import ComposeTransforms
-from batchgeneratorsv2.transforms.utils.random import RandomTransform
+from utils.dataset_utils import get_training_image_transforms, preprocess_3d_image
+from utils.vision_input_type import VisionInputType
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
@@ -62,69 +38,6 @@ def z_score_normalization(
         std = image.std()
         image = (image - mean) / max(std, 1e-8)
     return image
-
-
-def _load_csv_row(row_data):
-    """Helper function to load a single CSV row for CTRATEDataset"""
-    row, embedding_dict, split, vqa_path = row_data
-    
-    volume_name = row['VolumeName']
-    # Extract image_id from volume name (e.g., valid_1_a_1.nii.gz -> valid_1_a_1)
-    image_id = volume_name.replace('.nii.gz', '')
-    
-    embedding_path = embedding_dict.get(image_id)
-    if embedding_path is None:
-        return None
-
-    # Map CSV columns to expected structure
-    findings = row.get('Findings_EN', '')
-    impressions = row.get('Impressions_EN', '')
-    clinical_info = row.get('ClinicalInformation_EN', '')
-    technique = row.get('Technique_EN', '')
-
-    sample = {
-        "image_id": image_id,
-        "embedding_path": embedding_path,
-        "tasks": {
-            "classification": {},  # CSV doesn't have classification data
-            "report_gen": findings,
-            "diagnosis": impressions,
-        },
-        # Store additional CSV fields if needed
-        "clinical_information": clinical_info,
-        "technique": technique,
-    }
-    
-    # Load VQA data if vqa_path is provided (reuse existing logic)
-    if vqa_path is not None:
-        try:
-            # Extract case identifier from volume name
-            # valid_1_a_1.nii.gz -> valid_1_a
-            case_dir = '_'.join(image_id.split('_')[:-1])
-            
-            # Determine VQA folder based on case type
-            if case_dir.startswith('train_'):
-                vqa_folder = "train_cases"
-            elif case_dir.startswith('valid_'):
-                vqa_folder = "validation_cases"
-            else:
-                vqa_folder = None
-            
-            if vqa_folder:
-                vqa_file_path = os.path.join(vqa_path, vqa_folder, f"{case_dir}.json")
-                
-                if os.path.exists(vqa_file_path):
-                    with open(vqa_file_path, "r") as f:
-                        vqa_data = json.load(f)
-                    sample["vqa_data"] = vqa_data.get("qa_pairs", [])
-                else:
-                    logger.debug(f"VQA file not found: {vqa_file_path}")
-                        
-        except Exception as e:
-            logger.error(f"Error loading VQA data for {image_id}: {e}")
-    
-    return sample
-
 
 def format_into_message(
     question, answer, model_name, system_text=SYSTEM_TEXT, embedding_path=None
@@ -155,107 +68,6 @@ def format_into_message(
     return full_conversation, prompt_only_conversation
 
 
-def _process_sample_for_formatting(sample, get_embedding_path_func):
-    """Helper function to process a single sample for formatting"""
-    embedding_path = get_embedding_path_func(sample["image_id"])
-    
-    # Skip if embedding file doesn't exist
-    if not os.path.exists(embedding_path):
-        return None
-    
-    sample["embedding_path"] = embedding_path
-    return sample
-
-
-def _tokenize_single_sample(sample_data, tokenize_fn):
-    """Helper function to tokenize a single sample"""
-    sample, formatted_qa, formatted_qa_prompt_only = sample_data
-    sample["formatted_qa"] = formatted_qa
-    sample["formatted_qa_prompt_only"] = formatted_qa_prompt_only
-    sample["tokenized_qa_text_tokens"] = tokenize_fn(formatted_qa)
-    sample["tokenized_qa_text_prompt_only_tokens"] = tokenize_fn(formatted_qa_prompt_only)
-    return sample
-
-
-def _load_yaml_file(file_info):
-    """Helper function to load a single YAML file for CTRATEDataset"""
-    metadata_file, metadata_dir, data_dir, embedding_dict, split, vqa_path = file_info
-    
-    metadata_path = os.path.join(metadata_dir, metadata_file)
-    
-    try:
-        with open(metadata_path, "r") as f:
-            metadata = yaml.safe_load(f)
-    except Exception as e:
-        logger.error(f"Error loading {metadata_path}: {e}")
-        return None
-
-    image_id = metadata["image_id"]
-    embedding_path = embedding_dict.get(image_id)
-
-    if embedding_path is None:
-        return None
-
-    if split == "train" and not metadata["metadata"].get("train_set", False):
-        return None
-    elif split == "val" and metadata["metadata"].get("train_set", True):
-        return None
-
-    findings = metadata["metadata"]["Findings_EN"]
-    impressions = metadata["metadata"]["Impressions_EN"]
-    classifications = {c: metadata["metadata"].get(c) for c in CTRATEExtractor.CONDITIONS}
-
-    sample = {
-        "image_id": metadata["image_id"],
-        "embedding_path": embedding_path,
-        "tasks": {
-            "classification": classifications,
-            "report_gen": findings,
-            "diagnosis": impressions,
-        },
-    }
-    
-    # Load VQA data if vqa_path is provided
-    if vqa_path is not None:
-        try:
-            # Extract case identifier from image filepath
-            image_filepaths = metadata.get("image_filepaths", [])
-            if image_filepaths:
-                # Get the filename from the first filepath
-                # Example: .../train_14008_a_2.nii.gz -> train_14008_a_2.nii.gz
-                filepath = image_filepaths[0]
-                filename = os.path.basename(filepath)
-                
-                # Remove file extension and trailing number+underscore
-                # train_14008_a_2.nii.gz -> train_14008_a_2 -> train_14008_a
-                case_dir = filename.split('.')[0]  # Remove .nii.gz
-                case_dir = '_'.join(case_dir.split('_')[:-1])  # Remove _2 (last part)
-                
-                # Determine VQA folder based on case type
-                if case_dir.startswith('train_'):
-                    vqa_folder = "train_cases"
-                elif case_dir.startswith('valid_'):
-                    vqa_folder = "validation_cases"
-                else:
-                    vqa_folder = None
-                
-                if vqa_folder:
-                    vqa_file_path = os.path.join(vqa_path, vqa_folder, f"{case_dir}.json")
-                    
-                    if os.path.exists(vqa_file_path):
-                        with open(vqa_file_path, "r") as f:
-                            vqa_data = json.load(f)
-                        sample["vqa_data"] = vqa_data.get("qa_pairs", [])
-                    else:
-                        print(f"VQA file not found: {vqa_file_path}")
-                        logger.debug(f"VQA file not found: {vqa_file_path}")
-                            
-        except Exception as e:
-            logger.error(f"Error loading VQA data for {image_id}: {e}")
-    
-    return sample
-
-
 class MedicalImageDataset(Dataset, ABC):
     """
     Base class for medical imaging datasets with vision-language models
@@ -273,38 +85,28 @@ class MedicalImageDataset(Dataset, ABC):
         dataset_json_path,
         model_name,
         split="train",
-        embeddings_path=None,
+        vision_input_path=None,
+        vision_input_type=VisionInputType.EMBEDDING,
         n_samples=None,
-        tokenize_fn=None,
         answer_types=("CHOICE",),
         split_files=None,
-        return_embedding=True,
-        cache_file=None,
         embedding_constant=None,
-        load_image=False,
-        max_workers=None,
-        vqa_path=None,
         do_resize=False,
         do_transforms=False
     ):
         super().__init__()
 
-        self.embeddings_path = Path(embeddings_path)
-        self.dataset_path = Path(dataset_json_path)
+        self.dataset_json_path = Path(dataset_json_path)
+        self.vision_input_path = Path(vision_input_path)
+        self.vision_input_type = vision_input_type
         self.model_name = model_name
         self.split = split
-        self.vqa_path = vqa_path
         self.n_samples = n_samples
-        self.tokenize_fn = tokenize_fn
         self.split_files = split_files
-        self.return_embedding = return_embedding
         self.embedding_constant = embedding_constant
-        self.cache_file = cache_file
-        self.load_image = load_image
         self.do_resize = do_resize
         self.do_transforms = do_transforms
-        self.max_workers = max_workers or min(48, (os.cpu_count() or 1))
-        logger.info(f"Using {self.max_workers} for dataset loading.")
+
         if isinstance(answer_types, str):
             answer_types = [
                 answer_types
@@ -321,95 +123,25 @@ class MedicalImageDataset(Dataset, ABC):
             elif isinstance(answer_type, dict):
                 self.answer_type_dict.update(answer_type)
 
-        if self.cache_file is not None and os.path.exists(self.cache_file):
-            logger.info(f"Loading cached dataset from {self.cache_file}")
-            with open(self.cache_file, "rb") as f:
-                self.samples = pickle.load(f)
-            logger.info(f"Loaded {len(self.samples)} samples from cache.")
-            return
+        with open(self.dataset_json_path, "r") as f:
+            self.samples = json.load(f)
 
-        # Load and process data
-        self.data = self._load_data()
-
-        self.samples = self.format_data()
         self.samples = self._filter_samples(self.samples)
 
-        #if self.n_samples:
-        #    self.samples = self.samples[: self.n_samples]
-
-
-        if self.tokenize_fn:
-            self._tokenize_samples()
-
-        if self.cache_file is not None and not os.path.exists(self.cache_file):
-            logger.info(f"Caching dataset to {self.cache_file}")
-            with open(self.cache_file, "wb") as f:
-                pickle.dump(self.samples, f)
-            logger.info(f"Cached {len(self.samples)} samples.")
+        if self.n_samples is not None:
+            self.samples = list(np.random.choice(self.samples, self.n_samples, replace=False))
 
         if self.do_transforms:
-            self.training_transforms = self.get_training_transforms()
+            if self.vision_input_type != VisionInputType.IMAGE:
+                raise ValueError("do_transforms can only be True if vision_input_type is IMAGE")
+            self.training_transforms = get_training_image_transforms()
+        else:
+            self.training_transforms = None
 
     @abstractmethod
-    def _load_data(self):
-        """Load data from JSON file(s)"""
+    def _get_vision_input_path(self, image_id):
+        """Load embedding path for a given image ID"""
         pass
-
-    @abstractmethod
-    def get_embedding_path(self, identifier):
-        """Convert image identifier to embedding path"""
-        pass
-
-    @abstractmethod
-    def extract_sample_list(self, samples):
-        """Extract sample list from raw data"""
-        pass
-
-    def format_data(self):
-        """Format raw data into structured samples with parallel processing"""
-        extracted_samples = self.extract_sample_list(self.data)
-        
-        logger.info(f"Processing {len(extracted_samples)} samples with parallel formatting...")
-        
-        # Use ThreadPoolExecutor for I/O bound operations (file existence checks)
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all tasks
-            process_func = partial(_process_sample_for_formatting, get_embedding_path_func=self.get_embedding_path)
-            future_to_sample = {executor.submit(process_func, sample): sample for sample in extracted_samples}
-            
-            formatted_data = []
-            for future in tqdm(as_completed(future_to_sample), total=len(extracted_samples), desc="Formatting samples"):
-                result = future.result()
-                if result is not None:
-                    formatted_data.append(result)
-
-        logger.info(f"Formatted {len(formatted_data)} samples successfully")
-        return formatted_data
-
-    def _tokenize_samples(self):
-        """Tokenize samples with parallel processing"""
-        logger.info("Preparing samples for tokenization...")
-        
-        # Prepare data for tokenization
-        sample_data = []
-        for sample in self.samples:
-            formatted_qa, formatted_qa_prompt_only = format_into_message(
-                sample["question"],
-                sample["full_answer"],
-                self.model_name,
-                system_text=sample["system_text"],
-            )
-            sample_data.append((sample, formatted_qa, formatted_qa_prompt_only))
-        
-        logger.info(f"Tokenizing {len(sample_data)} samples in parallel...")
-        
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            tokenize_func = partial(_tokenize_single_sample, tokenize_fn=self.tokenize_fn)
-            future_to_idx = {executor.submit(tokenize_func, data): idx for idx, data in enumerate(sample_data)}
-            
-            for future in tqdm(as_completed(future_to_idx), total=len(sample_data), desc="Tokenizing samples"):
-                idx = future_to_idx[future]
-                self.samples[idx] = future.result()
 
     def _filter_samples(self, samples):
         """Filter samples based on answer type"""
@@ -430,12 +162,12 @@ class MedicalImageDataset(Dataset, ABC):
 
         return filtered_samples
 
-    def _load_embedding(self, embedding_path, is_image=True):
+    def _load_embedding(self, embedding_path:Path):
         """Load embedding from file"""
         try:
-            if embedding_path.endswith(".npy"):
+            if str(embedding_path).endswith(".npy"):
                 embedding = np.load(embedding_path)
-            elif embedding_path.endswith(".npz"):
+            elif str(embedding_path).endswith(".npz"):
                 # Use context manager to ensure proper file closure
                 with np.load(embedding_path) as npz_file:
                     # Attempt to load the "embeddings" key if it exists, otherwise load the first array
@@ -444,7 +176,7 @@ class MedicalImageDataset(Dataset, ABC):
                     else:
                         embedding = npz_file[npz_file.files[0]].copy()  # Make a copy to avoid reference issues
 
-            elif embedding_path.endswith(".b2nd"):
+            elif str(embedding_path).endswith(".b2nd"):
                 # Load b2nd file like nnUNet :)
                 dparams = {
                     'nthreads': 1
@@ -453,65 +185,19 @@ class MedicalImageDataset(Dataset, ABC):
                 
                 embedding = np.array(blosc2.open(urlpath=embedding_path, mode='r', dparams=dparams, **mmap_kwargs))
                 
-            elif embedding_path.endswith(".nrrd"):     
+            elif str(embedding_path).endswith(".nrrd"):     
                 embedding, header = nrrd.read(embedding_path)
 
-            elif embedding_path.endswith((".nii.gz", ".nii")):
-
+            elif str(embedding_path).endswith((".nii.gz", ".nii")):
                 embedding = sitk.GetArrayFromImage(sitk.ReadImage(embedding_path))
-                #embedding_full = embedding.copy()
-                lung_segmentation_path = None
-                if "valid_fixed" in embedding_path:
-                    lung_segmentation_path = embedding_path.replace("valid_fixed", "ts_seg/ts_total/valid_fixed")
-                if "train_fixed" in embedding_path:
-                    lung_segmentation_path = embedding_path.replace("train_fixed", "ts_seg/ts_total/train_fixed")
-
-                if os.path.exists(lung_segmentation_path):
-                    # we have no cropped images on dkfz drives, therefore this if block is here. This is only used for prototyping and is not io efficient.
-                    # use with:
-                    # "--dataset_path",
-                    # "/mnt/e230-thrp-data/mic_rocket/data/raw/CTRATEv2/CT-RATE/dataset",
-                    # "--embeddings_path",
-                    # "/mnt/e230-thrp-data/mic_rocket/data/raw/CTRATEv2/CT-RATE/dataset/valid_fixed",
-                    lung_segmentation = sitk.GetArrayFromImage(sitk.ReadImage(lung_segmentation_path))
-
-                    lung_indices = [10, 11, 12, 13, 14]
-                    # Create a mask for the lung regions
-                    lung_mask = np.isin(lung_segmentation, lung_indices)
-                    # Crop the embedding to the bounding box of the lung mask with 4% offset
-                    coords = np.argwhere(lung_mask)
-
-                    # same computation as Stefan used for Dataset802_LungCrop on juwels
-                    if coords.size > 0:
-                        min_coords = coords.min(axis=0)
-                        max_coords = coords.max(axis=0) + 1  # +1 because slicing is exclusive
-                        
-                        # Calculate dimensions and 4% expansion (scale/2 on each side)
-                        dx, dy, dz = max_coords - min_coords
-                        ex, ey, ez = dx * 0.02, dy * 0.02, dz * 0.02  # 0.04/2 = 0.02 for each side
-                        
-                        # Apply expansion with bounds checking using floor/ceil
-                        new_min_x = max(0, math.floor(min_coords[0] - ex))
-                        new_max_x = min(embedding.shape[0], math.ceil(max_coords[0] + ex))
-                        new_min_y = max(0, math.floor(min_coords[1] - ey))
-                        new_max_y = min(embedding.shape[1], math.ceil(max_coords[1] + ey))
-                        new_min_z = max(0, math.floor(min_coords[2] - ez))
-                        new_max_z = min(embedding.shape[2], math.ceil(max_coords[2] + ez))
-                        
-                        embedding = embedding[new_min_x:new_max_x, new_min_y:new_max_y, new_min_z:new_max_z]
-
-                        print("embeddings shape after lung crop", embedding.shape)
-                # viewer = napari.Viewer()
-                # viewer.add_image(embedding, name="CT Patch")
-                # viewer.add_image(embedding_full, name="CT Full")
-                # napari.run()
+                embedding = self.mask_crop_embedding(embedding=embedding, embedding_path=embedding_path)               
 
             else:
                 raise ValueError(f"Unsupported embedding file format: {embedding_path}")
             
-            if self.load_image:
+            if self.vision_input_type == VisionInputType.IMAGE:
                 embedding = z_score_normalization(embedding, False, None, np.float32)
-                embedding = self._preprocess_3d_image(embedding)
+                embedding = preprocess_3d_image(image_array=embedding, do_resize=self.do_resize, do_transforms=self.do_transforms, split=self.split, training_transforms=self.training_transforms)
 
             return embedding
             
@@ -519,159 +205,9 @@ class MedicalImageDataset(Dataset, ABC):
             logger.error(f"Error loading embedding from {embedding_path}: {e}")
             return None
 
-
-    def _preprocess_3d_image(self, image_array):
-        """Preprocess 3D image: convert to float32, remove singleton dims, pad if needed, and random crop to final patch size"""
-        # Ensure float32 dtype
-        if not isinstance(image_array, np.ndarray):
-            image_array = np.array(image_array, dtype=np.float32)
-        else:
-            image_array = image_array if image_array.dtype == np.float32 else image_array.astype(np.float32)
-        
-        # Remove singleton first dimension if present
-        if image_array.ndim == 4 and image_array.shape[0] == 1:
-            image_array = image_array.squeeze(0)
-        
-        # Final patch size
-        patch_size = (192, 192, 192)
-        
-        # Get image dimensions (assuming format: H, W, D)
-        h, w, d = image_array.shape
-        
-        # Pad if image is smaller than patch_size
-        pad_h = max(0, patch_size[0] - h)
-        pad_w = max(0, patch_size[1] - w) 
-        pad_d = max(0, patch_size[2] - d)
-        
-        if pad_h > 0 or pad_w > 0 or pad_d > 0:
-            # Split padding evenly on both sides to center the image
-            pad_h_before = pad_h // 2
-            pad_h_after = pad_h - pad_h_before
-            
-            pad_w_before = pad_w // 2
-            pad_w_after = pad_w - pad_w_before
-            
-            pad_d_before = pad_d // 2
-            pad_d_after = pad_d - pad_d_before
-            
-            # Pad the image
-            padding = ((pad_h_before, pad_h_after), (pad_w_before, pad_w_after), (pad_d_before, pad_d_after))
-            image_array = np.pad(image_array, padding, mode='constant', constant_values=0)
-        
-        if self.do_resize:
-
-            # interpolate braucht 5D
-            image_array = torch.from_numpy(image_array).unsqueeze(0).unsqueeze(0)
-            image_array = torch.nn.functional.interpolate(image_array, size=patch_size, mode='trilinear', align_corners=False)
-        
-            if self.do_transforms:
-                image_array = torch.squeeze(self.training_transforms(**{'image': image_array.squeeze(0)})['image'], dim=0)
-            else:
-                image_array = image_array.squeeze(0).squeeze(0)
-
-        else:
-            # Random crop to exact patch size (if larger than patch_size)
-            h, w, d = image_array.shape
-            if h > patch_size[0] or w > patch_size[1] or d > patch_size[2]:
-                if self.split != "train":
-                    # Center crop
-                    start_h = (h - patch_size[0]) // 2
-                    start_w = (w - patch_size[1]) // 2
-                    start_d = (d - patch_size[2]) // 2
-                else:
-                    # Random patch
-                    max_starts = [max(0, image_array.shape[i] - patch_size[i]) for i in range(3)]
-                    start_h, start_w, start_d = [int(np.clip(np.random.normal(m/2, m*0.1), 0, m)) for m in max_starts]
-                
-                # Extract patch
-                image_array = image_array[
-                    start_h:start_h + patch_size[0],
-                    start_w:start_w + patch_size[1], 
-                    start_d:start_d + patch_size[2]
-                ]
-        
-        return image_array
-    
-    # from nnUNetv2
-    @staticmethod
-    def get_training_transforms(
-            # TODO make this adaptive
-            patch_size= [192, 192, 192],
-    ) -> BasicTransform:
-        transforms = []
-        patch_size_spatial = patch_size
-        ignore_axes = None
-        # not too much zoom because otherwise not everything visible from lung
-        # the rest is nnunet default
-        transforms.append(
-            SpatialTransform(
-                patch_size_spatial, patch_center_dist_from_border=0, random_crop=False, p_elastic_deform=0,
-                p_rotation=0.2, p_scaling=0.2, scaling=(0.95, 1.05), p_synchronize_scaling_across_axes=1,
-                bg_style_seg_sampling=False  # , mode_seg='nearest'
-            )
-        )
-
-        transforms.append(RandomTransform(
-            GaussianNoiseTransform(
-                noise_variance=(0, 0.1),
-                p_per_channel=1,
-                synchronize_channels=True
-            ), apply_probability=0.1
-        ))
-        transforms.append(RandomTransform(
-            GaussianBlurTransform(
-                blur_sigma=(0.5, 1.),
-                synchronize_channels=False,
-                synchronize_axes=False,
-                p_per_channel=0.5, benchmark=True
-            ), apply_probability=0.2
-        ))
-        transforms.append(RandomTransform(
-            MultiplicativeBrightnessTransform(
-                multiplier_range=BGContrast((0.75, 1.25)),
-                synchronize_channels=False,
-                p_per_channel=1
-            ), apply_probability=0.15
-        ))
-        transforms.append(RandomTransform(
-            ContrastTransform(
-                contrast_range=BGContrast((0.75, 1.25)),
-                preserve_range=True,
-                synchronize_channels=False,
-                p_per_channel=1
-            ), apply_probability=0.15
-        ))
-        transforms.append(RandomTransform(
-            SimulateLowResolutionTransform(
-                scale=(0.5, 1),
-                synchronize_channels=False,
-                synchronize_axes=True,
-                ignore_axes=ignore_axes,
-                allowed_channels=None,
-                p_per_channel=0.5
-            ), apply_probability=0.25
-        ))
-        transforms.append(RandomTransform(
-            GammaTransform(
-                gamma=BGContrast((0.7, 1.5)),
-                p_invert_image=1,
-                synchronize_channels=False,
-                p_per_channel=1,
-                p_retain_stats=1
-            ), apply_probability=0.1
-        ))
-        transforms.append(RandomTransform(
-            GammaTransform(
-                gamma=BGContrast((0.7, 1.5)),
-                p_invert_image=0,
-                synchronize_channels=False,
-                p_per_channel=1,
-                p_retain_stats=1
-            ), apply_probability=0.3
-        ))
-
-        return ComposeTransforms(transforms)
-
+    def mask_crop_embedding(self, embedding, embedding_path):
+        """Crop embedding to a region defined by a segmentation mask"""
+        return embedding
 
     def _embedding_2_tensor(self, embedding):
         """Convert embedding to tensor"""
@@ -703,7 +239,8 @@ class MedicalImageDataset(Dataset, ABC):
         result["formatted_qa_prompt_only"] = formatted_qa_prompt_only
 
         # Load embedding
-        embd = self._load_embedding(sample["embedding_path"])
+        vision_input_path = self._get_vision_input_path(sample["image_id"])
+        embd = self._load_embedding(vision_input_path)
                 
         if self.embedding_constant is not None:
             if type(self.embedding_constant) is float:
@@ -713,7 +250,7 @@ class MedicalImageDataset(Dataset, ABC):
             else:
                 raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
 
-        if self.load_image:
+        if self.vision_input_type == VisionInputType.IMAGE:
             if self.embedding_constant is None:
                 result["embedding"] = embd
         else:
@@ -749,120 +286,23 @@ class AMOSMMDataset(MedicalImageDataset):
         embeddings_path (str | Path): Root path to the vision embeddings directory
         n_samples (int, optional): Number of samples to load (for debugging)
     """
-
-    def _load_data(self):
-        json_file_path = os.path.join(self.dataset_path, "dataset.json")
-        with open(json_file_path, "r") as f:
-            data = json.load(f)
-
-        if self.split == "train":
-            samples = data["training"]
-        elif self.split == "val":
-            samples = data["validation"]
-        else:
-            raise ValueError(f"Invalid split name {self.split}")
-
-        return samples
+    def _get_vision_input_path(self, image_id):
+        """Load embedding path for a given image ID"""
+        if self.vision_input_type == VisionInputType.IMAGE:
+            # TODO: image_id is in format ./imagesTr/amosxxx_0000.nii.gz
+            # Do we want to keep this format or change it to amosxxx?
+            if self.split == "train":
+                image_name = f"{image_id.split("./")[-1].split(".")[0]}_0000.nii.gz"
+            else:
+                image_name = f"{image_id.split("./")[-1].split(".")[0]}.nii.gz"
+            return str(self.vision_input_path / image_name)
+        # TODO: adapt for embedding input type
+        return str(self.vision_input_path / f"{image_id}_embedding.npy")
 
     def get_embedding_path(self, image_path):
         """Convert image path to embedding path"""
         base_name = image_path.replace(".nii.gz", "")
-        return str(os.path.join(self.embeddings_path, f"{base_name}_embedding.npy"))
-
-    def extract_sample_list(self, samples):
-        """Extract sample list from raw data"""
-        extracted_samples = AMOSMMExtractor.extract_sample_list(samples)
-        return extracted_samples
-
-
-class AMOSMMRegionDataset(AMOSMMDataset):
-    """
-    AMOS-MM Region based dataset class
-
-    Args:
-        dataset_json_path (str): Path to the dataset JSON file
-        model_name (str): Name of the VLM the dataset is used for
-        split (str): Split name ('train' or 'val')
-        embeddings_path (str | Path): Root path to the vision embeddings directory
-        n_samples (int, optional): Number of samples to load (for debugging)
-    """
-
-    def format_data(self):
-        """Format raw data into structured samples"""
-        formatted_data = []
-
-        extracted_samples = self.extract_sample_list(self.data)
-
-        for sample in extracted_samples:
-            embedding_path = self.get_embedding_path(sample["image_id"], sample["region"])
-
-            # Skip if embedding file doesn't exist
-            if not os.path.exists(embedding_path):
-                continue
-
-            sample["embedding_path"] = embedding_path
-
-            formatted_qa, formatted_qa_prompt_only = format_into_message(
-                sample["question"],
-                sample["full_answer"],
-                self.model_name,
-                system_text=sample["system_text"],
-            )
-
-            sample["formatted_qa"] = formatted_qa
-            sample["formatted_qa_prompt_only"] = formatted_qa_prompt_only
-
-            formatted_data.append(sample)
-
-        return formatted_data
-
-    def get_embedding_path(self, image_path, region):
-        """Convert image path to embedding path"""
-        base_name = image_path.replace(".nii.gz", "")
-        return str(os.path.join(self.embeddings_path, f"{base_name}_{region}_embedding.npz"))
-
-    def extract_sample_list(self, samples):
-        """Extract sample list from raw data"""
-        # TODO: Currently this class could be implemented in the ABC class as well.
-        # The extractor class is then defined in the init of the class
-        extracted_samples = AMOSMMRegionExtractor.extract_sample_list(samples)
-        return extracted_samples
-
-
-class LIDCDataset(MedicalImageDataset):
-    """
-    LIDC dataset class
-
-    Args:
-        dataset_json_path (str): Path where the dataset jsons are located
-        model_name (str): Name of the VLM the dataset is used for
-        split (str): Split name ('train', 'val', or 'test')
-        embeddings_path (str | Path): Path to the vision embeddings directory
-        n_samples (int, optional): Number of samples to load (for debugging)
-    """
-
-    def _load_data(self):
-        if self.split == "train":
-            file_path = os.path.join(self.dataset_path, "train_questions.json")
-        elif self.split == "val":
-            file_path = os.path.join(self.dataset_path, "val_questions.json")
-        elif self.split == "test":
-            file_path = os.path.join(self.dataset_path, "test_questions.json")
-        else:
-            raise ValueError(f"Invalid split name {self.split}")
-
-        with open(file_path, "r") as f:
-            return json.load(f)
-
-    def get_embedding_path(self, series_uid):
-        """Convert image path to embedding path"""
-        base_name = series_uid.replace(".", "_")
-        return str(Path(self.embeddings_path) / f"{base_name}_embedding.npz")
-
-    def extract_sample_list(self, samples):
-        """Extract sample list from raw data"""
-        extracted_samples = LIDCExtractor.extract_sample_list(samples)
-        return extracted_samples
+        return str(os.path.join(self.vision_input_path, f"{base_name}_embedding.npy"))
 
 
 class CTRATEDataset(MedicalImageDataset):
@@ -876,256 +316,66 @@ class CTRATEDataset(MedicalImageDataset):
         embeddings_path (str | Path): Path to the vision embeddings directory
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of answers to include
-        vqa_path (str, optional): Path to the VQA data directory
         use_csv_reports (bool, optional): If True, load from CSV files instead of YML files
     """
+    def _get_vision_input_path(self, image_id):
+        """Load embedding path for a given image ID"""
+        if self.vision_input_type == VisionInputType.IMAGE:
+            parts = image_id.split('_')
+            patient_folder = '_'.join(parts[:-2])  # "valid_1"
+            patient_id = '_'.join(parts[:-1])      # "valid_1_a"
+            split_path = "valid" if self.split == "val" else self.split
+            return Path(self.vision_input_path / f"{split_path}_fixed" / patient_folder / patient_id / f"{image_id}.nii.gz")
+        # TODO: adapt for embedding input type
+        return str(self.vision_input_path / f"{image_id}.nii.gz")
 
-    def __init__(self, *args, use_csv_reports=False, **kwargs):
-        self.use_csv_reports = use_csv_reports
-        
-        # Modify embeddings_path before calling parent init
-        if use_csv_reports and 'embeddings_path' in kwargs:
-            embeddings_path = kwargs['embeddings_path']
-            split = kwargs.get('split', 'train')  # Get split from kwargs
-            
-            if split == "train":
-                kwargs['embeddings_path'] = os.path.join(embeddings_path, "train_fixed")
-            else:
-                kwargs['embeddings_path'] = os.path.join(embeddings_path, "valid_fixed")
-        
-        super().__init__(*args, **kwargs)
+    def mask_crop_embedding(self, embedding, embedding_path):
+        embedding_path = str(embedding_path)
+        lung_segmentation_path = None
+        if "valid_fixed" in embedding_path:
+            lung_segmentation_path = embedding_path.replace("valid_fixed", "ts_seg/ts_total/valid_fixed")
+        if "train_fixed" in embedding_path:
+            lung_segmentation_path = embedding_path.replace("train_fixed", "ts_seg/ts_total/train_fixed")
 
-    def _load_data(self):
-        if self.use_csv_reports:
-            return self._load_data_from_csv()
-        else:
-            return self._load_data_from_yml()
+        if os.path.exists(lung_segmentation_path):
+            # we have no cropped images on dkfz drives, therefore this if block is here. This is only used for prototyping and is not io efficient.
+            # use with:
+            # "--dataset_path",
+            # "/mnt/e230-thrp-data/mic_rocket/data/raw/CTRATEv2/CT-RATE/dataset",
+            # "--embeddings_path",
+            # "/mnt/e230-thrp-data/mic_rocket/data/raw/CTRATEv2/CT-RATE/dataset/valid_fixed",
+            lung_segmentation = sitk.GetArrayFromImage(sitk.ReadImage(lung_segmentation_path))
 
-    def _load_data_from_yml(self):
-        """Original YML loading method"""
-        logger.info("Building embedding dictionary...")
-        
-        # Build embedding dictionary with parallel processing
-        self.embedding_dict = {}
-        
-        # Collect all embedding files first
-        embedding_files = []
-        for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
-            for fl in fls_:
-                if fl.endswith((".npy", ".npz", ".b2nd", ".nrrd")):
-                    embedding_files.append(os.path.join(flr_, fl))
-        
-        logger.info(f"Found {len(embedding_files)} embedding files")
-        
-        # Process embedding files to build dictionary
-        for embedding_path in tqdm(embedding_files, desc="Building embedding dictionary"):
-            fl = os.path.basename(embedding_path)
-            image_id = fl.split("_embedding")[0].split(".")[0]
-            self.embedding_dict[image_id] = embedding_path
+            lung_indices = [10, 11, 12, 13, 14]
+            # Create a mask for the lung regions
+            lung_mask = np.isin(lung_segmentation, lung_indices)
+            # Crop the embedding to the bounding box of the lung mask with 4% offset
+            coords = np.argwhere(lung_mask)
 
-        metadata_dir = os.path.join(self.dataset_path, "metadata")
-        data_dir = os.path.join(self.dataset_path, "images")
-
-        metadata_files = [f for f in os.listdir(metadata_dir) if f.endswith(".yml")]
-
-        x_val_split_data = None
-        if self.split_files:
-            if os.path.exists(self.split_files):
-                with open(self.split_files, "r") as f:
-                    x_val_split_data = json.load(f)
-
-        if x_val_split_data is not None and "_" in self.split:
-            fold_num = int(self.split.split("_")[1])
-            train_ids = set(x_val_split_data[f"fold_{fold_num}"]["train_ids"])
-            val_ids = set(x_val_split_data[f"fold_{fold_num}"]["val_ids"])
-
-            if self.split.startswith("val"):
-                # If the split is a validation split, filter metadata files to only include validation IDs
-                metadata_files = [f for f in metadata_files if f.replace(".yml", "") in val_ids]
-            else:
-                metadata_files = [f for f in metadata_files if f.replace(".yml", "") in train_ids]
-
-        logger.info(f"Processing {len(metadata_files)} metadata files in parallel...")
-        
-        file_info_list = [(metadata_file, metadata_dir, data_dir, self.embedding_dict, self.split, self.vqa_path) 
-                         for metadata_file in metadata_files]
-        
-        # Use ThreadPoolExecutor for I/O bound YAML reading
-        samples = []
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_file = {executor.submit(_load_yaml_file, file_info): file_info[0] 
-                             for file_info in file_info_list}
-            
-            for future in tqdm(as_completed(future_to_file), total=len(file_info_list), desc="Loading metadata files"):
-                result = future.result()
-                if result is not None:
-                    samples.append(result)
-
-        logger.info(f"Successfully loaded {len(samples)} samples")
-        return samples
-
-    def _load_data_from_csv(self):
-        """Load data from CSV reports instead of YML files"""
-        print("Loading data from CSV reports...")
-        
-        # Load appropriate CSV file based on split
-        reports_dir = os.path.join(self.dataset_path, "radiology_text_reports")
-        
-        if self.split == "train":
-            csv_file = os.path.join(reports_dir, "train_reports.csv")
-        elif self.split == "val":
-            csv_file = os.path.join(reports_dir, "validation_reports.csv")
-        else:
-            raise ValueError(f"Invalid split name {self.split} for CSV loading")
-
-        if not os.path.exists(csv_file):
-            raise FileNotFoundError(f"CSV file not found: {csv_file}")
-
-        print(f"Loading CSV file: {csv_file}")
-        df = pd.read_csv(csv_file)
-        
-        # Apply n_samples limit if specified
-        if hasattr(self, 'n_samples') and self.n_samples is not None and self.n_samples < len(df):
-            df = df.head(self.n_samples)
-            logger.info(f"Limited to {self.n_samples} samples")
-        
-        # Build embedding dictionary with direct path construction
-        print("Building embedding dictionary...")
-        self.embedding_dict = {}
-        
-        for _, row in tqdm(df.iterrows(), total=len(df), desc="Building embedding dictionary"):
-            volume_name = row['VolumeName']  # e.g., "valid_1_a_1.nii.gz"
-            file_base = volume_name.replace('.nii.gz', '')  # "valid_1_a_1"
-            
-            parts = file_base.split('_')
-            if len(parts) >= 3:
-                patient_folder = '_'.join(parts[:-2])  # "valid_1"
-                patient_id = '_'.join(parts[:-1])      # "valid_1_a"
+            # same computation as Stefan used for Dataset802_LungCrop on juwels
+            if coords.size > 0:
+                min_coords = coords.min(axis=0)
+                max_coords = coords.max(axis=0) + 1  # +1 because slicing is exclusive
                 
-                embedding_path = os.path.join(self.embeddings_path, patient_folder, patient_id, f"{file_base}.nii.gz")
+                # Calculate dimensions and 4% expansion (scale/2 on each side)
+                dx, dy, dz = max_coords - min_coords
+                ex, ey, ez = dx * 0.02, dy * 0.02, dz * 0.02  # 0.04/2 = 0.02 for each side
                 
-                if os.path.exists(embedding_path):
-                    self.embedding_dict[file_base] = embedding_path
-                else:
-                    print("Embedding path not found!")
+                # Apply expansion with bounds checking using floor/ceil
+                new_min_x = max(0, math.floor(min_coords[0] - ex))
+                new_max_x = min(embedding.shape[0], math.ceil(max_coords[0] + ex))
+                new_min_y = max(0, math.floor(min_coords[1] - ey))
+                new_max_y = min(embedding.shape[1], math.ceil(max_coords[1] + ey))
+                new_min_z = max(0, math.floor(min_coords[2] - ez))
+                new_max_z = min(embedding.shape[2], math.ceil(max_coords[2] + ez))
+                
+                embedding = embedding[new_min_x:new_max_x, new_min_y:new_max_y, new_min_z:new_max_z]
 
-        logger.info(f"Found embeddings for {len(self.embedding_dict)}/{len(df)} samples")
+                print("embeddings shape after lung crop", embedding.shape)
         
-        logger.info(f"Processing {len(df)} CSV rows in parallel...")
+        return embedding
+        # viewer = napari.Viewer()
+        # viewer.add_image(embedding, name="CT Patch")
+        # viewer.add_image(embedding_full, name="CT Full")
+        # napari.run()
         
-        row_data_list = [(row, self.embedding_dict, self.split, self.vqa_path) 
-                        for _, row in df.iterrows()]
-        
-        # Use ThreadPoolExecutor for parallel processing
-        samples = []
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_row = {executor.submit(_load_csv_row, row_data): idx 
-                        for idx, row_data in enumerate(row_data_list)}
-            
-            for future in tqdm(as_completed(future_to_row), total=len(row_data_list), desc="Loading CSV rows"):
-                result = future.result()
-                if result is not None:
-                    samples.append(result)
-
-        print(f"Successfully loaded {len(samples)} samples from CSV")
-        return samples
-
-    def get_embedding_path(self, embedding_path):
-        """Convert image ID to embedding path"""
-        if not hasattr(self, "embedding_dict"):
-            logger.error("embedding_dict not found. Ensure _load_data is called first.")
-            return os.path.join(str(self.embeddings_path), embedding_path + "_embedding.npz")
-
-        if embedding_path in self.embedding_dict:
-            return self.embedding_dict[embedding_path]
-        else:
-            print(f"Warning: embedding path for {embedding_path} not found in embedding_dict")
-            return None
-        # return os.path.join(self.embeddings_path, embedding_path + "_embedding.npz")
-
-    def extract_sample_list(self, samples):
-        """Extract sample list from raw data"""
-        extracted_samples = CTRATEExtractor.extract_sample_list(
-            samples, 
-            shuffle_sentences=self.do_transforms  # Enable sentence shuffling when transforms are enabled (in train split)
-        )
-        return extracted_samples
-
-
-class CTRATEDataset_Submission(MedicalImageDataset):
-    """
-    CT-RATE dataset class for CT scan analysis
-
-    Args:
-        dataset_json_path (str): Path to the CT-RATE dataset directory
-        model_name (str): Name of the VLM the dataset is used for
-        split (str): Split name ('train', 'val', or 'test')
-        embeddings_path (str | Path): Path to the vision embeddings directory
-        n_samples (int, optional): Number of samples to load (for debugging)
-        answer_types (tuple, optional): Types of answers to include
-    """
-
-    def _load_data(self):
-        self.embedding_dict = {}
-        embedding_files = []
-        for flr_, dirs_, fls_ in os.walk(self.embeddings_path):
-            for fl in fls_:
-                if fl.endswith((".npy", ".npz", ".b2nd", ".nrrd", ".nii.gz", ".nii")):
-                    embedding_files.append(os.path.join(flr_, fl))
-        
-        for embedding_path in tqdm(embedding_files, desc="Building embedding dictionary"):
-            fl = os.path.basename(embedding_path)
-            # Handle files with or without "_embedding" suffix
-            if "_embedding" in fl:
-                image_id = fl.split("_embedding")[0].split(".")[0]
-            else:
-                # For files without _embedding suffix, use the base name
-                image_id = fl.split(".")[0]
-            self.embedding_dict[image_id] = embedding_path
-
-        samples = []
-        for file_name, embedding_path in tqdm(
-            self.embedding_dict.items(), desc="Loading metadata files"
-        ):
-            image_id = file_name
-            sample = {
-                "image_id": image_id,
-                "embedding_path": embedding_path,
-            }
-            samples.append(sample)
-
-        return samples
-
-    def get_embedding_path(self, embedding_path):
-        """Convert image ID to embedding path"""
-        if not hasattr(self, "embedding_dict"):
-            logger.error("embedding_dict not found. Ensure _load_data is called first.")
-            return os.path.join(str(self.embeddings_path), embedding_path + "_embedding.npz")
-
-        return self.embedding_dict.get(embedding_path, None)
-
-    def extract_sample_list(self, samples):
-        """Extract sample list from raw data"""
-        extracted_samples = []
-
-        for sample in samples:
-            extracted_samples.append(
-                {
-                    "image_id": sample["image_id"],
-                    "image_path": sample["embedding_path"],
-                    "question": "Generate a detailed report and diagnosis for this CT scan.",
-                    "answer": "", #, full_answer,
-                    "full_answer": "", #full_answer,
-                    "answer_type": "TEXT",
-                    "answer_subtype": "REPORT_DIAGNOSIS",
-                    "system_text": "You are a medical imaging AI trained to analyze CT scans.",
-                }
-            )
-
-        # convert to QAItemDict
-        extracted_samples = [QAItemDict(sample) for sample in extracted_samples]
-
-        return extracted_samples
-
-    def _filter_samples(self, samples):
-        return samples  # No filtering needed for submission dataset
