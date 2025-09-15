@@ -193,8 +193,7 @@ class QwenVLModel(AbstractVLMModel):
                     lora_alpha=32,
                     target_modules=[
                         "q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj",
-                        "lm_head"
+                        "gate_proj", "up_proj", "down_proj"
                     ],
                     modules_to_save=["vision_adapter"],
                     lora_dropout=0.1,
@@ -215,8 +214,7 @@ class QwenVLModel(AbstractVLMModel):
                         "model.language_model.layers.*.self_attn.o_proj",
                         "model.language_model.layers.*.mlp.gate_proj",
                         "model.language_model.layers.*.mlp.up_proj",
-                        "model.language_model.layers.*.mlp.down_proj",
-                        "lm_head"
+                        "model.language_model.layers.*.mlp.down_proj"
                     ],
                     modules_to_save=["vision_adapter"],
                     lora_dropout=0.1,
