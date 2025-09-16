@@ -1,24 +1,23 @@
 import argparse
-import json
 import os
+import shutil
 from datetime import datetime
-from pathlib import Path
-from uuid import uuid4
 
 import torch
 import torch.distributed as dist
 import yaml
 from peft import get_peft_model
+from pydantic import BaseModel
 from transformers import BitsAndBytesConfig
 from trl import SFTConfig, SFTTrainer
 
 import wandb
 from data.datasets import AMOSMMDataset, CTRATEDataset
-from models.owl_vlm import OwlVLModel
-from models.qwen_vlm import QwenVLModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
+from registry import vlm_registry
 from utils import logger
-from utils.helper import seed_everything
+from utils.config_models import GeneralConfig, SFTTrainerConfig, CoreConfig
+from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args
 from utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
@@ -67,7 +66,7 @@ class UnifiedVLMTrainer:
         vlm_model,
         output_dir="vlm_output",
         config_file_path: str = None,
-        sft_trainer_config: dict = None,
+        sft_trainer_config: SFTTrainerConfig = None,
         wandb_project: str = "debug",
     ):
         """
@@ -192,7 +191,7 @@ class UnifiedVLMTrainer:
                 entity="mic-rocket-vlm",
                 project=self.wandb_project,
                 name=datetime.now().strftime(
-                    f"%Y-%m-%d_%H-%M-%S_train_{type(self.vlm_model).__name__}_run_{uuid4()}"
+                    f"{general_args["run_name"]}_%Y-%m-%d_%H-%M-%S"
                 ),
                 reinit=True,
                 group=f"{type(self.vlm_model).__name__}_run",
@@ -281,181 +280,63 @@ class UnifiedVLMTrainer:
             wandb.finish()
 
 
-def parse_args(default_config=None):
-    if default_config is None:
-        default_config = {}
-    general_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
-    general_parser.add_argument(
-        "--model_type",
-        type=str,
-        choices=["owl", "qwen"],
-        required=True,
-        help="Type of VLM model to train (owl or qwen)",
+def parse_args() -> tuple[BaseModel, ...]:
+    """
+    Returns:
+        tuple[BaseModel, ...]: Currently, three BaseModels are returned:
+            - core_args (CoreConfig): (dataset and config file)
+            - general_args (GeneralConfig): (model configs, data augs, num train samples, ...)
+            - sft_trainer_args (SFTTrainerConfig): (epochs, eval & save steps, hyperparams, ...)
+    """
+
+    core_args_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
+
+    core_args_parser.add_argument(
+        "--train_config", type=str, required=True, help="Path to config file (YAML or JSON)"
     )
-    general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
-    general_parser.add_argument(
+    core_args_parser.add_argument(
+        "--dataset_name", type=str, required=True, choices=["ctrate", "amosmm"], help="Name of the dataset"
+    )
+    core_args_parser.add_argument(
         "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
     )
-    general_parser.add_argument(
-        "--vqa_path", type=str, default=None, help="Path to generated CTRATE VQA data",
-    )
-    general_parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="output/vlm_output",
-        help="Directory to save model outputs",
-    )
-    general_parser.add_argument(
-        "--wandb_project",
-        type=str,
-        default="debug",
-        help="WandB project name",
-    )
-    
-    general_parser.add_argument(
-        "--embeddings_path",
-        type=str,
-        required=True,
-        help="Path to the vision embeddings",
+    core_args_parser.add_argument(
+        "--embeddings_path", type=str, required=True, help="Path to the vision embeddings",
     )
 
-    general_parser.add_argument(
-        "--embedding_constant",
-        # type=float,
-        default=None,
-        help="Constant value for training language only baseline (! Do not set this when training a VLM !). Can either be a float to set the whole embedding to a constant value or 'random' to set the embedding to a random values.",
-    )
-    general_parser.add_argument(
-        "--train_only_vision_adapter",
-        action="store_true",
-        help="Train only the vision adapter (Qwen only)",
-    )
-    general_parser.add_argument(
-        "--train_vision_encoder", #TODO fix that this means use a vision encoder instead of loading frozen embeddings
-        action="store_true",
-        help="Train the vision encoder (then embedding paths are the paths to the actual images).",
-    )
-    general_parser.add_argument(
-        "--freeze_vision_encoder",
-        action="store_true",
-        help="freeze vision encoder (and no lora adapter)",
-    )
-    general_parser.add_argument(
-        "--vision_encoder_path", type=str, help="Path to vision encoder checkpoint"
-    )
-    general_parser.add_argument(
-        "--train_config", type=str, help="Path to config file (YAML or JSON)"
-    )
-    general_parser.add_argument(
-        "--split_file", type=str, help="Path to cross validation split file (JSON)"
-    )
-    general_parser.add_argument(
-        "--split_idx", type=int, default=None, help="Index of the split to use (0-4)"
-    )
-    general_parser.add_argument(
-        "--dataset_name", type=str, default="ctrate", help="Name of the dataset"
-    )
-    general_parser.add_argument(
-        "--dataset_cache", type=str, default=None, help="Path to cache file for the dataset"
-    )
-    general_parser.add_argument(
-        "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
-    )
-    general_parser.add_argument(
-        "--n_train_samples", type=int, default=None, help="Number of training samples to use"
-    )
-    general_parser.add_argument(
-        "--n_val_samples", type=int, default=50, help="Number of validation samples to use"
-    )
-    general_parser.add_argument(
-        "--use_csv_reports",
-        action="store_true",
-        help="Get reports from CSV file instead of yml files",
-    )
-    general_parser.add_argument(
-        "--reduce_block",
-        type=lambda s: [int(x) for x in s.strip("()").split(",")],
-        default=[2, 2, 2],
-        help="List for reduce_block, e.g. (2,2,2) or (4,4,4)",
-    )
-    general_parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=4,
-        help="Batch size for training (default: 4)",
-    )
-    general_parser.add_argument(
-        "--do_resize",
-        action="store_true",
-        help="Resize images to 192x192x192 cubes (use this in combination with lung crops)",
-    )
-    general_parser.add_argument(
-        "--do_transforms",
-        action="store_true",
-        help="If true, we do nnUNetv2 image augmentation.",
-    )
-    general_parser.add_argument(
-        "--local_files_only",
-        action="store_true",
-        help="If true, only use local files for qwen from_pretrained method.",
-    )
+    core_args, _ = core_args_parser.parse_known_args()
 
-    # First parse just the config argument to load the file
-    general_args, _ = general_parser.parse_known_args()
+    if not os.path.exists(core_args.train_config):
+        raise ValueError(f"The provided config file does not exist: {core_args.train_config}")
 
-    sft_trainer_parser = argparse.ArgumentParser(
-        description="SFTTrainer args which overwrite the train_config file."
-    )
+    config_file = load_config_file(core_args.train_config)
+    general_args_config_file, sft_trainer_args_config_file = config_file["general"], config_file["trainer"]
 
-    # Load config file if provided
-    if general_args.train_config and os.path.exists(general_args.train_config):
-        file_ext = os.path.splitext(general_args.train_config)[1].lower()
-        with open(general_args.train_config, "r") as file:
-            if file_ext == ".yaml" or file_ext == ".yml":
-                file_config = yaml.safe_load(file)
-            elif file_ext == ".json":
-                file_config = json.load(file)
-            else:
-                raise ValueError(f"Unsupported config file format: {file_ext}")
+    # Resolve model_id if not provided
+    if general_args_config_file.get("model_id") is None and general_args_config_file["model_type"] not in vlm_registry:
+        raise ValueError(f"Unknown model type: {general_args_config_file['model_type']}")
+    model_id = general_args_config_file.get("model_id") or vlm_registry[general_args_config_file["model_type"]].model_id
 
-            # Update config with values from file
-            default_config.update(file_config)
+    # Parse all args into their respective Pydantic models/configs
+    core_config = CoreConfig(**vars(core_args))
+    general_config = GeneralConfig(**general_args_config_file, model_id=model_id)
+    sft_trainer_config = SFTTrainerConfig(**sft_trainer_args_config_file)
 
-    # Add arguments for each config value with the default from config
-    for key, value in default_config.items():
-        arg_type = type(value)
-        if arg_type == bool:
-            # Handle boolean values with store_true/store_false
-            if value:
-                sft_trainer_parser.add_argument(
-                    f"--no-{key}",
-                    action="store_false",
-                    dest=key,
-                    help=f"Disable {key} (default: enabled)",
-                )
-            else:
-                sft_trainer_parser.add_argument(
-                    f"--{key}",
-                    action="store_true",
-                    help=f"Enable {key} (default: disabled)",
-                )
-        else:
-            sft_trainer_parser.add_argument(
-                f"--{key}",
-                type=arg_type,
-                default=value,
-                help=f"Set {key} (default: {value})",
-            )
+    # Apply CLI argument overrides to configs (intended for testing/debugging only)
+    general_config = merge_config_with_cli_args(general_config)
+    sft_trainer_config = merge_config_with_cli_args(sft_trainer_config)
 
-    sft_trainer_parsed, _ = sft_trainer_parser.parse_known_args()
+    # Use the config filename (without extension) as both 'run_name' and the results folder name later on
+    config_name, _ = os.path.splitext(os.path.basename(core_config.train_config))
+    general_config.run_name = datetime.now().strftime(f"{config_name}_%Y-%m-%d_%H-%M-%S")
 
-    if general_args.embedding_constant is not None:
+    if general_config.embedding_constant is not None:
         try:
-            general_args.embedding_constant = float(general_args.embedding_constant)
+            general_config.embedding_constant = float(general_config.embedding_constant)
         except ValueError:
             pass
 
-    return general_args, sft_trainer_parsed
+    return core_config, general_config, sft_trainer_config
 
 
 def ensure_wandb_config_logging():
@@ -574,141 +455,110 @@ def create_comprehensive_wandb_config(
 
 
 def main():
-    default_sft_trainer_config = {
-        "num_train_epochs": 5,
-        "per_device_train_batch_size": 4,
-        "per_device_eval_batch_size": 1,
-        "gradient_accumulation_steps": 1,
-        "gradient_checkpointing": True,
-        "optim": "adamw_torch_fused",
-        "learning_rate": 2e-4,
-        "lr_scheduler_type": "cosine",
-        "logging_steps": 10,
-        "eval_steps": 250,
-        "eval_strategy": "steps",
-        # "save_strategy": "best",
-        "save_strategy": "steps",
-        "save_steps": 250,
-        "save_total_limit": 2,
-        "greater_is_better": True,
-        "load_best_model_at_end": True,
-        "max_grad_norm": 0.3,
-        "warmup_ratio": 0.03,
-        "gradient_checkpointing_kwargs": {"use_reentrant": False},
-        "dataset_kwargs": {"skip_prepare_dataset": True},
-        "remove_unused_columns": False,
-        "report_to": ["wandb"],
-        # Memory management settings
-        "torch_empty_cache_steps": 10,  # Clear cache every 10 steps
-        "metric_for_best_model": "eval_loss", # changed to loss because other metrics are computed to rarely TODO fix this problem.. (quick fix beucase challenge deadline)
-        "greater_is_better": False,
-        # Distributed training specific settings
-        "ddp_find_unused_parameters": False,
-        "ddp_bucket_cap_mb": 25,
-    }   
-    general_args, sft_trainer_args = parse_args(default_sft_trainer_config)
-    sft_trainer_config = vars(sft_trainer_args)
-    sft_trainer_config["per_device_train_batch_size"] = general_args.batch_size
 
-    # Log file setup (only on main process)
+    core_config, general_config, sft_trainer_config = parse_args()
+
+    general_config.output_dir = os.path.join(
+        general_config.output_dir,
+        core_config.dataset_name,
+        os.path.basename(core_config.embeddings_path),
+        general_config.run_name
+    )
+
+    # Logging directory setup (only on main process)
     if is_main_process():
-        log_file = os.path.join(
-            general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}.log")
-        )
-        logger.add(log_file)
+        os.makedirs(general_config.output_dir, exist_ok=True)
+        shutil.copyfile(core_config.train_config, os.path.join(general_config.output_dir, "input_config.yml"))
+        log_file_path = os.path.join(general_config.output_dir, "train.log")
+        logger.add(log_file_path)
 
-        output_dir = os.path.join(
-            general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}")
-        )
-        os.makedirs(output_dir, exist_ok=True)
-        general_args.output_dir = output_dir
+        # Save final run config (merge of defaults, config file and CLI args)
+        final_config_path = os.path.join(general_config.output_dir, "final_config.yml")
+        with open(final_config_path, "w") as f:
+            yaml.safe_dump({
+                "core": vars(core_config),
+                "general": vars(general_config),
+                "trainer": vars(sft_trainer_config)
+            }, f)
 
-    if general_args.model_id is None:
-        if general_args.model_type == "owl":
-            general_args.model_id = "mPLUG/mPLUG-Owl3-1B-241014"
-        elif general_args.model_type == "qwen":
-            general_args.model_id = "Qwen/Qwen2.5-VL-3B-Instruct"
-
-    # Create the appropriate VLM model based on model_type
-    if general_args.model_type == "owl":
-        vlm_model_class = OwlVLModel
-    elif general_args.model_type == "qwen":
-        vlm_model_class = QwenVLModel
-    else:
-        raise ValueError(f"Unknown model type: {general_args.model_type}")
-    # TODO: could add it as an arguement
+    # TODO: could add it as an argument
     seed_everything(42)  # Set a random seed for reproducibility
 
+    try:
+        vlm_model_class = vlm_registry[general_config.model_type].model_class
+    except KeyError:
+        raise ValueError(f"Unknown model type: {general_config.model_type}")
+
     vlm_model = vlm_model_class(
-        model_id=general_args.model_id,
-        output_dir=general_args.output_dir,
-        train_only_vision_adapter=general_args.train_only_vision_adapter,
-        reduce_block=general_args.reduce_block,
-        train_vision_encoder=general_args.train_vision_encoder,
-        vision_encoder_path=general_args.vision_encoder_path,
-        freeze_vision_encoder=general_args.freeze_vision_encoder,
-        local_files_only=general_args.local_files_only
+        model_id=general_config.model_id,
+        output_dir=general_config.output_dir,
+        train_only_vision_adapter=general_config.train_only_vision_adapter,
+        reduce_block=general_config.reduce_block,
+        train_vision_encoder=general_config.train_vision_encoder,
+        vision_encoder_path=general_config.vision_encoder_path,
+        freeze_vision_encoder=general_config.freeze_vision_encoder,
+        local_files_only=general_config.local_files_only
     )
 
     # Create datasets
-    if general_args.dataset_name == "amosmm":
+    if core_config.dataset_name == "amosmm":
         # Use AMOSMM dataset
         train_dataset = AMOSMMDataset(
-            dataset_json_path=general_args.dataset_path,
-            model_name=general_args.model_type,
+            dataset_json_path=core_config.dataset_path,
+            model_name=general_config.model_type,
             split="train",
-            embeddings_path=general_args.embeddings_path,
-            cache_file=general_args.dataset_cache,  # Use cache file if provided
-            embedding_constant=general_args.embedding_constant,
+            embeddings_path=core_config.embeddings_path,
+            cache_file=general_config.dataset_cache,  # Use cache file if provided
+            embedding_constant=general_config.embedding_constant,
         )
 
         val_dataset = AMOSMMDataset(
-            dataset_json_path=general_args.dataset_path,
-            model_name=general_args.model_type,
+            dataset_json_path=core_config.dataset_path,
+            model_name=general_config.model_type,
             split="val",
-            embeddings_path=general_args.embeddings_path,
-            n_samples=general_args.n_val_samples,  # Limit the validation set size
-            cache_file=general_args.dataset_cache_val,  # Use cache file if provided
-            embedding_constant=general_args.embedding_constant,
+            embeddings_path=core_config.embeddings_path,
+            n_samples=general_config.n_val_samples,  # Limit the validation set size
+            cache_file=general_config.dataset_cache_val,  # Use cache file if provided
+            embedding_constant=general_config.embedding_constant,
         )
-    elif general_args.dataset_name == "ctrate":
+    elif core_config.dataset_name == "ctrate":
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
-            dataset_json_path=general_args.dataset_path,
-            model_name=general_args.model_type,
-            split="train" if general_args.split_idx is None else f"train_{general_args.split_idx}",
-            vqa_path=general_args.vqa_path,
-            embeddings_path=general_args.embeddings_path,
-            n_samples=general_args.n_train_samples,
-            split_files=general_args.split_file,
+            dataset_json_path=core_config.dataset_path,
+            model_name=general_config.model_type,
+            split="train" if general_config.split_idx is None else f"train_{general_config.split_idx}",
+            vqa_path=general_config.vqa_path,
+            embeddings_path=core_config.embeddings_path,
+            n_samples=general_config.n_train_samples,
+            split_files=general_config.split_file,
             answer_types=("TEXT",),
-            cache_file=general_args.dataset_cache,  # Use cache file if provided
-            load_image=general_args.train_vision_encoder,
-            do_resize=general_args.do_resize,
-            do_transforms=general_args.do_transforms,
-            embedding_constant=general_args.embedding_constant,
-            use_csv_reports=general_args.use_csv_reports
+            cache_file=general_config.dataset_cache,  # Use cache file if provided
+            load_image=general_config.train_vision_encoder,
+            do_resize=general_config.do_resize,
+            do_transforms=general_config.do_transforms,
+            embedding_constant=general_config.embedding_constant,
+            use_csv_reports=general_config.use_csv_reports
         )
 
         val_dataset = CTRATEDataset(
-            dataset_json_path=general_args.dataset_path,
-            model_name=general_args.model_type,
-            split="val" if general_args.split_idx is None else f"val_{general_args.split_idx}",
-            embeddings_path=general_args.embeddings_path,
-            n_samples=general_args.n_val_samples,  # Limit the validation set size
-            split_files=general_args.split_file,
+            dataset_json_path=core_config.dataset_path,
+            model_name=general_config.model_type,
+            split="val" if general_config.split_idx is None else f"val_{general_config.split_idx}",
+            embeddings_path=core_config.embeddings_path,
+            n_samples=general_config.n_val_samples,  # Limit the validation set size
+            split_files=general_config.split_file,
             answer_types=("TEXT",),
-            cache_file=general_args.dataset_cache_val,  # Use cache file if provided
-            load_image=general_args.train_vision_encoder,
-            do_resize=general_args.do_resize,
-            embedding_constant=general_args.embedding_constant,
-            use_csv_reports=general_args.use_csv_reports
+            cache_file=general_config.dataset_cache_val,  # Use cache file if provided
+            load_image=general_config.train_vision_encoder,
+            do_resize=general_config.do_resize,
+            embedding_constant=general_config.embedding_constant,
+            use_csv_reports=general_config.use_csv_reports
             # no transforms for val dataset
         )
 
-    if general_args.embedding_constant is not None and is_main_process():
-        logger.info(f"Using embedding constant: {general_args.embedding_constant}")
-        print(f"Using embedding constant: {general_args.embedding_constant}")
+    if general_config.embedding_constant is not None and is_main_process():
+        logger.info(f"Using embedding constant: {general_config.embedding_constant}")
+        print(f"Using embedding constant: {general_config.embedding_constant}")
 
     if is_main_process():
         logger.info(
@@ -717,19 +567,19 @@ def main():
         print(
             f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
         )
-        logger.info(f"Using batch size: {general_args.batch_size}")
+        logger.info(f"Using batch size: {sft_trainer_config.per_device_train_batch_size}")
 
     # Create the trainer and train the model
     trainer = UnifiedVLMTrainer(
         vlm_model,
-        output_dir=general_args.output_dir,
-        sft_trainer_config=sft_trainer_config,
+        output_dir=general_config.output_dir,
+        sft_trainer_config=vars(sft_trainer_config),
     )
 
     # Update trainer with additional config for wandb logging
-    trainer.general_args = vars(general_args)
+    trainer.general_args = vars(general_config)
     trainer.dataset_info = {
-        "dataset_name": general_args.dataset_name,
+        "dataset_name": core_config.dataset_name,
         "train_size": len(train_dataset),
         "val_size": len(val_dataset),
     }
