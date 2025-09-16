@@ -140,19 +140,14 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
         text = text.copy()  # below lines change text in-place
 
         if video_grid_thw is not None:
-            merge_length = np.prod(self.reduce_block)
-            index = 0
-            for i in range(len(text)):
-                while self.video_token in text[i]:
-                    if self.vision_input_type == VisionInputType.EMBEDDING:
-                        text[i] = text[i].replace(
-                            # TODO: In the adapter we use unfold to create merger patches. If the image size is not divisible by the reduce block the last row/column will be dropped.
-                            self.video_token, "<|placeholder|>" * ((video_grid_thw[index] - video_grid_thw[index] % torch.as_tensor(self.reduce_block)).prod() // merge_length), 1)
-                    else:
-                            #TODO fix this so that we dont need an else block... this is just a quick fix for now
-                            text[i] = text[i].replace(self.video_token, "<|placeholder|>" * video_grid_thw[index].prod(), 1)
-                    index += 1
-                text[i] = text[i].replace("<|placeholder|>", self.video_token)
+            
+            for i, grid_thw in enumerate(video_grid_thw):
+                    
+                # Calculate valid dimensions (divisible by reduce_block)
+                valid_dims = (grid_thw // torch.as_tensor(self.reduce_block)) * torch.as_tensor(self.reduce_block)
+                num_tokens = valid_dims.prod().item()
+                
+                text[i] = text[i].replace(self.video_token, self.video_token * num_tokens, 1)
 
         #text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
         # TODO check why it fails with the above line!
