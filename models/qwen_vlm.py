@@ -80,8 +80,9 @@ class QwenVLModel(AbstractVLMModel):
 
         if not self.train_vision_encoder:
             # Freeze vision encoder if not training it
-            for param in self.model.model.vision_encoder.parameters():
-                    param.requires_grad = False
+            if self.vision_encoder_path is not None:
+                for param in self.model.model.vision_encoder.parameters():
+                        param.requires_grad = False
 
         if self.train_only_vision_adapter:
             # For adapter-only training, don't use quantization for the adapter

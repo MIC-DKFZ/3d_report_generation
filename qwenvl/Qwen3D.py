@@ -247,7 +247,7 @@ class VisionAdapterReduceBlocks(nn.Module):
 
 
         if x.ndim == 3: # this is the case if we load embeddings
-            x = x.reshape(batch_size, embedding_dim, *video_grid_thw[0])
+            x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
             #x = x.permute(0, 2, 3, 4, 1)  # Move embedding_dim to last dimension
 
 
@@ -367,7 +367,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
             # Only these 3 lines (and bellow two lines) are different from the original Qwen2_5_VLModel
             #pixel_values_videos = torch.rand_like(pixel_values_videos) #TODO RANDOM IMAGE HERE!!!
             #pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
-            if self.vision_encoder is not None:
+            if hasattr(self, "vision_encoder") and self.vision_encoder is not None:
                 video_embeds = self.vision_encoder(pixel_values_videos.unsqueeze(1))
                 #video_embeds = rearrange(video_embeds, 'b c h w d -> b c (h w d )')
                 video_embeds = self.vision_adapter(video_embeds, video_grid_thw)

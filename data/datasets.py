@@ -184,6 +184,9 @@ class MedicalImageDataset(Dataset, ABC):
                 mmap_kwargs = {} if os.name == "nt" else {'mmap_mode': 'r'}
                 
                 embedding = np.array(blosc2.open(urlpath=embedding_path, mode='r', dparams=dparams, **mmap_kwargs))
+
+            elif str(embedding_path).endswith(".bl2"):
+                embedding = blosc2.load_array(embedding_path)
                 
             elif str(embedding_path).endswith(".nrrd"):     
                 embedding, header = nrrd.read(embedding_path)
@@ -255,7 +258,8 @@ class MedicalImageDataset(Dataset, ABC):
                 result["embedding"] = embd
         else:
             # do we really need this function? why do reshaping and why use torch.tensor()?
-            result["embedding"] = self._embedding_2_tensor(result["embedding"])
+            # result["embedding"] = self._embedding_2_tensor(embd)
+            result["embedding"] = embd
 
         return result
 
@@ -288,16 +292,17 @@ class AMOSMMDataset(MedicalImageDataset):
     """
     def _get_vision_input_path(self, image_id):
         """Load embedding path for a given image ID"""
-        if self.vision_input_type == VisionInputType.IMAGE:
-            # TODO: image_id is in format ./imagesTr/amosxxx_0000.nii.gz
-            # Do we want to keep this format or change it to amosxxx?
-            if self.split == "train":
-                image_name = f"{image_id.split("./")[-1].split(".")[0]}_0000.nii.gz"
-            else:
-                image_name = f"{image_id.split("./")[-1].split(".")[0]}.nii.gz"
-            return str(self.vision_input_path / image_name)
-        # TODO: adapt for embedding input type
-        return str(self.vision_input_path / f"{image_id}_embedding.npy")
+        if self.split == "train":
+            image_name = f"{image_id.split("./")[-1].split(".")[0]}_0000"
+        else:
+            image_name = f"{image_id.split("./")[-1].split(".")[0]}"
+        if self.vision_input_type == VisionInputType.EMBEDDING:
+            image_name = f"{image_name}_embedding.bl2"
+        elif self.vision_input_type == VisionInputType.IMAGE:
+            image_name = f"{image_name}.b2nd"
+        else:
+            raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
+        return str(self.vision_input_path / image_name)
 
     def get_embedding_path(self, image_path):
         """Convert image path to embedding path"""
