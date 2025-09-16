@@ -292,7 +292,8 @@ def parse_args() -> tuple[BaseModel, ...]:
     core_args_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
 
     core_args_parser.add_argument(
-        "--train_config", type=str, required=True, help="Path to config file (YAML or JSON)"
+        "--train_config", type=str, required=True,
+        help="Path to config file (YAML or JSON), relative to the 'VLM_CONFIG_DIR' environment variable"
     )
     core_args_parser.add_argument(
         "--dataset_name", type=str, required=True, choices=["ctrate", "amosmm"], help="Name of the dataset"
@@ -306,6 +307,7 @@ def parse_args() -> tuple[BaseModel, ...]:
 
     core_args, _ = core_args_parser.parse_known_args()
 
+    core_args.train_config = os.path.join(os.getenv("VLM_CONFIG_DIR"), core_args.train_config)
     if not os.path.exists(core_args.train_config):
         raise ValueError(f"The provided config file does not exist: {core_args.train_config}")
 
@@ -458,10 +460,12 @@ def main():
 
     core_config, general_config, sft_trainer_config = parse_args()
 
+    vlm_config_dir, vlm_output_dir = os.getenv("VLM_CONFIG_DIR"), os.getenv("VLM_OUTPUT_DIR")
     general_config.output_dir = os.path.join(
-        general_config.output_dir,
+        vlm_output_dir,
         core_config.dataset_name,
         os.path.basename(core_config.embeddings_path),
+        os.path.dirname(os.path.relpath(core_config.train_config, vlm_config_dir)),
         general_config.run_name
     )
 
