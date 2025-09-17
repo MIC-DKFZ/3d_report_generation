@@ -480,6 +480,7 @@ def main():
         final_config_path = os.path.join(general_config.output_dir, "final_config.yml")
         with open(final_config_path, "w") as f:
             yaml.safe_dump({
+                "command": " ".join(sys.argv),
                 "core": vars(core_config),
                 "general": vars(general_config),
                 "trainer": vars(sft_trainer_config)
