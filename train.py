@@ -332,11 +332,6 @@ def parse_args() -> tuple[BaseModel, ...]:
     config_name, _ = os.path.splitext(os.path.basename(core_config.train_config))
     general_config.run_name = datetime.now().strftime(f"{config_name}_%Y-%m-%d_%H-%M-%S")
 
-    if general_config.embedding_constant is not None:
-        try:
-            general_config.embedding_constant = float(general_config.embedding_constant)
-        except ValueError:
-            pass
 
     return core_config, general_config, sft_trainer_config
 

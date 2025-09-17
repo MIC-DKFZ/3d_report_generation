@@ -30,11 +30,11 @@ class GeneralConfig(BaseModel):
     output_dir: str = Field("output/vlm", description="Directory to save model outputs.")
     wandb_project: str = Field("mic-rocket-vlm", description="WandB project name.")
 
-    n_train_samples: Optional[int] = Field(None, description="Number of training samples to use.")
+    n_train_samples: int | None = Field(None, description="Number of training samples to use.")
     n_val_samples: int = Field(50, description="Number of validation samples to use (default: 50).")
-    embedding_constant: Optional[str] = Field(
+    embedding_constant: float | Literal["random"] | None = Field(
         None,
-        description="Constant value for language-only baseline. Either a float (as string) or 'random'."
+        description="Constant value for language-only baseline. Either a float or 'random'."
     )
     train_only_vision_adapter: bool = Field(
         False,
@@ -48,12 +48,12 @@ class GeneralConfig(BaseModel):
         False,
         description="Freeze the vision encoder (no LoRA adapter)."
     )
-    vision_encoder_path: Optional[str] = Field(None, description="Path to vision encoder checkpoint.")
+    vision_encoder_path: str | None = Field(None, description="Path to vision encoder checkpoint.")
 
-    split_file: Optional[str] = Field(None, description="Path to cross validation split file (JSON).")
-    split_idx: Optional[int] = Field(None, description="Index of the split to use (0-4).")
-    dataset_cache: Optional[str] = Field(None, description="Path to cache file for the dataset.")
-    dataset_cache_val: Optional[str] = Field(None, description="Path to validation cache file for the dataset.")
+    split_file: str | None = Field(None, description="Path to cross validation split file (JSON).")
+    split_idx: int | None = Field(None, description="Index of the split to use (0-4).")
+    dataset_cache: str | None = Field(None, description="Path to cache file for the dataset.")
+    dataset_cache_val: str | None = Field(None, description="Path to validation cache file for the dataset.")
     use_csv_reports: bool = Field(False, description="Get reports from CSV file instead of YAML files.")
     do_resize: bool = Field(False, description="Resize images to 192x192x192 cubes (with lung crops).")
     do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
