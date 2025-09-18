@@ -107,7 +107,9 @@ class UnifiedVLMTrainer:
         # Add model-specific arguments
         model_args = self.vlm_model.get_model_specific_training_args()
 
-        return SFTConfig(**self.cfg.trainer.model_dump(), **model_args)
+        return SFTConfig(**self.cfg.trainer.model_dump(),
+                         **model_args,
+                         output_dir=self.cfg.general.output_dir)
 
     def get_quantization_config(self):
         """Create and return the BitsAndBytes quantization config"""
@@ -146,6 +148,8 @@ class UnifiedVLMTrainer:
                 "command": " ".join(sys.argv),
                 "run": cfg.model_dump()
             }, f)
+
+        print(f"Successfully setup output directory in {cfg.general.output_dir}")
 
     def train(self, train_dataset, val_dataset):
         """
@@ -221,14 +225,14 @@ class UnifiedVLMTrainer:
         # Create callbacks (only add print callback on main process)
         callbacks = [LossLoggingCallback()]
         
-        if is_main_process():
-            callbacks.append(
-                PrintEvalBatchCallback(
-                    tokenizer=self.vlm_model.tokenizer,
-                    processor=self.vlm_model.processor,
-                    sample_count=len(val_dataset),
-                )
-            )
+        # if is_main_process():
+        #     callbacks.append(
+        #         PrintEvalBatchCallback(
+        #             tokenizer=self.vlm_model.tokenizer,
+        #             processor=self.vlm_model.processor,
+        #             sample_count=len(val_dataset),
+        #         )
+        #     )
 
         # Initialize SFT trainer
         self.trainer = SFTTrainer(
