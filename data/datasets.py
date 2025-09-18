@@ -192,8 +192,7 @@ class MedicalImageDataset(Dataset, ABC):
                 embedding, header = nrrd.read(embedding_path)
 
             elif str(embedding_path).endswith((".nii.gz", ".nii")):
-                embedding = sitk.GetArrayFromImage(sitk.ReadImage(embedding_path))
-                embedding = self.mask_crop_embedding(embedding=embedding, embedding_path=embedding_path)               
+                embedding = sitk.GetArrayFromImage(sitk.ReadImage(embedding_path))          
 
             else:
                 raise ValueError(f"Unsupported embedding file format: {embedding_path}")
@@ -207,10 +206,6 @@ class MedicalImageDataset(Dataset, ABC):
         except Exception as e:
             logger.error(f"Error loading embedding from {embedding_path}: {e}")
             return None
-
-    def mask_crop_embedding(self, embedding, embedding_path):
-        """Crop embedding to a region defined by a segmentation mask"""
-        return embedding
 
     def _embedding_2_tensor(self, embedding):
         """Convert embedding to tensor"""
@@ -305,6 +300,7 @@ class AMOSMMDataset(MedicalImageDataset):
         return str(self.vision_input_path / image_name)
 
     def get_embedding_path(self, image_path):
+        # TODO: is this needed?
         """Convert image path to embedding path"""
         base_name = image_path.replace(".nii.gz", "")
         return str(os.path.join(self.vision_input_path, f"{base_name}_embedding.npy"))
@@ -325,62 +321,11 @@ class CTRATEDataset(MedicalImageDataset):
     """
     def _get_vision_input_path(self, image_id):
         """Load embedding path for a given image ID"""
+        split_path = "valid" if self.split == "val" else self.split
+        if self.vision_input_type == VisionInputType.EMBEDDING:
+            return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}_embedding.bl2")
         if self.vision_input_type == VisionInputType.IMAGE:
-            parts = image_id.split('_')
-            patient_folder = '_'.join(parts[:-2])  # "valid_1"
-            patient_id = '_'.join(parts[:-1])      # "valid_1_a"
-            split_path = "valid" if self.split == "val" else self.split
-            return Path(self.vision_input_path / f"{split_path}_fixed" / patient_folder / patient_id / f"{image_id}.nii.gz")
-        # TODO: adapt for embedding input type
-        return str(self.vision_input_path / f"{image_id}.nii.gz")
-
-    def mask_crop_embedding(self, embedding, embedding_path):
-        embedding_path = str(embedding_path)
-        lung_segmentation_path = None
-        if "valid_fixed" in embedding_path:
-            lung_segmentation_path = embedding_path.replace("valid_fixed", "ts_seg/ts_total/valid_fixed")
-        if "train_fixed" in embedding_path:
-            lung_segmentation_path = embedding_path.replace("train_fixed", "ts_seg/ts_total/train_fixed")
-
-        if os.path.exists(lung_segmentation_path):
-            # we have no cropped images on dkfz drives, therefore this if block is here. This is only used for prototyping and is not io efficient.
-            # use with:
-            # "--dataset_path",
-            # "/mnt/e230-thrp-data/mic_rocket/data/raw/CTRATEv2/CT-RATE/dataset",
-            # "--embeddings_path",
-            # "/mnt/e230-thrp-data/mic_rocket/data/raw/CTRATEv2/CT-RATE/dataset/valid_fixed",
-            lung_segmentation = sitk.GetArrayFromImage(sitk.ReadImage(lung_segmentation_path))
-
-            lung_indices = [10, 11, 12, 13, 14]
-            # Create a mask for the lung regions
-            lung_mask = np.isin(lung_segmentation, lung_indices)
-            # Crop the embedding to the bounding box of the lung mask with 4% offset
-            coords = np.argwhere(lung_mask)
-
-            # same computation as Stefan used for Dataset802_LungCrop on juwels
-            if coords.size > 0:
-                min_coords = coords.min(axis=0)
-                max_coords = coords.max(axis=0) + 1  # +1 because slicing is exclusive
-                
-                # Calculate dimensions and 4% expansion (scale/2 on each side)
-                dx, dy, dz = max_coords - min_coords
-                ex, ey, ez = dx * 0.02, dy * 0.02, dz * 0.02  # 0.04/2 = 0.02 for each side
-                
-                # Apply expansion with bounds checking using floor/ceil
-                new_min_x = max(0, math.floor(min_coords[0] - ex))
-                new_max_x = min(embedding.shape[0], math.ceil(max_coords[0] + ex))
-                new_min_y = max(0, math.floor(min_coords[1] - ey))
-                new_max_y = min(embedding.shape[1], math.ceil(max_coords[1] + ey))
-                new_min_z = max(0, math.floor(min_coords[2] - ez))
-                new_max_z = min(embedding.shape[2], math.ceil(max_coords[2] + ez))
-                
-                embedding = embedding[new_min_x:new_max_x, new_min_y:new_max_y, new_min_z:new_max_z]
-
-                print("embeddings shape after lung crop", embedding.shape)
-        
-        return embedding
-        # viewer = napari.Viewer()
-        # viewer.add_image(embedding, name="CT Patch")
-        # viewer.add_image(embedding_full, name="CT Full")
-        # napari.run()
+            return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}.b2nd")
+        else:
+            raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
         
