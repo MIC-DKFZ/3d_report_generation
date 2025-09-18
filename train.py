@@ -12,12 +12,16 @@ from transformers import BitsAndBytesConfig
 from trl import SFTConfig, SFTTrainer
 
 import wandb
+from configs.data_config import DataConfig
+from configs.general_config import GeneralConfig
+from configs.model.model_config import ModelConfig
+from configs.run_config import RunConfig
+from configs.trainer_config import SFTTrainerConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
 from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registry import vlm_registry
 from utils import logger
-from utils.config_models import GeneralConfig, SFTTrainerConfig, CoreConfig, RunConfig
 from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args
 from utils.memory_utils import (
     aggressive_cleanup,
@@ -134,22 +138,20 @@ class UnifiedVLMTrainer:
             - final_config.yml: final merged configuration (defaults + input config + CLI args)
             - train.log: log file for runtime logs
         """
-        cfg = self.cfg
-
-        os.makedirs(cfg.general.output_dir, exist_ok=True)
-        shutil.copyfile(cfg.core.train_config, os.path.join(cfg.general.output_dir, "input_config.yml"))
-        log_file_path = os.path.join(cfg.general.output_dir, "train.log")
+        os.makedirs(self.cfg.general.output_dir, exist_ok=True)
+        shutil.copyfile(self.cfg.general.train_config, os.path.join(self.cfg.general.output_dir, "input_config.yml"))
+        log_file_path = os.path.join(self.cfg.general.output_dir, "train.log")
         logger.add(log_file_path)
 
         # Save final run config
-        final_config_path = os.path.join(cfg.general.output_dir, "final_config.yml")
+        final_config_path = os.path.join(self.cfg.general.output_dir, "final_config.yml")
         with open(final_config_path, "w") as f:
             yaml.safe_dump({
                 "command": " ".join(sys.argv),
-                "run": cfg.model_dump()
+                "run": self.cfg.model_dump()
             }, f)
 
-        print(f"Successfully setup output directory in {cfg.general.output_dir}")
+        print(f"Successfully setup output directory in {self.cfg.general.output_dir}")
 
     def train(self, train_dataset, val_dataset):
         """
@@ -186,12 +188,12 @@ class UnifiedVLMTrainer:
             model_to_train = self.vlm_model.model
 
         # Create comprehensive config for WandB logging
-        config_dict = create_comprehensive_wandb_config(    # TODO: DataConfig
+        config_dict = create_comprehensive_wandb_config(
             self.vlm_model, self.cfg,
             self.world_size, self.rank
         )
         # Ensure trainable_params are included in the config
-        config_dict["trainable_params"] = trainable_params  # TODO: somehow add this to RunConfig
+        config_dict["trainable_params"] = trainable_params
 
         # Only initialize wandb on the main process (rank 0) for DDP
         if is_main_process():
@@ -289,57 +291,75 @@ class UnifiedVLMTrainer:
 
 
 def parse_args() -> RunConfig:
-    """
-    Returns:
-        RunConfig: Currently, three configuration are held by the returned RunConfig object:
-            - core (CoreConfig): (dataset and config file)
-            - general (GeneralConfig): (model configs, data augs, num train samples, ...)
-            - trainer (SFTTrainerConfig): (epochs, eval & save steps, hyperparams, ...)
-    """
+    args_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
 
-    core_args_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
-
-    core_args_parser.add_argument(
+    args_parser.add_argument(
         "--train_config", type=str, required=True,
         help="Path to config file (YAML or JSON), relative to the 'VLM_CONFIG_DIR' environment variable"
     )
-    core_args_parser.add_argument(
+    args_parser.add_argument(
         "--dataset_name", type=str, required=True, choices=["ctrate", "amosmm"], help="Name of the dataset"
     )
-    core_args_parser.add_argument(
+    args_parser.add_argument(
         "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
     )
-    core_args_parser.add_argument(
+    args_parser.add_argument(
         "--embeddings_path", type=str, required=True, help="Path to the vision embeddings",
     )
+    args_parser.add_argument(
+        "--vqa_path", type=str, required=True, help="Path to the VQA directory",
+    )
 
-    core_args, _ = core_args_parser.parse_known_args()
+    args, _ = args_parser.parse_known_args()
 
-    core_args.train_config = os.path.join(os.getenv("VLM_CONFIG_DIR"), core_args.train_config)
-    if not os.path.exists(core_args.train_config):
-        raise ValueError(f"The provided config file does not exist: {core_args.train_config}")
+    train_config_path = os.path.join(os.getenv("VLM_CONFIG_DIR"), args.train_config)
+    if not os.path.exists(train_config_path):
+        raise ValueError(f"The provided config file does not exist: {train_config_path}")
 
-    config_file = load_config_file(core_args.train_config)
-    general_args_config_file, sft_trainer_args_config_file = config_file["general"], config_file["trainer"]
+    config_file = load_config_file(train_config_path)
+    general_args = config_file["general"]
+    model_args = config_file["model"]
+    data_args = config_file["data"]
+    sft_trainer_args = config_file["trainer"]
 
     # Resolve model_id if not provided
-    if general_args_config_file.get("model_id") is None and general_args_config_file["model_type"] not in vlm_registry:
-        raise ValueError(f"Unknown model type: {general_args_config_file['model_type']}")
-    model_id = general_args_config_file.get("model_id") or vlm_registry[general_args_config_file["model_type"]].model_id
+    if general_args.get("model_id") is None and general_args["model_type"] not in vlm_registry:
+        raise ValueError(f"Unknown model type: {general_args['model_type']}")
+    model_id = general_args.get("model_id") or vlm_registry[general_args["model_type"]].model_id
 
     # Parse all args into their respective Pydantic models/configs
     cfg = RunConfig(
-        core=CoreConfig(**vars(core_args)),
-        general=GeneralConfig(**general_args_config_file, model_id=model_id),
-        trainer=SFTTrainerConfig(**sft_trainer_args_config_file)
+        general=GeneralConfig.model_validate({
+            **general_args,
+            "train_config": args.train_config,
+        }),
+        model=ModelConfig.model_validate({
+            **model_args,
+            "model_id": model_id,
+        }),
+        data=DataConfig.model_validate({
+            **data_args,
+            "dataset_name": args.dataset_name,
+            "dataset_path": args.dataset_path,
+            "embeddings_path": args.embeddings_path,
+            "vqa_path": args.vqa_path,
+        }),
+        trainer=SFTTrainerConfig.model_validate({
+            **sft_trainer_args,
+        }),
     )
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
     cfg.general = merge_config_with_cli_args(cfg.general)
+    cfg.model = merge_config_with_cli_args(cfg.model)
     cfg.trainer = merge_config_with_cli_args(cfg.trainer)
+    cfg.data = merge_config_with_cli_args(cfg.data)
+
+    # Resolve 'train_config' to absolute path
+    cfg.general.train_config = train_config_path
 
     # Use the config filename (without extension) as both 'run_name' and the results folder name later on
-    config_name, _ = os.path.splitext(os.path.basename(cfg.core.train_config))
+    config_name, _ = os.path.splitext(os.path.basename(cfg.general.train_config))
     cfg.general.run_name = datetime.now().strftime(f"{config_name}_%Y-%m-%d_%H-%M-%S")
 
     return cfg
@@ -457,9 +477,9 @@ def main():
     vlm_config_dir, vlm_output_dir = os.getenv("VLM_CONFIG_DIR"), os.getenv("VLM_OUTPUT_DIR")
     cfg.general.output_dir = os.path.join(
         vlm_output_dir,
-        cfg.core.dataset_name,
-        os.path.basename(cfg.core.embeddings_path),
-        os.path.dirname(os.path.relpath(cfg.core.train_config, vlm_config_dir)),
+        cfg.data.dataset_name,
+        os.path.basename(cfg.data.embeddings_path),
+        os.path.dirname(os.path.relpath(cfg.general.train_config, vlm_config_dir)),
         cfg.general.run_name
     )
 
@@ -467,82 +487,82 @@ def main():
     seed_everything(42)  # Set a random seed for reproducibility
 
     try:
-        vlm_model_class = vlm_registry[cfg.general.model_type].model_class
+        vlm_model_class = vlm_registry[cfg.model.model_type].model_class
     except KeyError:
         raise ValueError(f"Unknown model type: {cfg.general.model_type}")
 
     vlm_model = vlm_model_class(
-        model_id=cfg.general.model_id,
+        model_id=cfg.model.model_id,
         output_dir=cfg.general.output_dir,
-        train_only_vision_adapter=cfg.general.train_only_vision_adapter,
-        reduce_block=cfg.general.reduce_block,
-        train_vision_encoder=cfg.general.train_vision_encoder,
-        vision_encoder_path=cfg.general.vision_encoder_path,
-        freeze_vision_encoder=cfg.general.freeze_vision_encoder,
+        train_only_vision_adapter=cfg.model.train_only_vision_adapter,
+        reduce_block=cfg.model.reduce_block,
+        train_vision_encoder=cfg.model.train_vision_encoder,
+        vision_encoder_path=cfg.model.vision_encoder_path,
+        freeze_vision_encoder=cfg.model.freeze_vision_encoder,
         local_files_only=cfg.general.local_files_only
     )
 
     # Create datasets
-    if cfg.core.dataset_name == "amosmm":
+    if cfg.data.dataset_name == "amosmm":
         # Use AMOSMM dataset
         train_dataset = AMOSMMDataset(
-            dataset_json_path=cfg.core.dataset_path,
-            model_name=cfg.general.model_type,
+            dataset_json_path=cfg.data.dataset_path,
+            model_name=cfg.model.model_type,
             split="train",
-            embeddings_path=cfg.core.embeddings_path,
-            cache_file=cfg.general.dataset_cache,  # Use cache file if provided
-            embedding_constant=cfg.general.embedding_constant,
+            embeddings_path=cfg.data.embeddings_path,
+            cache_file=cfg.data.dataset_cache,  # Use cache file if provided
+            embedding_constant=cfg.data.embedding_constant,
         )
 
         val_dataset = AMOSMMDataset(
-            dataset_json_path=cfg.core.dataset_path,
-            model_name=cfg.general.model_type,
+            dataset_json_path=cfg.data.dataset_path,
+            model_name=cfg.model.model_type,
             split="val",
-            embeddings_path=cfg.core.embeddings_path,
-            n_samples=cfg.general.n_val_samples,  # Limit the validation set size
-            cache_file=cfg.general.dataset_cache_val,  # Use cache file if provided
-            embedding_constant=cfg.general.embedding_constant,
+            embeddings_path=cfg.data.embeddings_path,
+            n_samples=cfg.data.n_val_samples,  # Limit the validation set size
+            cache_file=cfg.data.dataset_cache_val,  # Use cache file if provided
+            embedding_constant=cfg.data.embedding_constant,
         )
-    elif cfg.core.dataset_name == "ctrate":
+    elif cfg.data.dataset_name == "ctrate":
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
-            dataset_json_path=cfg.core.dataset_path,
-            model_name=cfg.general.model_type,
-            split="train" if cfg.general.split_idx is None else f"train_{cfg.general.split_idx}",
-            vqa_path=cfg.general.vqa_path,
-            embeddings_path=cfg.core.embeddings_path,
-            n_samples=cfg.general.n_train_samples,
-            split_files=cfg.general.split_file,
+            dataset_json_path=cfg.data.dataset_path,
+            model_name=cfg.model.model_type,
+            split="train" if cfg.data.split_idx is None else f"train_{cfg.general.split_idx}",
+            vqa_path=cfg.data.vqa_path,
+            embeddings_path=cfg.data.embeddings_path,
+            n_samples=cfg.data.n_train_samples,
+            split_files=cfg.data.split_file,
             answer_types=("TEXT",),
-            cache_file=cfg.general.dataset_cache,  # Use cache file if provided
-            load_image=cfg.general.train_vision_encoder,
-            do_resize=cfg.general.do_resize,
-            do_transforms=cfg.general.do_transforms,
-            embedding_constant=cfg.general.embedding_constant,
-            use_csv_reports=cfg.general.use_csv_reports
+            cache_file=cfg.data.dataset_cache,  # Use cache file if provided
+            load_image=cfg.model.train_vision_encoder,
+            do_resize=cfg.data.do_resize,
+            do_transforms=cfg.data.do_transforms,
+            embedding_constant=cfg.data.embedding_constant,
+            use_csv_reports=cfg.data.use_csv_reports
         )
 
         val_dataset = CTRATEDataset(
-            dataset_json_path=cfg.core.dataset_path,
-            model_name=cfg.general.model_type,
-            split="val" if cfg.general.split_idx is None else f"val_{cfg.general.split_idx}",
-            embeddings_path=cfg.core.embeddings_path,
-            n_samples=cfg.general.n_val_samples,  # Limit the validation set size
-            split_files=cfg.general.split_file,
+            dataset_json_path=cfg.data.dataset_path,
+            model_name=cfg.model.model_type,
+            split="val" if cfg.data.split_idx is None else f"val_{cfg.general.split_idx}",
+            embeddings_path=cfg.data.embeddings_path,
+            n_samples=cfg.data.n_val_samples,  # Limit the validation set size
+            split_files=cfg.data.split_file,
             answer_types=("TEXT",),
-            cache_file=cfg.general.dataset_cache_val,  # Use cache file if provided
-            load_image=cfg.general.train_vision_encoder,
-            do_resize=cfg.general.do_resize,
-            embedding_constant=cfg.general.embedding_constant,
-            use_csv_reports=cfg.general.use_csv_reports
+            cache_file=cfg.data.dataset_cache_val,  # Use cache file if provided
+            load_image=cfg.model.train_vision_encoder,
+            do_resize=cfg.data.do_resize,
+            embedding_constant=cfg.data.embedding_constant,
+            use_csv_reports=cfg.data.use_csv_reports
             # no transforms for val dataset
         )
     else:
-        raise ValueError(f"Unknown dataset name: {cfg.core.dataset_name}")
+        raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
 
-    if cfg.general.embedding_constant is not None and is_main_process():
-        logger.info(f"Using embedding constant: {cfg.general.embedding_constant}")
-        print(f"Using embedding constant: {cfg.general.embedding_constant}")
+    if cfg.data.embedding_constant is not None and is_main_process():
+        logger.info(f"Using embedding constant: {cfg.data.embedding_constant}")
+        print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     if is_main_process():
         logger.info(

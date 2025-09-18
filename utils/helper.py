@@ -5,7 +5,8 @@ import torch
 import yaml
 import json
 import os
-from utils.config_models import ConfigT
+from pydantic import BaseModel
+from typing import TypeVar
 
 
 def seed_everything(seed: int):
@@ -36,6 +37,7 @@ def load_config_file(config_path: str) -> dict:
     return config_file
 
 
+ConfigT = TypeVar("ConfigT", bound=BaseModel)
 def merge_config_with_cli_args(default_model: ConfigT) -> ConfigT:
     """
     Update a Pydantic BaseModel with matching CLI arguments.

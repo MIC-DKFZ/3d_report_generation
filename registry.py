@@ -1,6 +1,15 @@
+from pydantic import BaseModel
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
-from utils.config_models import VLMConfig
+
+
+class VLMConfig(BaseModel):
+    """
+    Configuration for a Vision-Language Model
+    """
+    model_id: str
+    model_class: type
+
 
 vlm_registry: dict[str, VLMConfig] = {
     "qwen": VLMConfig(
