@@ -1,8 +1,10 @@
 from datetime import datetime
-from typing import Optional, Literal
+from typing import Literal, TypeVar
 from uuid import uuid4
 from pydantic import BaseModel, Field
 
+
+ConfigT = TypeVar("ConfigT", bound=BaseModel)
 
 class CoreConfig(BaseModel):
     """
@@ -98,9 +100,22 @@ class SFTTrainerConfig(BaseModel):
     remove_unused_columns: bool = Field(False, description="Whether to remove unused columns from the dataset before training.")
     report_to: list[str] = Field(default_factory=lambda: ["wandb"], description="List of integrations to report training logs to (e.g. wandb, tensorboard).")
 
+    dataloader_num_workers: int = Field(2, description="Number of subprocesses to use for loading data in parallel.")
+    dataloader_pin_memory: bool = Field(True, description="Whether to copy tensors into CUDA pinned memory for faster GPU transfers.")
+    dataloader_prefetch_factor: int = Field(1, description="Reduce prefetch factor to minimize memory usage.")
+    dataloader_persistent_workers: bool = Field(False, description="Disable persistent workers to prevent memory accumulation.")
     torch_empty_cache_steps: int = Field(10, description="Clear PyTorch CUDA cache every X steps to manage GPU memory.")
     ddp_find_unused_parameters: bool = Field(False, description="Whether to enable detection of unused parameters in DDP training.")
     ddp_bucket_cap_mb: int = Field(25, description="Bucket size in MB for gradient synchronization in DDP.")
+
+
+class RunConfig(BaseModel):
+    """
+    Aggregates all sub-configurations for a training run.
+    """
+    core: CoreConfig
+    general: GeneralConfig
+    trainer: SFTTrainerConfig
 
 
 class VLMConfig(BaseModel):

@@ -5,7 +5,7 @@ import torch
 import yaml
 import json
 import os
-from pydantic import BaseModel
+from utils.config_models import ConfigT
 
 
 def seed_everything(seed: int):
@@ -36,17 +36,15 @@ def load_config_file(config_path: str) -> dict:
     return config_file
 
 
-def merge_config_with_cli_args(default_model: BaseModel) -> BaseModel:
+def merge_config_with_cli_args(default_model: ConfigT) -> ConfigT:
     """
-    Overwrites fields of the BaseModel by any matching CLI arguments and
-    returns a new BaseModel object.
+    Update a Pydantic BaseModel with matching CLI arguments.
 
     Args:
-        default_model (BaseModel): A Pydantic BaseModel containing the default config
-            that will be overwritten by any matching CLI arguments.
+        default_model: A Pydantic model (e.g. CoreConfig, GeneralConfig, SFTTrainerConfig).
 
     Returns:
-        BaseModel: Returns the merged BaseModel.
+        A new instance of the same model type with updated fields.
     """
     parser = argparse.ArgumentParser()
     for key, value in default_model.model_dump().items():
