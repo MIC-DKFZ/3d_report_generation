@@ -111,6 +111,7 @@ class MedicalImageDatasetPreprocessor(ABC):
             if os.path.exists(self.results_file):
                 logger.warning(f"Overwriting existing results file: {self.results_file}")
             logger.info(f"Writing dataset to {self.results_file}")
+            os.makedirs(os.path.dirname(self.results_file), exist_ok=True)
             with open(self.results_file, "w") as f:
                 json.dump(self.samples, f, indent=4)
             logger.info(f"Wrote {len(self.samples)} samples.")
