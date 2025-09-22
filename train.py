@@ -28,6 +28,7 @@ from utils.memory_utils import (
     log_memory_usage,
     setup_memory_efficient_training,
 )
+from utils.vision_input_type import VisionInputType
 
 
 def setup_distributed_training():
@@ -301,13 +302,16 @@ def parse_args() -> RunConfig:
         "--dataset_name", type=str, required=True, choices=["ctrate", "amosmm"], help="Name of the dataset"
     )
     args_parser.add_argument(
-        "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
+        "--train_dataset_json_path", type=str, required=True, help="Path to the train dataset JSON file"
     )
     args_parser.add_argument(
-        "--embeddings_path", type=str, required=True, help="Path to the vision embeddings",
+        "--val_dataset_json_path", type=str, required=False, help="Path to the validation dataset JSON file"
     )
     args_parser.add_argument(
-        "--vqa_path", type=str, required=True, help="Path to the VQA directory",
+        "--vision_input_path",
+        type=str,
+        required=True,
+        help="Path to the vision input (either embeddings or images)",
     )
 
     args, _ = args_parser.parse_known_args()
@@ -498,63 +502,63 @@ def main():
         reduce_block=cfg.model.reduce_block,
         train_vision_encoder=cfg.model.train_vision_encoder,
         vision_encoder_path=cfg.model.vision_encoder_path,
-        freeze_vision_encoder=cfg.model.freeze_vision_encoder,
         local_files_only=cfg.general.local_files_only
     )
 
+    vision_input_type = VisionInputType.IMAGE if general_args.vision_encoder_path else VisionInputType.EMBEDDING
     # Create datasets
     if cfg.data.dataset_name == "amosmm":
         # Use AMOSMM dataset
         train_dataset = AMOSMMDataset(
-            dataset_json_path=cfg.data.dataset_path,
+            dataset_json_path=cfg.data.train_dataset_json_path,
             model_name=cfg.model.model_type,
             split="train",
-            embeddings_path=cfg.data.embeddings_path,
-            cache_file=cfg.data.dataset_cache,  # Use cache file if provided
+            vision_input_path=cfg.data.vision_input_path,
+            vision_input_type=vision_input_type,
+            n_samples=cfg.data.n_train_samples,
+            do_resize=cfg.data.do_resize,
+            do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
         )
 
         val_dataset = AMOSMMDataset(
-            dataset_json_path=cfg.data.dataset_path,
+            dataset_json_path=cfg.data.val_dataset_json_path,
             model_name=cfg.model.model_type,
             split="val",
-            embeddings_path=cfg.data.embeddings_path,
+            vision_input_path=cfg.data.vision_input_path,
+            vision_input_type=vision_input_type,
             n_samples=cfg.data.n_val_samples,  # Limit the validation set size
-            cache_file=cfg.data.dataset_cache_val,  # Use cache file if provided
+            do_resize=cfg.data.do_resize,
+            do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
         )
     elif cfg.data.dataset_name == "ctrate":
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
-            dataset_json_path=cfg.data.dataset_path,
+            dataset_json_path=cfg.data.train_dataset_json_path,
             model_name=cfg.model.model_type,
             split="train" if cfg.data.split_idx is None else f"train_{cfg.general.split_idx}",
-            vqa_path=cfg.data.vqa_path,
-            embeddings_path=cfg.data.embeddings_path,
+            vision_input_path=cfg.data.vision_input_path,
+            vision_input_type=vision_input_type,
             n_samples=cfg.data.n_train_samples,
             split_files=cfg.data.split_file,
             answer_types=("TEXT",),
-            cache_file=cfg.data.dataset_cache,  # Use cache file if provided
-            load_image=cfg.model.train_vision_encoder,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
-            embedding_constant=cfg.data.embedding_constant,
-            use_csv_reports=cfg.data.use_csv_reports
+            embedding_constant=cfg.data.embedding_constant
         )
 
         val_dataset = CTRATEDataset(
-            dataset_json_path=cfg.data.dataset_path,
+            dataset_json_path=cfg.data.val_dataset_json_path,
             model_name=cfg.model.model_type,
             split="val" if cfg.data.split_idx is None else f"val_{cfg.general.split_idx}",
-            embeddings_path=cfg.data.embeddings_path,
+            vision_input_path=cfg.data.vision_input_path,
+            vision_input_type=vision_input_type,
             n_samples=cfg.data.n_val_samples,  # Limit the validation set size
             split_files=cfg.data.split_file,
             answer_types=("TEXT",),
-            cache_file=cfg.data.dataset_cache_val,  # Use cache file if provided
-            load_image=cfg.model.train_vision_encoder,
             do_resize=cfg.data.do_resize,
-            embedding_constant=cfg.data.embedding_constant,
-            use_csv_reports=cfg.data.use_csv_reports
+            embedding_constant=cfg.data.embedding_constant
             # no transforms for val dataset
         )
     else:
@@ -571,7 +575,8 @@ def main():
         print(
             f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
         )
-        logger.info(f"Using batch size: {cfg.trainer.per_device_train_batch_size}")
+        logger.info(f"Using train batch size: {cfg.trainer.per_device_train_batch_size}")
+        logger.info(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
 
     # Create the trainer and train the model
     trainer = UnifiedVLMTrainer(

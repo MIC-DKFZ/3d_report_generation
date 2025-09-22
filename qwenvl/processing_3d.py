@@ -1,17 +1,21 @@
+import random
 from typing import List, Union
 
+import numpy as np
+import torch
+import torch.nn.functional as F
+from einops import rearrange
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
-from transformers.video_utils import VideoInput
+from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import (
+    Qwen2_5_VLProcessor,
+    Qwen2_5_VLProcessorKwargs,
+)
 from transformers.processing_utils import Unpack
 from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
+from transformers.video_utils import VideoInput
 
-from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import Qwen2_5_VLProcessor, Qwen2_5_VLProcessorKwargs
-import torch.nn.functional as F
-import random
-from einops import rearrange
-import torch
-import numpy as np
+from utils.vision_input_type import VisionInputType
 
 
 class QwenVLProcessor3D(Qwen2_5_VLProcessor):
@@ -35,10 +39,10 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
     #video_processor_class = "AutoVideoProcessor"
     tokenizer_class = ("Qwen2Tokenizer", "Qwen2TokenizerFast")
 
-    def __init__(self, image_processor=None, tokenizer=None, chat_template=None, reduce_block = [2, 2, 2], train_vision_encoder=False, **kwargs):
+    def __init__(self, image_processor=None, tokenizer=None, chat_template=None, reduce_block=[2, 2, 2], vision_input_type=VisionInputType.EMBEDDING, **kwargs):
         super().__init__(image_processor, tokenizer, chat_template=chat_template)
         self.reduce_block = reduce_block
-        self.train_vision_encoder = train_vision_encoder
+        self.vision_input_type = vision_input_type
 
     def __call__(
         self,
@@ -94,8 +98,8 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
         image_inputs = videos_inputs = {}
         video_grid_thw = None
 
-        if vision_embeddings and not self.train_vision_encoder:
-            video_grid_thw = torch.tensor([v_e.shape[-3:] for v_e in vision_embeddings]).int()
+        if self.vision_input_type == VisionInputType.EMBEDDING:
+            video_grid_thw = torch.tensor([np.array(v_e.shape[-3:]) // np.array(self.reduce_block) for v_e in vision_embeddings]).int()
             list_of_vision_embeddings = [torch.tensor(rearrange(v_e, 'b c h w d -> (b h w d) c')) for v_e in vision_embeddings]
             # TODO fix the following padding (makes no sense right now (but works when all images have same size, otherwise crash with video_grid_thw above later))
             videos_input_embeddings = torch.nn.utils.rnn.pad_sequence(
@@ -105,7 +109,7 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
                 "video_grid_thw": video_grid_thw
             }
 
-        elif self.train_vision_encoder:
+        elif self.vision_input_type == VisionInputType.IMAGE:
             # Images are already preprocessed and cropped to final size in dataset!
             num_images = len(vision_embeddings)
             processed_images = []
