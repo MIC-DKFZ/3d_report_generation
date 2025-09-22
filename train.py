@@ -344,9 +344,9 @@ def parse_args() -> RunConfig:
         data=DataConfig.model_validate({
             **data_args,
             "dataset_name": args.dataset_name,
-            "dataset_path": args.dataset_path,
-            "embeddings_path": args.embeddings_path,
-            "vqa_path": args.vqa_path,
+            "train_dataset_json_path": args.train_dataset_json_path,
+            "val_dataset_json_path": args.val_dataset_json_path,
+            "vision_input_path": args.vision_input_path,
         }),
         trainer=SFTTrainerConfig.model_validate({
             **sft_trainer_args,

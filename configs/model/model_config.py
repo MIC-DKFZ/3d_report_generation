@@ -16,10 +16,6 @@ class ModelConfig(ConfigBase):
         False,
         description="Train the vision encoder instead of using frozen embeddings."
     )
-    freeze_vision_encoder: bool = Field(
-        False,
-        description="Freeze the vision encoder (no LoRA adapter)."
-    )
     reduce_block: tuple[int, int, int] = Field((2, 2, 2))
 
 
