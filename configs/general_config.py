@@ -6,7 +6,7 @@ class GeneralConfig(ConfigBase):
     """
     General training and experiment configuration.
     """
-    run_name: str | None = Field(..., description="Name of the run. Also applies naming to WandB.")
+    run_name: str | None = Field(None, description="Name of the run. Also applies naming to WandB.")
     train_config: str = Field(..., description="Path to config file (YAML or JSON), "
                                                "relative to the 'VLM_CONFIG_DIR' environment variable")
     output_dir: str | None = Field(None, description="Directory to save model outputs.")

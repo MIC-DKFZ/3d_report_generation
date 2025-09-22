@@ -327,9 +327,9 @@ def parse_args() -> RunConfig:
     sft_trainer_args = config_file["trainer"]
 
     # Resolve model_id if not provided
-    if general_args.get("model_id") is None and general_args["model_type"] not in vlm_registry:
-        raise ValueError(f"Unknown model type: {general_args['model_type']}")
-    model_id = general_args.get("model_id") or vlm_registry[general_args["model_type"]].model_id
+    if model_args.get("model_id") is None and model_args["model_type"] not in vlm_registry:
+        raise ValueError(f"Unknown model type: {model_args['model_type']}")
+    model_id = model_args.get("model_id") or vlm_registry[model_args["model_type"]].model_id
 
     # Parse all args into their respective Pydantic models/configs
     cfg = RunConfig(
@@ -482,7 +482,7 @@ def main():
     cfg.general.output_dir = os.path.join(
         vlm_output_dir,
         cfg.data.dataset_name,
-        os.path.basename(cfg.data.embeddings_path),
+        os.path.basename(cfg.data.vision_input_path),
         os.path.dirname(os.path.relpath(cfg.general.train_config, vlm_config_dir)),
         cfg.general.run_name
     )
@@ -505,7 +505,7 @@ def main():
         local_files_only=cfg.general.local_files_only
     )
 
-    vision_input_type = VisionInputType.IMAGE if general_args.vision_encoder_path else VisionInputType.EMBEDDING
+    vision_input_type = VisionInputType.IMAGE if cfg.model.vision_encoder_path else VisionInputType.EMBEDDING
     # Create datasets
     if cfg.data.dataset_name == "amosmm":
         # Use AMOSMM dataset
