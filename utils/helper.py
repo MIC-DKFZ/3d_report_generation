@@ -6,7 +6,7 @@ import yaml
 import json
 import os
 from pydantic import BaseModel
-from typing import TypeVar
+from typing import TypeVar, Any
 
 
 def seed_everything(seed: int):
@@ -22,6 +22,20 @@ def seed_everything(seed: int):
       # but can impact performance. Use them if you absolutely need deterministic behavior.
       # torch.backends.cudnn.deterministic = True
       # torch.backends.cudnn.benchmark = False
+
+
+def getattr_nested(obj, attr_path: str) -> Any:
+    parts = attr_path.split(".")
+    for part in parts:
+        obj = getattr(obj, part)
+    return obj
+
+
+def setattr_nested(obj, attr_path: str, value) -> None:
+    parts = attr_path.split(".")
+    for part in parts[:-1]:
+        obj = getattr(obj, part)
+    setattr(obj, parts[-1], value)
 
 
 def load_config_file(config_path: str) -> dict:
@@ -76,3 +90,11 @@ def merge_config_with_cli_args(default_model: ConfigT) -> ConfigT:
 
     args_parsed, _ = parser.parse_known_args()
     return default_model.model_copy(update=vars(args_parsed))
+
+
+def is_main_process():
+    """
+    Check if this is the main process (rank 0).
+    As recommended in the JSC tutorial, only rank 0 should handle logging, saving, etc.
+    """
+    return int(os.environ.get("RANK", "0")) == 0

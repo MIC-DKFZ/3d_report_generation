@@ -22,7 +22,7 @@ from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registry import vlm_registry
 from utils import logger
-from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args
+from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args, setattr_nested, is_main_process
 from utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
@@ -58,14 +58,6 @@ def setup_distributed_training():
     else:
         logger.info("Single GPU/CPU training detected")
         return False, 0, 1, 0, 1
-
-
-def is_main_process():
-    """
-    Check if this is the main process (rank 0).
-    As recommended in the JSC tutorial, only rank 0 should handle logging, saving, etc.
-    """
-    return int(os.environ.get("RANK", "0")) == 0
 
 
 class UnifiedVLMTrainer:
