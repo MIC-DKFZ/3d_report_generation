@@ -47,7 +47,7 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
     def __call__(
         self,
         images: ImageInput = None,
-        vision_embeddings: List[torch.Tensor] = None,
+        vision_inputs: List[torch.Tensor] = None,
         text: Union[TextInput, PreTokenizedInput, list[TextInput], list[PreTokenizedInput]] = None,
         videos: VideoInput = None,
         **kwargs: Unpack[Qwen2_5_VLProcessorKwargs],
@@ -99,8 +99,8 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
         video_grid_thw = None
 
         if self.vision_input_type == VisionInputType.EMBEDDING:
-            video_grid_thw = torch.tensor([np.array(v_e.shape[-3:]) // np.array(self.reduce_block) for v_e in vision_embeddings]).int()
-            list_of_vision_embeddings = [torch.tensor(rearrange(v_e, 'b c h w d -> (b h w d) c')) for v_e in vision_embeddings]
+            video_grid_thw = torch.tensor([np.array(v_e.shape[-3:]) // np.array(self.reduce_block) for v_e in vision_inputs]).int()
+            list_of_vision_embeddings = [torch.tensor(rearrange(v_e, 'b c h w d -> (b h w d) c')) for v_e in vision_inputs]
             # TODO fix the following padding (makes no sense right now (but works when all images have same size, otherwise crash with video_grid_thw above later))
             videos_input_embeddings = torch.nn.utils.rnn.pad_sequence(
                list_of_vision_embeddings, batch_first=True, padding_value=0).transpose(2, 1)
@@ -111,10 +111,10 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
 
         elif self.vision_input_type == VisionInputType.IMAGE:
             # Images are already preprocessed and cropped to final size in dataset!
-            num_images = len(vision_embeddings)
+            num_images = len(vision_inputs)
             processed_images = []
             
-            for image_array in vision_embeddings:
+            for image_array in vision_inputs:
                 # Remove singleton first dimension if present (wieso auch immer brauchen wir das bei blosc2, nicht aber bei nrrd)
                 if image_array.ndim == 4 and image_array.shape[0] == 1:
                     image_array = image_array.squeeze(0)
@@ -123,14 +123,14 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
             processed_patches = np.stack(processed_images, axis=0)
             
             # Convert to tensor
-            videos_input_embeddings = processed_patches#orch.from_numpy(processed_patches)
+            videos_input_images = processed_patches#orch.from_numpy(processed_patches)
             #TODO load block size from VE config
-            video_grid_thw = torch.tensor([[videos_input_embeddings[i].shape[0]//(self.reduce_block[0] * 8), 
-                                            videos_input_embeddings[i].shape[1]//(self.reduce_block[1] * 8), 
-                                            videos_input_embeddings[i].shape[2]//(self.reduce_block[2] * 8)] for i in range(num_images)])
+            video_grid_thw = torch.tensor([[videos_input_images[i].shape[0]//(self.reduce_block[0] * 8), 
+                                            videos_input_images[i].shape[1]//(self.reduce_block[1] * 8), 
+                                            videos_input_images[i].shape[2]//(self.reduce_block[2] * 8)] for i in range(num_images)])
             
             videos_inputs = {
-                "pixel_values_videos": videos_input_embeddings,
+                "pixel_values_videos": videos_input_images,
                 "video_grid_thw": video_grid_thw
             }
 

@@ -40,7 +40,7 @@ def z_score_normalization(
     return image
 
 def format_into_message(
-    question, answer, model_name, system_text=SYSTEM_TEXT, embedding_path=None
+    question, answer, model_name, system_text=SYSTEM_TEXT, vision_input_path=None
 ):
 
     system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
@@ -49,7 +49,8 @@ def format_into_message(
         user_message = {
             "role": "user",
             "content": [
-                {"type": "video", "embedding_path": embedding_path},
+                # TODO: where do we use this vision input path?
+                {"type": "video", "vision_input_path": vision_input_path},
                 {"type": "text", "text": question},
             ],
         }
@@ -73,11 +74,17 @@ class MedicalImageDataset(Dataset, ABC):
     Base class for medical imaging datasets with vision-language models
 
     Args:
-        dataset_json_path (str): Path to the dataset JSON file or directory
+        dataset_json_path (str): Path to the dataset JSON file
         model_name (str): Name of the VLM the dataset is used for
         split (str): Split name ('train', 'val' or 'test')
-        embeddings_path (str | Path): Root path to the vision embeddings directory
+        vision_input_path (str | Path): Root path to the vision input (images or embeddings)
+        vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
+        answer_types (tuple, optional): Types of qa pairs to include
+        split_files (dict, optional): Dictionary with split file paths
+        embedding_constant (float or str, optional): If set, use a constant or random embedding
+        do_resize (bool, optional): If True, resize images to a fixed size
+        do_transforms (bool, optional): If True, apply data augmentations to images
     """
 
     def __init__(
@@ -140,7 +147,7 @@ class MedicalImageDataset(Dataset, ABC):
 
     @abstractmethod
     def _get_vision_input_path(self, image_id):
-        """Load embedding path for a given image ID"""
+        """Load vision input path for a given image ID"""
         pass
 
     def _filter_samples(self, samples):
@@ -162,49 +169,49 @@ class MedicalImageDataset(Dataset, ABC):
 
         return filtered_samples
 
-    def _load_embedding(self, embedding_path:Path):
-        """Load embedding from file"""
+    def _load_vision_input(self, vision_input_path:Path):
+        """Load vision input from file"""
         try:
-            if str(embedding_path).endswith(".npy"):
-                embedding = np.load(embedding_path)
-            elif str(embedding_path).endswith(".npz"):
+            if str(vision_input_path).endswith(".npy"):
+                vision_input = np.load(vision_input_path)
+            elif str(vision_input_path).endswith(".npz"):
                 # Use context manager to ensure proper file closure
-                with np.load(embedding_path) as npz_file:
+                with np.load(vision_input_path) as npz_file:
                     # Attempt to load the "embeddings" key if it exists, otherwise load the first array
                     if "embedding" in npz_file:
-                        embedding = npz_file["embeddings"].copy()  # Make a copy to avoid reference issues
+                        vision_input = npz_file["embeddings"].copy()  # Make a copy to avoid reference issues
                     else:
-                        embedding = npz_file[npz_file.files[0]].copy()  # Make a copy to avoid reference issues
+                        vision_input = npz_file[npz_file.files[0]].copy()  # Make a copy to avoid reference issues
 
-            elif str(embedding_path).endswith(".b2nd"):
+            elif str(vision_input_path).endswith(".b2nd"):
                 # Load b2nd file like nnUNet :)
                 dparams = {
                     'nthreads': 1
                 }
                 mmap_kwargs = {} if os.name == "nt" else {'mmap_mode': 'r'}
                 
-                embedding = np.array(blosc2.open(urlpath=embedding_path, mode='r', dparams=dparams, **mmap_kwargs))
+                vision_input = np.array(blosc2.open(urlpath=vision_input_path, mode='r', dparams=dparams, **mmap_kwargs))
 
-            elif str(embedding_path).endswith(".bl2"):
-                embedding = blosc2.load_array(embedding_path)
+            elif str(vision_input_path).endswith(".bl2"):
+                vision_input = blosc2.load_array(vision_input_path)
                 
-            elif str(embedding_path).endswith(".nrrd"):     
-                embedding, header = nrrd.read(embedding_path)
+            elif str(vision_input_path).endswith(".nrrd"):     
+                vision_input, header = nrrd.read(vision_input_path)
 
-            elif str(embedding_path).endswith((".nii.gz", ".nii")):
-                embedding = sitk.GetArrayFromImage(sitk.ReadImage(embedding_path))          
+            elif str(vision_input_path).endswith((".nii.gz", ".nii")):
+                vision_input = sitk.GetArrayFromImage(sitk.ReadImage(vision_input_path))          
 
             else:
-                raise ValueError(f"Unsupported embedding file format: {embedding_path}")
+                raise ValueError(f"Unsupported vision input file format: {vision_input_path}")
             
             if self.vision_input_type == VisionInputType.IMAGE:
-                embedding = z_score_normalization(embedding, False, None, np.float32)
-                embedding = preprocess_3d_image(image_array=embedding, do_resize=self.do_resize, do_transforms=self.do_transforms, split=self.split, training_transforms=self.training_transforms)
+                vision_input = z_score_normalization(vision_input, False, None, np.float32)
+                vision_input = preprocess_3d_image(image_array=vision_input, do_resize=self.do_resize, do_transforms=self.do_transforms, split=self.split, training_transforms=self.training_transforms)
 
-            return embedding
+            return vision_input
             
         except Exception as e:
-            logger.error(f"Error loading embedding from {embedding_path}: {e}")
+            logger.error(f"Error loading vision input from {vision_input_path}: {e}")
             return None
 
     def _embedding_2_tensor(self, embedding):
@@ -238,23 +245,23 @@ class MedicalImageDataset(Dataset, ABC):
 
         # Load embedding
         vision_input_path = self._get_vision_input_path(sample["image_id"])
-        embd = self._load_embedding(vision_input_path)
+        vision_input = self._load_vision_input(vision_input_path)
                 
         if self.embedding_constant is not None:
             if type(self.embedding_constant) is float:
-                result["embedding"] = np.full(embd.shape, self.embedding_constant, dtype=np.float32)
+                result["vision_input"] = np.full(vision_input.shape, self.embedding_constant, dtype=np.float32)
             elif type(self.embedding_constant) is str and self.embedding_constant == "random":
-                result["embedding"] = np.random.rand(embd.shape).astype(np.float32)
+                result["vision_input"] = np.random.rand(vision_input.shape).astype(np.float32)
             else:
                 raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
 
         if self.vision_input_type == VisionInputType.IMAGE:
             if self.embedding_constant is None:
-                result["embedding"] = embd
+                result["vision_input"] = vision_input
         else:
             # do we really need this function? why do reshaping and why use torch.tensor()?
-            # result["embedding"] = self._embedding_2_tensor(embd)
-            result["embedding"] = embd
+            # result["vision_input"] = self._embedding_2_tensor(embd)
+            result["vision_input"] = vision_input
 
         return result
 
@@ -281,12 +288,18 @@ class AMOSMMDataset(MedicalImageDataset):
     Args:
         dataset_json_path (str): Path to the dataset JSON file
         model_name (str): Name of the VLM the dataset is used for
-        split (str): Split name ('train' or 'val')
-        embeddings_path (str | Path): Root path to the vision embeddings directory
+        split (str): Split name ('train', 'val' or 'test')
+        vision_input_path (str | Path): Root path to the vision input (images or embeddings)
+        vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
+        answer_types (tuple, optional): Types of qa pairs to include
+        split_files (dict, optional): Dictionary with split file paths
+        embedding_constant (float or str, optional): If set, use a constant or random embedding
+        do_resize (bool, optional): If True, resize images to a fixed size
+        do_transforms (bool, optional): If True, apply data augmentations to images
     """
     def _get_vision_input_path(self, image_id):
-        """Load embedding path for a given image ID"""
+        """Load vision input path for a given image ID"""
         if self.split == "train":
             image_name = f"{image_id.split("./")[-1].split(".")[0]}_0000"
         else:
@@ -299,28 +312,26 @@ class AMOSMMDataset(MedicalImageDataset):
             raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
         return str(self.vision_input_path / image_name)
 
-    def get_embedding_path(self, image_path):
-        # TODO: is this needed?
-        """Convert image path to embedding path"""
-        base_name = image_path.replace(".nii.gz", "")
-        return str(os.path.join(self.vision_input_path, f"{base_name}_embedding.npy"))
-
 
 class CTRATEDataset(MedicalImageDataset):
     """
     CT-RATE dataset class for CT scan analysis
 
     Args:
-        dataset_json_path (str): Path to the CT-RATE dataset directory
+        dataset_json_path (str): Path to the dataset JSON file
         model_name (str): Name of the VLM the dataset is used for
-        split (str): Split name ('train', 'val', or 'test')
-        embeddings_path (str | Path): Path to the vision embeddings directory
+        split (str): Split name ('train', 'val' or 'test')
+        vision_input_path (str | Path): Root path to the vision input (images or embeddings)
+        vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
-        answer_types (tuple, optional): Types of answers to include
-        use_csv_reports (bool, optional): If True, load from CSV files instead of YML files
+        answer_types (tuple, optional): Types of qa pairs to include
+        split_files (dict, optional): Dictionary with split file paths
+        embedding_constant (float or str, optional): If set, use a constant or random embedding
+        do_resize (bool, optional): If True, resize images to a fixed size
+        do_transforms (bool, optional): If True, apply data augmentations to images
     """
     def _get_vision_input_path(self, image_id):
-        """Load embedding path for a given image ID"""
+        """Load vision input path for a given image ID"""
         split_path = "valid" if self.split == "val" else self.split
         if self.vision_input_type == VisionInputType.EMBEDDING:
             return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}_embedding.bl2")
