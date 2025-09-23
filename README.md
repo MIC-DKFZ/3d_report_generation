@@ -21,8 +21,8 @@ pip install -e .
 ### CTRATEv2
 
 * Dataset path: `/p/scratch/hai_1021/CTRATEv2/CT-RATE/dataset`
-* Train dataset json: `E132-Projekte/Projects/2025_MIC_Rocket_VLM/CTRATEv2_dataset_jsons/ctrate_train.json`
-* Val dataset json: `E132-Projekte/Projects/2025_MIC_Rocket_VLM/CTRATEv2_dataset_jsons/ctrate_val.json`
+* Train dataset json: `/p/scratch/hai_1021/CTRATEv2/CT-RATE/dataset/dataset_jsons/ctrate_train.json`
+* Val dataset json: `/p/scratch/hai_1021/CTRATEv2/CT-RATE/dataset/dataset_jsons/ctrate_val.json`
 * 1mm isotropic images in blosq: `/p/scratch/hai_1021/CTRATEv2_1.0x1.0x1.0/`
 * Lung Crop 1mm isotropic images in blosq: `/p/scratch/hai_1021/CTRATEv2_LungCrop_1.0x1.0x1.0/`
 * Embeddings: `/p/scratch/hai_1023/rocket_vlm/data/CTRATEv2/embeddings/Dataset807_Rocketv2_exclude_CTRATE_val/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth16__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/CTRATEv2_1.0x1.0x1.0`
