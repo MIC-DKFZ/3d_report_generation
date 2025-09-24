@@ -28,6 +28,10 @@ pip install -e .
 * Embeddings: `/p/scratch/hai_1023/rocket_vlm/data/CTRATEv2/embeddings/Dataset807_Rocketv2_exclude_CTRATE_val/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth16__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/CTRATEv2_1.0x1.0x1.0`
 * Lung crop embeddings: `/p/scratch/hai_1023/rocket_vlm/data/CTRATEv2/embeddings/Dataset807_Rocketv2_exclude_CTRATE_val/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth16__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/CTRATEv2_LungCrop_1.0x1.0x1.0`
 
+For dataset json preprocessing (if you want to create the dataset jsons from scratch with `dataset_preprocessing.py`):
+* Train error paths (brain images): `/p/scratch/hai_1021/CTRATEv2/CT-RATE/dataset/error_paths/train_error_paths.txt` 
+* Val error paths (brain images): `/p/scratch/hai_1021/CTRATEv2/CT-RATE/dataset/error_paths/val_error_paths.txt`
+
 #### Statistics of Train and Val dataset json
 * Train dataset json: `Answer type distribution: {'VQA': 865242, 'REPORT_DIAGNOSIS': 46406, 'REPORT': 46406, 'DIAGNOSIS': 46406}`
 * Val dataset json `Answer type distribution: {'VQA': 56202, 'REPORT_DIAGNOSIS': 3005, 'REPORT': 3005, 'DIAGNOSIS': 3005}`
