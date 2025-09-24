@@ -29,8 +29,8 @@ pip install -e .
 * Lung crop embeddings: `/p/scratch/hai_1023/rocket_vlm/data/CTRATEv2/embeddings/Dataset807_Rocketv2_exclude_CTRATE_val/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth16__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/CTRATEv2_LungCrop_1.0x1.0x1.0`
 
 #### Statistics of Train and Val dataset json
-* Train dataset json: `Answer type distribution: {'VQA': 879276, 'REPORT_DIAGNOSIS': 47149, 'REPORT': 47149, 'DIAGNOSIS': 47149}`
-* Val dataset json `Answer type distribution: {'VQA': 56814, 'REPORT_DIAGNOSIS': 3039, 'REPORT': 3039, 'DIAGNOSIS': 3039}`
+* Train dataset json: `Answer type distribution: {'VQA': 865242, 'REPORT_DIAGNOSIS': 46406, 'REPORT': 46406, 'DIAGNOSIS': 46406}`
+* Val dataset json `Answer type distribution: {'VQA': 56202, 'REPORT_DIAGNOSIS': 3005, 'REPORT': 3005, 'DIAGNOSIS': 3005}`
 
 
     

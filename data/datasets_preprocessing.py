@@ -187,9 +187,11 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
         results_file=None,
         max_workers=None,
         overwrite=False,
-        vqa_path=None
+        vqa_path=None,
+        error_path_txt=None
     ):
         self.vqa_path = vqa_path
+        self.error_path_txt = error_path_txt
         super().__init__(
             dataset_path=dataset_path,
             split=split,
@@ -235,6 +237,13 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
                     samples.append(result)
 
         logger.info(f"Successfully loaded {len(samples)} samples from CSV")
+        logger.info(f"Number of samples before filtering: {len(samples)}")
+        if self.error_path_txt is not None:
+            with open(self.error_path_txt, "r") as f:
+                error_paths = f.read().splitlines()
+            error_paths = [os.path.basename(p).replace(".nii.gz","") for p in error_paths]
+            samples = [s for s in samples if s["image_id"] not in error_paths]
+        logger.info(f"Number of samples after filtering: {len(samples)}")
         return samples
 
     def extract_sample_list(self, samples):
@@ -283,6 +292,7 @@ def parse_args():
     arg_parser.add_argument("--split", type=str, default="train", help="Dataset split to process (train, val)")
     arg_parser.add_argument("--overwrite", action="store_true", help="Whether to overwrite existing results file")
     arg_parser.add_argument("--vqa_path", type=str, default=None, help="Path to the VQA data directory (for CTRATE only)")
+    arg_parser.add_argument("--error_path_txt", type=str, default=None, help="Path to txt file with error cases, i.e. brain images (for CTRATE only)")
     args = arg_parser.parse_args()
 
     if args.dataset == "ctrate" and args.vqa_path is None:
@@ -304,6 +314,7 @@ def main():
             results_file=args.results_file,
             split=args.split,
             vqa_path=args.vqa_path,
+            error_path_txt=args.error_path_txt,
             overwrite=args.overwrite
         )
     elif args.dataset.lower() == "amosmm":
