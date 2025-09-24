@@ -89,7 +89,7 @@ class QwenVLModel(AbstractVLMModel):
             # Freeze all parameters except vision adapter
             self._set_trainable_params()
 
-        if self.checkpoint_path:
+        if self.checkpoint_path and (Path(self.checkpoint_path) / "adapter_config.json").exists():
             # this is the peft adapter, not the adapter between vision encoder and language model
             self.model.load_adapter(self.checkpoint_path)
 
