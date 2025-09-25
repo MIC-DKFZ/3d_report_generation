@@ -51,9 +51,9 @@ class QwenVLModel(AbstractVLMModel):
         )
         self.tokenizer = self.processor.tokenizer
 
-        if self.checkpoint_path:
+        if self.checkpoint_dir:
             # If a checkpoint path is provided, load the model from the checkpoint
-            logger.info(f"Loading model from checkpoint: {self.checkpoint_path}")
+            logger.info(f"Loading model from checkpoint: {self.checkpoint_dir}")
             self.model = QwenVLForConditionalGeneration3D.from_pretrained(
                 self.model_id,
                 torch_dtype=torch.bfloat16,
@@ -80,9 +80,9 @@ class QwenVLModel(AbstractVLMModel):
             self.model.model.setup_vision_encoder()
 
         # TODO: since submodules are each wrapped by PEFT, this behaviour probably has to be adjusted
-        if self.checkpoint_path:
+        if self.checkpoint_dir:
             # this is the peft adapter, not the adapter between vision encoder and language model
-            self.model.load_adapter(self.checkpoint_path)
+            self.model.load_adapter(self.checkpoint_dir)
 
         return self.model
 

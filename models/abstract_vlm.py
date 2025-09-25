@@ -14,7 +14,7 @@ class AbstractVLMModel(ABC):
         self.model_id = model_cfg.model_id
         self.vision_encoder_path = model_cfg.vision_encoder.vision_encoder_path
         self.vision_input_type = vision_input_type
-        self.checkpoint_path = checkpoint_path
+        self.checkpoint_dir = checkpoint_path
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
         self.tokenizer = None
