@@ -1,25 +1,16 @@
-from typing import Literal
+from typing import Literal, Annotated, Union
 from pydantic import Field
 from configs.base import ConfigBase
+from configs.model.adapter_configs import QwenAdapterConfig, TestAdapterConfig
+from configs.model.trainable_params_config import TrainableParamsConfig
+from configs.model.vision_encoder_config import VisionEncoderConfig
 
 
 class ModelConfig(ConfigBase):
     model_type: Literal["owl", "qwen"] = Field(..., description="Type of VLM model to train.")
     model_id: str = Field(..., description="Model ID or path.")
-    vision_encoder_path: str | None = Field(None, description="Path to vision encoder checkpoint.")
 
-    train_only_vision_adapter: bool = Field(
-        False,
-        description="Train only the vision adapter (Qwen only)."
-    )
-    train_vision_encoder: bool = Field(
-        False,
-        description="Train the vision encoder instead of using frozen embeddings."
-    )
-    reduce_block: tuple[int, int, int] = Field((2, 2, 2))
+    vision_encoder: VisionEncoderConfig | None = Field(None, description="Should only be None, if you train with embeddings instead of images.")
+    adapter: Annotated[Union[QwenAdapterConfig, TestAdapterConfig], Field(discriminator="type")]
 
-
-# class ModelConfig(ConfigBase):
-#     vision: VisionEncoderConfig
-#     adapter: Annotated[Union[QwenAdapterConfig, TestAdapterConfig], Field(discriminator="type")]
-#     language: LanguageDecoderConfig
+    trainable_params: TrainableParamsConfig

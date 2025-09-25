@@ -10,9 +10,6 @@ from owl.model import OwnOwlModel
 from utils.filter_batch import extract_batch_prompt_only
 from utils import logger
 
-from models.owl_vlm import OwlVLModel
-from models.qwen_vlm import QwenVLModel
-
 
 class PrintEvalBatchCallback(TrainerCallback):
     def __init__(

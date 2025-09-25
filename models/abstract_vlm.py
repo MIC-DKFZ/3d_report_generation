@@ -1,25 +1,27 @@
 import gc
-import os
 from abc import ABC, abstractmethod
-from pathlib import Path
-
 import torch
+from peft import get_peft_model
 
+from configs.model.model_config import ModelConfig
+from configs.model.trainable_params_config import TrainableParamsConfig, TrainableModuleConfig
 from utils import logger
+from utils.helper import getattr_nested, setattr_nested
 
 
 class AbstractVLMModel(ABC):
-    def __init__(self, model_id, train_only_vision_adapter: bool, train_vision_encoder=False, vision_encoder_path=None, device=None, local_files_only=True):
-        self.model_id = model_id
-        # TODO: Make a default argument since its not needed for inference
-        self.train_only_vision_adapter = train_only_vision_adapter
-        self.train_vision_encoder = train_vision_encoder
-        self.vision_encoder_path = vision_encoder_path
+    def __init__(self, model_cfg: ModelConfig, vision_input_type: str, checkpoint_path = None, local_files_only=True, device=None):
+        self.model_id = model_cfg.model_id
+        self.vision_encoder_path = model_cfg.vision_encoder.vision_encoder_path
+        self.vision_input_type = vision_input_type
+        self.checkpoint_path = checkpoint_path
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
         self.tokenizer = None
         self.processor = None
         self.local_files_only = local_files_only
+
+        self.trainable_params: TrainableParamsConfig = model_cfg.trainable_params
 
     @abstractmethod
     def setup_model(self, bnb_config=None):
@@ -45,16 +47,6 @@ class AbstractVLMModel(ABC):
         pass
 
     @abstractmethod
-    def get_trainable_params(self):
-        """
-        Define which parameters should be trainable for this model.
-
-        Returns:
-            A dictionary with configuration for trainable parameters
-        """
-        pass
-
-    @abstractmethod
     def get_model_specific_training_args(self):
         """
         Get model-specific training arguments.
@@ -63,6 +55,61 @@ class AbstractVLMModel(ABC):
             A dictionary with model-specific training arguments
         """
         pass
+
+    @property
+    @abstractmethod
+    def module_attr_map(self) -> dict[str, str]:
+        """
+        Mapping of submodule names to their attribute paths (relative to 'self.model'!!!).
+
+        Required keys:
+          - "vision_encoder"
+          - "adapter"
+          - "language_model"
+          - "lm_head"
+
+        Modules might be nested within the model, e.g., 'self.model.model.vision_encoder'.
+        Each value should be a string path.
+
+        Example
+        -------
+        {
+            "vision_encoder": "model.vision_encoder",
+            "adapter": "model.vision_adapter",
+            "language_model": "model.language_model",
+            "lm_head": "lm_head",
+        }
+        """
+        ...
+
+    def set_trainable_params(self) -> None:
+        """
+        Apply the TrainableParamsConfig in self.trainable_params to each submodule.
+
+        The 'self.module_attr_map' property must be defined in the subclass before calling this function.
+        """
+        logger.info("Setting trainable parameters according to input config:")
+        for module_name, module_attr_path in self.module_attr_map.items():
+            trainable_module_cfg: TrainableModuleConfig = getattr(self.trainable_params, module_name)
+            mode = trainable_module_cfg.mode
+            if mode == "frozen":
+                module: torch.nn.Module = getattr_nested(self.model, module_attr_path)
+                for name, param in module.named_parameters():
+                    param.requires_grad = False
+                logger.info(f"  > {module_name}: frozen")
+            elif mode == "full":
+                module: torch.nn.Module = getattr_nested(self.model, module_attr_path)
+                for name, param in module.named_parameters():
+                    param.requires_grad = True
+                logger.info(f"  > {module_name}: full finetuning")
+            elif mode == "peft":
+                peft_config = trainable_module_cfg.peft.to_peft_config()
+                original_module = getattr_nested(self.model, module_attr_path)
+                wrapped_module = get_peft_model(original_module, peft_config)
+                setattr_nested(self.model, module_attr_path, wrapped_module)
+                logger.info(f"  > {module_name}: PEFT ({trainable_module_cfg.peft.type.upper()})")
+            else:
+                raise ValueError(f"Unknown mode in {TrainableModuleConfig.__name__}: {mode}")
 
     def clear_memory(self):
         """Clear GPU memory and cached objects"""

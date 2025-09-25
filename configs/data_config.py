@@ -7,10 +7,11 @@ class DataConfig(ConfigBase):
     """
     Dataset configuration.
     """
-    dataset_name: Literal["amosmm", "ctrate"] = Field(..., description="Name of the dataset.")
-    train_dataset_json_path: str = Field(..., description="Path to the train dataset JSON file.")
-    val_dataset_json_path: str = Field(..., description="Path to the validation dataset JSON file.")
-    vision_input_path: str = Field(..., description="Path to the vision input (either embeddings or images).")
+    dataset_name: Literal["amosmm", "ctrate"] | None = Field(None, description="Name of the dataset.")
+    train_dataset_json_path: str | None = Field(None, description="Path to the train dataset JSON file.")
+    val_dataset_json_path: str | None = Field(None, description="Path to the validation dataset JSON file.")
+    vision_input_path: str | None = Field(None, description="Path to the vision input (either embeddings or images).")
+    vision_input_type: Literal["image", "embedding"] | None = Field(None, description="Vision input type.")
 
     embedding_constant: float | Literal["random"] | None = Field(
         None,

@@ -57,7 +57,7 @@ def merge_config_with_cli_args(default_model: ConfigT) -> ConfigT:
     Update a Pydantic BaseModel with matching CLI arguments.
 
     Args:
-        default_model: A Pydantic model (e.g. CoreConfig, GeneralConfig, SFTTrainerConfig).
+        default_model: A Pydantic model (e.g. GeneralConfig, ModelConfig, ...).
 
     Returns:
         A new instance of the same model type with updated fields.
@@ -65,6 +65,12 @@ def merge_config_with_cli_args(default_model: ConfigT) -> ConfigT:
     parser = argparse.ArgumentParser()
     for key, value in default_model.model_dump().items():
         arg_type = type(value)
+
+        # Pydantic models should not be passed via CLI.
+        # Without this check, we would replace the pydantic models by dictionaries.
+        if arg_type == dict:
+            continue
+
         if arg_type == bool:
             # Handle boolean values with store_true/store_false
             if value:

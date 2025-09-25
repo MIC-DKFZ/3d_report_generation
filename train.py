@@ -7,7 +7,6 @@ from datetime import datetime
 import torch
 import torch.distributed as dist
 import yaml
-from peft import get_peft_model
 from transformers import BitsAndBytesConfig
 from trl import SFTConfig, SFTTrainer
 
@@ -20,7 +19,7 @@ from configs.trainer_config import SFTTrainerConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
 from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
-from registry import vlm_registry
+from registries.vlm_registry import vlm_registry
 from utils import logger
 from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args, setattr_nested, is_main_process
 from utils.memory_utils import (
@@ -117,13 +116,6 @@ class UnifiedVLMTrainer:
             bnb_4bit_compute_dtype=torch.bfloat16,
         )
 
-    def apply_peft(self, base_model, peft_config):
-        """Apply PEFT configuration to the model and return the PEFT model"""
-        peft_model = get_peft_model(base_model, peft_config)
-        if is_main_process():
-            peft_model.print_trainable_parameters()
-        return peft_model
-
     def setup_logging_dir(self) -> None:
         """
         Prepare the logging directory and initialize its contents:
@@ -159,8 +151,6 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training Setup")
 
-        # Get trainable parameters configuration
-        trainable_params = self.vlm_model.get_trainable_params()
 
         # Create quantization config if needed
         bnb_config = None
@@ -171,22 +161,16 @@ class UnifiedVLMTrainer:
         #     bnb_config = None
 
         # Setup base model with quantization config if applicable
-        base_model = self.vlm_model.setup_model(bnb_config=bnb_config)
+        model = self.vlm_model.setup_model(bnb_config=bnb_config)
 
-        # Apply PEFT if specified in trainable_params
-        peft_config = trainable_params.get("peft_config", None)
-        if peft_config is not None:
-            model_to_train = self.apply_peft(base_model, peft_config)
-        else:
-            model_to_train = self.vlm_model.model
+        # Apply trainable parameter configs
+        self.vlm_model.set_trainable_params()
 
         # Create comprehensive config for WandB logging
         config_dict = create_comprehensive_wandb_config(
             self.vlm_model, self.cfg,
             self.world_size, self.rank
         )
-        # Ensure trainable_params are included in the config
-        config_dict["trainable_params"] = trainable_params
 
         # Only initialize wandb on the main process (rank 0) for DDP
         if is_main_process():
@@ -231,7 +215,7 @@ class UnifiedVLMTrainer:
 
         # Initialize SFT trainer
         self.trainer = SFTTrainer(
-            model=model_to_train,
+            model=model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
@@ -305,6 +289,12 @@ def parse_args() -> RunConfig:
         required=True,
         help="Path to the vision input (either embeddings or images)",
     )
+    args_parser.add_argument(
+        "--vision_input_type",
+        type=str,
+        default="image",
+        help="Vision input type (either 'image' or 'embedding'). Default: 'image'",
+    )
 
     args, _ = args_parser.parse_known_args()
 
@@ -339,6 +329,7 @@ def parse_args() -> RunConfig:
             "train_dataset_json_path": args.train_dataset_json_path,
             "val_dataset_json_path": args.val_dataset_json_path,
             "vision_input_path": args.vision_input_path,
+            "vision_input_type": args.vision_input_type,
         }),
         trainer=SFTTrainerConfig.model_validate({
             **sft_trainer_args,
@@ -431,7 +422,6 @@ def create_comprehensive_wandb_config(
     config_dict = {
         "model_name": type(vlm_model).__name__,
         "model_id": getattr(vlm_model, "model_id", "unknown"),
-        "trainable_params": vlm_model.get_trainable_params(),
         "run_config": cfg.model_dump(),
         "slurm_job_id": slurm_job_id,
         "username": username,
@@ -475,7 +465,7 @@ def main():
         vlm_output_dir,
         cfg.data.dataset_name,
         os.path.basename(cfg.data.vision_input_path),
-        os.path.dirname(os.path.relpath(cfg.general.train_config, vlm_config_dir)),
+        # os.path.dirname(os.path.relpath(cfg.general.train_config, vlm_config_dir)),
         cfg.general.run_name
     )
 
@@ -488,16 +478,26 @@ def main():
         raise ValueError(f"Unknown model type: {cfg.general.model_type}")
 
     vlm_model = vlm_model_class(
-        model_id=cfg.model.model_id,
-        output_dir=cfg.general.output_dir,
-        train_only_vision_adapter=cfg.model.train_only_vision_adapter,
-        reduce_block=cfg.model.reduce_block,
-        train_vision_encoder=cfg.model.train_vision_encoder,
-        vision_encoder_path=cfg.model.vision_encoder_path,
+        model_cfg=cfg.model,
+        vision_input_type=cfg.data.vision_input_type,
         local_files_only=cfg.general.local_files_only
     )
 
-    vision_input_type = VisionInputType.IMAGE if cfg.model.vision_encoder_path else VisionInputType.EMBEDDING
+    # When using embeddings, reset vision-encoder-specific arguments:
+    # - set object references to None
+    # - set preprocessing flags to False
+    if cfg.data.vision_input_type == VisionInputType.EMBEDDING:
+        logger.info("Resetting vision-encoder-specific arguments for embedding input mode:")
+
+        _lis = [
+            (["model.vision_encoder", "model.trainable_params.vision_encoder", "data.embedding_constant"], None),
+            (["data.do_resize", "data.do_transforms"], False),
+        ]
+        for _modules, _val in _lis:
+            for _module in _modules:
+                setattr_nested(cfg, _module, _val)
+                logger.info(f"  - cfg.{_module} set to {_val}")
+
     # Create datasets
     if cfg.data.dataset_name == "amosmm":
         # Use AMOSMM dataset
@@ -506,7 +506,7 @@ def main():
             model_name=cfg.model.model_type,
             split="train",
             vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=vision_input_type,
+            vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_train_samples,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
@@ -518,7 +518,7 @@ def main():
             model_name=cfg.model.model_type,
             split="val",
             vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=vision_input_type,
+            vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_val_samples,  # Limit the validation set size
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
@@ -531,7 +531,7 @@ def main():
             model_name=cfg.model.model_type,
             split="train" if cfg.data.split_idx is None else f"train_{cfg.general.split_idx}",
             vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=vision_input_type,
+            vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_train_samples,
             split_files=cfg.data.split_file,
             answer_types=("TEXT",),
@@ -545,7 +545,7 @@ def main():
             model_name=cfg.model.model_type,
             split="val" if cfg.data.split_idx is None else f"val_{cfg.general.split_idx}",
             vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=vision_input_type,
+            vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_val_samples,  # Limit the validation set size
             split_files=cfg.data.split_file,
             answer_types=("TEXT",),
