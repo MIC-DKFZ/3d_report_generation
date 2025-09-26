@@ -247,6 +247,9 @@ class VisionAdapterReduceBlocks(nn.Module):
 
 
         if x.ndim == 3: # this is the case if we load embeddings
+            # Change x to shape (batch_size, embedding_dim, T, H, W), since embeddings are loaded flattened
+            # Video grid thw is the grid size after the reduce block, that's why we have to multiply with reduce block here
+            # Example: video_grid_thw = (12, 12, 12) and reduce_block=(2,2,2) -> resize to (batch_size, embedding_dim, 24, 24, 24)
             x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
             #x = x.permute(0, 2, 3, 4, 1)  # Move embedding_dim to last dimension
 

@@ -85,6 +85,7 @@ class MedicalImageDataset(Dataset, ABC):
         embedding_constant (float or str, optional): If set, use a constant or random embedding
         do_resize (bool, optional): If True, resize images to a fixed size
         do_transforms (bool, optional): If True, apply data augmentations to images
+        vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
 
     def __init__(
@@ -99,7 +100,8 @@ class MedicalImageDataset(Dataset, ABC):
         split_files=None,
         embedding_constant=None,
         do_resize=False,
-        do_transforms=False
+        do_transforms=False,
+        vision_encoder_patch_size=None,
     ):
         super().__init__()
 
@@ -113,6 +115,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.embedding_constant = embedding_constant
         self.do_resize = do_resize
         self.do_transforms = do_transforms
+        self.vision_encoder_patch_size = vision_encoder_patch_size
 
         if isinstance(answer_types, str):
             answer_types = [
@@ -141,7 +144,7 @@ class MedicalImageDataset(Dataset, ABC):
         if self.do_transforms:
             if self.vision_input_type != VisionInputType.IMAGE:
                 raise ValueError("do_transforms can only be True if vision_input_type is IMAGE")
-            self.training_transforms = get_training_image_transforms()
+            self.training_transforms = get_training_image_transforms(patch_size=self.vision_encoder_patch_size)
         else:
             self.training_transforms = None
 
@@ -206,7 +209,7 @@ class MedicalImageDataset(Dataset, ABC):
             
             if self.vision_input_type == VisionInputType.IMAGE:
                 vision_input = z_score_normalization(vision_input, False, None, np.float32)
-                vision_input = preprocess_3d_image(image_array=vision_input, do_resize=self.do_resize, do_transforms=self.do_transforms, split=self.split, training_transforms=self.training_transforms)
+                vision_input = preprocess_3d_image(image_array=vision_input, do_resize=self.do_resize, do_transforms=self.do_transforms, patch_size=self.vision_encoder_patch_size, split=self.split, training_transforms=self.training_transforms)
 
             return vision_input
             
@@ -297,6 +300,7 @@ class AMOSMMDataset(MedicalImageDataset):
         embedding_constant (float or str, optional): If set, use a constant or random embedding
         do_resize (bool, optional): If True, resize images to a fixed size
         do_transforms (bool, optional): If True, apply data augmentations to images
+        vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
     def _get_vision_input_path(self, image_id):
         """Load vision input path for a given image ID"""
@@ -329,6 +333,7 @@ class CTRATEDataset(MedicalImageDataset):
         embedding_constant (float or str, optional): If set, use a constant or random embedding
         do_resize (bool, optional): If True, resize images to a fixed size
         do_transforms (bool, optional): If True, apply data augmentations to images
+        vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
     def _get_vision_input_path(self, image_id):
         """Load vision input path for a given image ID"""

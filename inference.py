@@ -329,6 +329,12 @@ def main():
         **model_specific_args,
     )
     vision_input_type = VisionInputType.IMAGE if args.vision_encoder_path else VisionInputType.EMBEDDING
+    if vision_input_type == VisionInputType.IMAGE:
+        with open(Path(args.vision_encoder_path) / "plans.json", "r") as f:
+            ve_plans = json.load(f)
+            vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+    else:
+        vision_encoder_patch_size = None
     if args.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
             dataset_json_path=args.dataset_json_path,
@@ -339,7 +345,8 @@ def main():
             n_samples=args.n_samples,  # Limit the validation set size
             do_resize=args.do_resize,
             do_transforms=args.do_validation_transforms,
-            embedding_constant=args.embedding_constant
+            embedding_constant=args.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
         logger.info(f"Loaded {len(test_dataset)} test samples")
     elif args.dataset_name == "ctrate":
@@ -354,7 +361,8 @@ def main():
             answer_types=("TEXT",),
             do_resize=args.do_resize,
             do_transforms=args.do_validation_transforms,
-            embedding_constant=args.embedding_constant
+            embedding_constant=args.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
     else:
         raise ValueError(f"Unsupported dataset name: {args.dataset_name}")

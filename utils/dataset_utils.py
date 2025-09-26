@@ -21,10 +21,7 @@ from batchgeneratorsv2.transforms.utils.random import RandomTransform
 
 # from nnUNetv2
 @staticmethod
-def get_training_image_transforms(
-        # TODO make this adaptive
-        patch_size= [192, 192, 192],
-) -> BasicTransform:
+def get_training_image_transforms(patch_size) -> BasicTransform:
     transforms = []
     patch_size_spatial = patch_size
     ignore_axes = None
@@ -100,7 +97,7 @@ def get_training_image_transforms(
     return ComposeTransforms(transforms)
 
 
-def preprocess_3d_image(image_array, do_resize, do_transforms, split, training_transforms=None):
+def preprocess_3d_image(image_array, do_resize, do_transforms, patch_size, split, training_transforms=None):
     """Preprocess 3D image: convert to float32, remove singleton dims, pad if needed, and random crop to final patch size"""
     # Ensure float32 dtype
     if not isinstance(image_array, np.ndarray):
@@ -111,9 +108,6 @@ def preprocess_3d_image(image_array, do_resize, do_transforms, split, training_t
     # Remove singleton first dimension if present
     if image_array.ndim == 4 and image_array.shape[0] == 1:
         image_array = image_array.squeeze(0)
-    
-    # Final patch size
-    patch_size = (192, 192, 192)
     
     # Get image dimensions (assuming format: H, W, D)
     h, w, d = image_array.shape

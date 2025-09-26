@@ -14,63 +14,6 @@ from data.extractors import AMOSMMExtractor, CTRATEExtractor, LIDCExtractor
 from utils import logger
 
 
-def _load_csv_row(row_data):
-    """Helper function to load a single CSV row for CTRATEDataset"""
-    row, split, vqa_path = row_data
-    
-    volume_name = row['VolumeName']
-    # Extract image_id from volume name (e.g., valid_1_a_1.nii.gz -> valid_1_a_1)
-    image_id = volume_name.replace('.nii.gz', '')
-
-    # Map CSV columns to expected structure
-    findings = row.get('Findings_EN', '')
-    impressions = row.get('Impressions_EN', '')
-    clinical_info = row.get('ClinicalInformation_EN', '')
-    technique = row.get('Technique_EN', '')
-
-    sample = {
-        "image_id": image_id,
-        "tasks": {
-            "classification": {},  # CSV doesn't have classification data
-            "report_gen": findings,
-            "diagnosis": impressions,
-        },
-        # Store additional CSV fields if needed
-        "clinical_information": clinical_info,
-        "technique": technique,
-    }
-    
-    # Load VQA data if vqa_path is provided (reuse existing logic)
-    if vqa_path is not None:
-        try:
-            # Extract case identifier from volume name
-            # valid_1_a_1.nii.gz -> valid_1_a
-            case_dir = '_'.join(image_id.split('_')[:-1])
-            
-            # Determine VQA folder based on case type
-            if case_dir.startswith('train_'):
-                vqa_folder = "train_cases"
-            elif case_dir.startswith('valid_'):
-                vqa_folder = "validation_cases"
-            else:
-                vqa_folder = None
-            
-            if vqa_folder:
-                vqa_file_path = os.path.join(vqa_path, vqa_folder, f"{case_dir}.json")
-                
-                if os.path.exists(vqa_file_path):
-                    with open(vqa_file_path, "r") as f:
-                        vqa_data = json.load(f)
-                    sample["vqa_data"] = vqa_data.get("qa_pairs", [])
-                else:
-                    logger.debug(f"VQA file not found: {vqa_file_path}")
-                        
-        except Exception as e:
-            logger.error(f"Error loading VQA data for {image_id}: {e}")
-    
-    return sample
-
-
 class MedicalImageDatasetPreprocessor(ABC):
     """
     Base class for medical imaging datasets with vision-language models
@@ -179,6 +122,7 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
         max_workers (int, optional): Number of parallel workers for data loading
         overwrite (bool): Whether to overwrite existing preprocess dataset json file
         vqa_path (str, optional): Path to the VQA data directory
+        error_path_txt (str, optional): Path to txt file with error cases, i.e. brain images
     """
     def __init__(
         self,
@@ -199,6 +143,63 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
             max_workers=max_workers,
             overwrite=overwrite
         )
+    
+    @staticmethod
+    def _load_csv_row(row_data):
+        """Helper function to load a single CSV row for CTRATEDataset"""
+        row, split, vqa_path = row_data
+        
+        volume_name = row['VolumeName']
+        # Extract image_id from volume name (e.g., valid_1_a_1.nii.gz -> valid_1_a_1)
+        image_id = volume_name.replace('.nii.gz', '')
+
+        # Map CSV columns to expected structure
+        findings = row.get('Findings_EN', '')
+        impressions = row.get('Impressions_EN', '')
+        clinical_info = row.get('ClinicalInformation_EN', '')
+        technique = row.get('Technique_EN', '')
+
+        sample = {
+            "image_id": image_id,
+            "tasks": {
+                "classification": {},  # CSV doesn't have classification data
+                "report_gen": findings,
+                "diagnosis": impressions,
+            },
+            # Store additional CSV fields if needed
+            "clinical_information": clinical_info,
+            "technique": technique,
+        }
+        
+        # Load VQA data if vqa_path is provided (reuse existing logic)
+        if vqa_path is not None:
+            try:
+                # Extract case identifier from volume name
+                # valid_1_a_1.nii.gz -> valid_1_a
+                case_id = '_'.join(image_id.split('_')[:-1])
+                
+                # Determine VQA folder based on case type
+                if case_id.startswith('train_'):
+                    vqa_folder = "train_cases"
+                elif case_id.startswith('valid_'):
+                    vqa_folder = "validation_cases"
+                else:
+                    vqa_folder = None
+                
+                if vqa_folder:
+                    vqa_file_path = os.path.join(vqa_path, vqa_folder, f"{case_id}.json")
+                    
+                    if os.path.exists(vqa_file_path):
+                        with open(vqa_file_path, "r") as f:
+                            vqa_data = json.load(f)
+                        sample["vqa_data"] = vqa_data.get("qa_pairs", [])
+                    else:
+                        logger.debug(f"VQA file not found: {vqa_file_path}")
+                            
+            except Exception as e:
+                logger.error(f"Error loading VQA data for {image_id}: {e}")
+        
+        return sample
 
     def _load_data(self):
         """Load data from CSV reports instead of YML files"""
@@ -228,7 +229,7 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
         # Use ThreadPoolExecutor for parallel processing
         samples = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_row = {executor.submit(_load_csv_row, row_data): idx 
+            future_to_row = {executor.submit(self._load_csv_row, row_data): idx 
                         for idx, row_data in enumerate(row_data_list)}
             
             for future in tqdm(as_completed(future_to_row), total=len(row_data_list), desc="Loading CSV rows"):

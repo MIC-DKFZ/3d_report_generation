@@ -627,6 +627,13 @@ def main():
     )
 
     vision_input_type = VisionInputType.IMAGE if general_args.vision_encoder_path else VisionInputType.EMBEDDING
+    if vision_input_type == VisionInputType.IMAGE:
+        with open(Path(general_args.vision_encoder_path) / "plans.json", "r") as f:
+            ve_plans = json.load(f)
+            vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+    else:
+        vision_encoder_patch_size = None
+
     # Create datasets
     if general_args.dataset_name == "amosmm":
         # Use AMOSMM dataset
@@ -640,6 +647,7 @@ def main():
             do_resize=general_args.do_resize,
             do_transforms=general_args.do_transforms,
             embedding_constant=general_args.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
 
         val_dataset = AMOSMMDataset(
@@ -652,6 +660,7 @@ def main():
             do_resize=general_args.do_resize,
             do_transforms=general_args.do_transforms,
             embedding_constant=general_args.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
     elif general_args.dataset_name == "ctrate":
         # Use CTRATE dataset
@@ -667,6 +676,7 @@ def main():
             do_resize=general_args.do_resize,
             do_transforms=general_args.do_transforms,
             embedding_constant=general_args.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
 
         val_dataset = CTRATEDataset(
@@ -681,6 +691,7 @@ def main():
             do_resize=general_args.do_resize,
             embedding_constant=general_args.embedding_constant,
             # no transforms for val dataset
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
 
     if general_args.embedding_constant is not None and is_main_process():
