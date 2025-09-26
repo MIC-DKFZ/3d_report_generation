@@ -331,7 +331,7 @@ def parse_args(default_config=None):
     general_parser.add_argument(
         "--train_vision_encoder",
         action="store_true",
-        help="Train the vision encoder (then embedding paths are the paths to the actual images).",
+        help="Train the vision encoder (then vision_input_path needs to point to the actual images).",
     )
     general_parser.add_argument(
         "--vision_encoder_path", type=str, 
