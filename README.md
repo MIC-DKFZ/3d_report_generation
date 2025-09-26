@@ -7,12 +7,36 @@ pip install -e .
 
 ## Data Location
 
-### Datasets
-* AMOS-MM dataset: ``E132-Projekte/Projects/2024_MICCAI24_AMOS-MM``
-* LIDC-IDRI dataset: ``E132-Projekte/Projects/2025_MIC_Rocket_VLM/LIDC-IDRI``. For information how to generate this VQA dataset, see [here](data/lidc/README.md)
+### AMOS-MM
+* Dataset path: `/p/scratch/hai_1021/AMOS-MM`
+* Train dataset json: `/p/scratch/hai_1021/AMOS-MM/dataset_jsons/amosmm_train.json`
+* Val dataset json: `/p/scratch/hai_1021/AMOS-MM/dataset_jsons/amosmm_val.json`
+* 1mm isotropic images in blosq: `/p/scratch/hai_1021/AMOS-MM_1.0x1.0x1.0/`
+* Embeddings: `/p/scratch/hai_1023/rocket_vlm/data/AMOS-MM/embeddings/Dataset807_Rocketv2_exclude_CTRATE_val/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth16__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/AMOS-MM_1.0x1.0x1.0/`
 
-### Embeddings
-* All image embeddings are located in `/p/scratch/hai_1023/rocket_vlm/data/ctrate/embeddings/`
+#### Statistics of Train and Val dataset json
+* Train dataset json: `Answer type distribution: {'MULTIPLE_CHOICE': 13751, 'FINDINGS': 2780, 'IMPRESSIONS': 2240}`
+* Val dataset json: `Answer type distribution: {'MULTIPLE_CHOICE': 2787, 'FINDINGS': 883, 'IMPRESSIONS': 729}`
+
+### CTRATEv2
+
+* Dataset path: `/p/scratch/hai_1021/CTRATEv2/CT-RATE/dataset`
+* Train dataset json: `/p/scratch/hai_1021/CTRATEv2/CT-RATE/dataset/dataset_jsons/ctrate_train.json`
+* Val dataset json: `/p/scratch/hai_1021/CTRATEv2/CT-RATE/dataset/dataset_jsons/ctrate_val.json`
+* 1mm isotropic images in blosq: `/p/scratch/hai_1021/CTRATEv2_1.0x1.0x1.0/`
+* Lung Crop 1mm isotropic images in blosq: `/p/scratch/hai_1021/CTRATEv2_LungCrop_1.0x1.0x1.0/`
+* Embeddings: `/p/scratch/hai_1023/rocket_vlm/data/CTRATEv2/embeddings/Dataset807_Rocketv2_exclude_CTRATE_val/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth16__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/CTRATEv2_1.0x1.0x1.0`
+* Lung crop embeddings: `/p/scratch/hai_1023/rocket_vlm/data/CTRATEv2/embeddings/Dataset807_Rocketv2_exclude_CTRATE_val/EvaMAETrainer__nnsslPlans__mask_ratio07__vit_patch_size888__embed_dim864__encoder_eva_depth16__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres/CTRATEv2_LungCrop_1.0x1.0x1.0`
+
+For dataset json preprocessing (if you want to create the dataset jsons from scratch with `dataset_preprocessing.py`):
+* Train error paths (brain images): `/p/scratch/hai_1021/CTRATEv2/CT-RATE/dataset/error_paths/train_error_paths.txt` 
+* Val error paths (brain images): `/p/scratch/hai_1021/CTRATEv2/CT-RATE/dataset/error_paths/val_error_paths.txt`
+
+#### Statistics of Train and Val dataset json
+* Train dataset json: `Answer type distribution: {'VQA': 865242, 'REPORT_DIAGNOSIS': 46406, 'REPORT': 46406, 'DIAGNOSIS': 46406}`
+* Val dataset json `Answer type distribution: {'VQA': 56202, 'REPORT_DIAGNOSIS': 3005, 'REPORT': 3005, 'DIAGNOSIS': 3005}`
+
+
     
 ## Training
 To run a training, execute

@@ -498,6 +498,13 @@ def main():
                 setattr_nested(cfg, _module, _val)
                 logger.info(f"  - cfg.{_module} set to {_val}")
 
+    if cfg.data.vision_input_type == VisionInputType.IMAGE:
+        with open(Path(cfg.model.vision_encoder.vision_encoder_path) / "plans.json", "r") as f:
+            ve_plans = json.load(f)
+            vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+    else:
+        vision_encoder_patch_size = None
+
     # Create datasets
     if cfg.data.dataset_name == "amosmm":
         # Use AMOSMM dataset
@@ -511,6 +518,7 @@ def main():
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
 
         val_dataset = AMOSMMDataset(
@@ -523,6 +531,7 @@ def main():
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size,
         )
     elif cfg.data.dataset_name == "ctrate":
         # Use CTRATE dataset
@@ -534,10 +543,11 @@ def main():
             vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_train_samples,
             split_files=cfg.data.split_file,
-            answer_types=("TEXT",),
+            answer_types=[{"TEXT": ["VQA", "REPORT_DIAGNOSIS"]}],
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
-            embedding_constant=cfg.data.embedding_constant
+            embedding_constant=cfg.data.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
 
         val_dataset = CTRATEDataset(
@@ -548,10 +558,11 @@ def main():
             vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_val_samples,  # Limit the validation set size
             split_files=cfg.data.split_file,
-            answer_types=("TEXT",),
+            answer_types=[{"TEXT": ["VQA", "REPORT_DIAGNOSIS"]}],
             do_resize=cfg.data.do_resize,
-            embedding_constant=cfg.data.embedding_constant
+            embedding_constant=cfg.data.embedding_constant,
             # no transforms for val dataset
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")

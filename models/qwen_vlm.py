@@ -96,17 +96,17 @@ class QwenVLModel(AbstractVLMModel):
             for example in examples
         ]
 
-        embeddings = [
-            example["embedding"]#.astype(np.float32) #TODO check why we had this cast before
+        vision_inputs = [
+            example["vision_input"]#.astype(np.float32) #TODO check why we had this cast before
             for example in examples
-            if "embedding" in example and example["embedding"] is not None
+            if "vision_input" in example and example["vision_input"] is not None
         ]
 
-        batch = self.processor(text=texts, vision_embeddings=embeddings, return_tensors="pt", padding=True)
+        batch = self.processor(text=texts, vision_inputs=vision_inputs, return_tensors="pt", padding=True)
 
         batch_prompt_only = self.processor(
             text=texts_prompt_only,
-            vision_embeddings=embeddings,
+            vision_inputs=vision_inputs,
             return_tensors="pt",
             padding=True,
         )

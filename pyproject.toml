@@ -31,6 +31,7 @@ dependencies = [
     "batchgeneratorsv2==0.3.0",
     "dynamic-network-architectures==0.4.2",
     "torchrun-jsc",
+    "blosc2"
 ]
 
 [tool.setuptools]

@@ -158,7 +158,6 @@ class AMOSMMExtractor:
         Extract all relevant information from an AMOS-MM sample.
         """
         extracted = {
-            #"image_path": sample["image"],
             "image_id": sample["image"],
             "qa_items": [],
             "report": {},
@@ -217,7 +216,6 @@ class AMOSMMRegionExtractor(AMOSMMExtractor):
         Extract all relevant information from an AMOS-MM sample.
         """
         extracted = {
-            #"image_path": sample["image"],
             "image_id": sample["original_case"],
             "qa_items": [],
             "report": {},
@@ -391,7 +389,6 @@ class CTRATEExtractor:
                         extracted_samples.append(
                             {
                                 "image_id": sample["image_id"],
-                                # "image_path": sample["embedding_path"],
                                 "question": f"Is there evidence of {condition} in this CT scan?",
                                 "answer": "Yes" if value == 1 else "No",
                                 "full_answer": "Yes" if value == 1 else "No",
@@ -409,7 +406,6 @@ class CTRATEExtractor:
             
             extracted_sample = {
                 "image_id": sample["image_id"],
-                # "image_path": sample["embedding_path"],
                 "question": "Generate a detailed report and diagnosis for this CT scan.",
                 "answer": full_answer,
                 "full_answer": full_answer,
@@ -424,7 +420,6 @@ class CTRATEExtractor:
                 report_text = extractor._shuffle_sentences(sample["tasks"]["report_gen"])
                 extracted_sample = {
                     "image_id": sample["image_id"],
-                    # "image_path": sample["embedding_path"],
                     "question": "Generate a detailed report for this CT scan.",
                     "answer": report_text,
                     "full_answer": report_text,
@@ -439,7 +434,6 @@ class CTRATEExtractor:
                 diagnosis_text = extractor._shuffle_sentences(sample["tasks"]["diagnosis"])
                 extracted_sample = {
                     "image_id": sample["image_id"],
-                    # "image_path": sample["embedding_path"],
                     "question": "What is the diagnosis for this CT scan?",
                     "answer": diagnosis_text,
                     "full_answer": diagnosis_text,
@@ -454,7 +448,6 @@ class CTRATEExtractor:
                     answer_text = extractor._shuffle_sentences(qa_pair["answer"])
                     vqa_sample = {
                         "image_id": sample["image_id"],
-                        # "image_path": sample["embedding_path"],
                         "question": qa_pair["question"],
                         "answer": answer_text,
                         "full_answer": answer_text,
