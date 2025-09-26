@@ -1,4 +1,5 @@
 import gc
+import os.path
 from abc import ABC, abstractmethod
 import torch
 from peft import get_peft_model
@@ -10,11 +11,16 @@ from utils.helper import getattr_nested, setattr_nested
 
 
 class AbstractVLMModel(ABC):
-    def __init__(self, model_cfg: ModelConfig, vision_input_type: str, checkpoint_path = None, local_files_only=True, device=None):
+    def __init__(self,
+                 model_cfg: ModelConfig | None = None,
+                 vision_input_type: str | None = None,
+                 checkpoint_dir = None,
+                 local_files_only=True,
+                 device=None):
         self.model_id = model_cfg.model_id
         self.vision_encoder_path = model_cfg.vision_encoder.vision_encoder_path
         self.vision_input_type = vision_input_type
-        self.checkpoint_dir = checkpoint_path
+        self.checkpoint_dir = checkpoint_dir
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
         self.tokenizer = None

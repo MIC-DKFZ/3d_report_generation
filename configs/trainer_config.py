@@ -10,12 +10,16 @@ class SFTTrainerConfig(ConfigBase):
     num_train_epochs: int = Field(3, ge=1, description="Number of training epochs to run.")
     per_device_train_batch_size: int = Field(1, ge=1, description="Batch size per device during training.")
     per_device_eval_batch_size: int = Field(1, ge=1, description="Batch size per device during evaluation.")
+
     gradient_accumulation_steps: int = Field(1, ge=1, description="Number of updates steps to accumulate before performing a backward/update pass.")
     gradient_checkpointing: bool = Field(False, description="Enable gradient checkpointing to save memory at the cost of extra compute.")
+    gradient_checkpointing_kwargs: dict = Field(default_factory=lambda: {"use_reentrant": False}, description="Additional keyword arguments for gradient checkpointing.")
 
     optim: str = Field("adamw_torch", description="Optimizer to use (e.g. adamw_torch, adamw_torch_fused, adamw_hf).")
     learning_rate: float = Field(2e-4, gt=0, description="Initial learning rate for optimizer.")
     lr_scheduler_type: str = Field("cosine", description="Learning rate scheduler type (e.g. linear, cosine, polynomial).")
+    warmup_ratio: float = Field(0.03, ge=0, le=1, description="Ratio of total steps used for linear learning rate warmup.")
+    max_grad_norm: float = Field(0.3, gt=0, description="Maximum gradient norm for gradient clipping.")
 
     logging_steps: int = Field(10, ge=1, description="Number of steps between logging events.")
     eval_steps: int = Field(250, ge=1, description="Number of steps between evaluation runs.")
@@ -28,9 +32,6 @@ class SFTTrainerConfig(ConfigBase):
     save_total_limit: int = Field(2, description="Maximum number of checkpoints to keep. Older ones are deleted.")
 
     load_best_model_at_end: bool = Field(True, description="Whether to load the best model found during training at the end.")
-    max_grad_norm: float = Field(0.3, gt=0, description="Maximum gradient norm for gradient clipping.")
-    warmup_ratio: float = Field(0.03, ge=0, le=1, description="Ratio of total steps used for linear learning rate warmup.")
-    gradient_checkpointing_kwargs: dict = Field(default_factory=lambda: {"use_reentrant": False}, description="Additional keyword arguments for gradient checkpointing.")
     dataset_kwargs: dict = Field(default_factory=lambda: {"skip_prepare_dataset": True}, description="Extra keyword arguments passed to dataset loading/preparation.")
     remove_unused_columns: bool = Field(False, description="Whether to remove unused columns from the dataset before training.")
     report_to: list[str] = Field(default_factory=lambda: ["wandb"], description="List of integrations to report training logs to (e.g. wandb, tensorboard).")

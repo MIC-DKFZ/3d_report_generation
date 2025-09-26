@@ -21,7 +21,7 @@ class QwenVLModel(AbstractVLMModel):
         checkpoint_path=None,
     ):
         super().__init__(model_cfg=model_cfg,
-                         checkpoint_path=checkpoint_path,
+                         checkpoint_dir=checkpoint_path,
                          vision_input_type=vision_input_type,
                          local_files_only=local_files_only)
         self._model_str = "qwen"
