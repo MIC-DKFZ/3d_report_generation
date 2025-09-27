@@ -11,11 +11,7 @@ from transformers import BitsAndBytesConfig
 from trl import SFTConfig, SFTTrainer
 
 import wandb
-from configs.data_config import DataConfig
-from configs.general_config import GeneralConfig
-from configs.model.model_config import ModelConfig
 from configs.run_config import RunConfig
-from configs.trainer_config import SFTTrainerConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
 from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
@@ -27,6 +23,7 @@ from utils.memory_utils import (
     log_memory_usage,
     setup_memory_efficient_training,
 )
+from utils.paths import VLM_CONFIG_DIR, VLM_OUTPUT_DIR
 from utils.vision_input_type import VisionInputType
 
 
@@ -298,7 +295,7 @@ def parse_args() -> RunConfig:
 
     args, _ = args_parser.parse_known_args()
 
-    train_config_path = os.path.join(os.getenv("VLM_CONFIG_DIR"), args.train_config)
+    train_config_path = os.path.join(VLM_CONFIG_DIR, args.train_config)
     if not os.path.exists(train_config_path):
         raise ValueError(f"The provided config file does not exist: {train_config_path}")
 
@@ -460,9 +457,8 @@ def main():
 
     cfg = parse_args()
 
-    vlm_config_dir, vlm_output_dir = os.getenv("VLM_CONFIG_DIR"), os.getenv("VLM_OUTPUT_DIR")
     cfg.general.output_dir = os.path.join(
-        vlm_output_dir,
+        VLM_OUTPUT_DIR,
         cfg.data.dataset_name,
         os.path.basename(cfg.data.vision_input_path),
         # os.path.dirname(os.path.relpath(cfg.general.train_config, vlm_config_dir)),
