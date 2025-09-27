@@ -1,8 +1,10 @@
 import argparse
+import json
 import os
 import shutil
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -311,27 +313,13 @@ def parse_args() -> RunConfig:
     model_id = model_args.get("model_id") or vlm_registry[model_args["model_type"]].model_id
 
     # Parse all args into their respective Pydantic models/configs
-    cfg = RunConfig(
-        general=GeneralConfig.model_validate({
-            **general_args,
-            "train_config": args.train_config,
-        }),
-        model=ModelConfig.model_validate({
-            **model_args,
-            "model_id": model_id,
-        }),
-        data=DataConfig.model_validate({
-            **data_args,
-            "dataset_name": args.dataset_name,
-            "train_dataset_json_path": args.train_dataset_json_path,
-            "val_dataset_json_path": args.val_dataset_json_path,
-            "vision_input_path": args.vision_input_path,
-            "vision_input_type": args.vision_input_type,
-        }),
-        trainer=SFTTrainerConfig.model_validate({
-            **sft_trainer_args,
-        }),
-    )
+    cfg = RunConfig.model_validate({
+        "general": {**general_args, "train_config": args.train_config},
+        "model": {**model_args, "model_id": model_id},
+        "data": {**data_args},
+        "trainer": {**sft_trainer_args},
+    })
+
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
     cfg.general = merge_config_with_cli_args(cfg.general)
