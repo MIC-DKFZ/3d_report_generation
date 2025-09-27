@@ -273,27 +273,6 @@ def parse_args() -> RunConfig:
         "--train_config", type=str, required=True,
         help="Path to config file (YAML or JSON), relative to the 'VLM_CONFIG_DIR' environment variable"
     )
-    args_parser.add_argument(
-        "--dataset_name", type=str, required=True, choices=["ctrate", "amosmm"], help="Name of the dataset"
-    )
-    args_parser.add_argument(
-        "--train_dataset_json_path", type=str, required=True, help="Path to the train dataset JSON file"
-    )
-    args_parser.add_argument(
-        "--val_dataset_json_path", type=str, required=False, help="Path to the validation dataset JSON file"
-    )
-    args_parser.add_argument(
-        "--vision_input_path",
-        type=str,
-        required=True,
-        help="Path to the vision input (either embeddings or images)",
-    )
-    args_parser.add_argument(
-        "--vision_input_type",
-        type=str,
-        default="image",
-        help="Vision input type (either 'image' or 'embedding'). Default: 'image'",
-    )
 
     args, _ = args_parser.parse_known_args()
 
@@ -319,7 +298,6 @@ def parse_args() -> RunConfig:
         "data": {**data_args},
         "trainer": {**sft_trainer_args},
     })
-
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
     cfg.general = merge_config_with_cli_args(cfg.general)
