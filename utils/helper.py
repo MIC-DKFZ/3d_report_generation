@@ -63,12 +63,13 @@ def merge_config_with_cli_args(default_model: ConfigT) -> ConfigT:
         A new instance of the same model type with updated fields.
     """
     parser = argparse.ArgumentParser()
-    for key, value in default_model.model_dump().items():
-        arg_type = type(value)
+    for key, field in default_model.model_fields.items():
+        value = getattr(default_model, key)
+        arg_type = field.annotation
 
-        # Pydantic models should not be passed via CLI.
+        # Pydantic models or dictionaries should not be passed via CLI.
         # Without this check, we would replace the pydantic models by dictionaries.
-        if arg_type == dict:
+        if isinstance(arg_type, (dict, BaseModel)):
             continue
 
         if arg_type == bool:
@@ -89,13 +90,16 @@ def merge_config_with_cli_args(default_model: ConfigT) -> ConfigT:
         else:
             parser.add_argument(
                 f"--{key}",
-                type=arg_type,
+                type=str,           # force CLI args to be parsed as strings; Pydantic will handle casting/validation.
+                                    # prevents argparse from using type=NoneType when the default value is None
                 default=value,
                 help=f"Set {key} (default: {value})",
             )
 
     args_parsed, _ = parser.parse_known_args()
-    return default_model.model_copy(update=vars(args_parsed))
+    return default_model.__class__.model_validate(
+        {**default_model.model_dump(), **vars(args_parsed)}
+    )
 
 
 def is_main_process():

@@ -8,7 +8,10 @@ class ConfigBase(BaseModel):
     - Provides strict validation by forbidding unknown fields.
     - Serves as the root for all configuration schemas.
     """
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_assignment=True
+    )
 
 
 class DiscriminatedConfigBase(ConfigBase):
