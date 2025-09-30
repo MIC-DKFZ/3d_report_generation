@@ -1,6 +1,7 @@
 from typing import Literal
 from pydantic import Field
 from configs.base import ConfigBase
+from utils.vision_input_type import VisionInputType
 
 
 class DataConfig(ConfigBase):
@@ -11,7 +12,7 @@ class DataConfig(ConfigBase):
     train_dataset_json_path: str | None = Field(None, description="Path to the train dataset JSON file.")
     val_dataset_json_path: str | None = Field(None, description="Path to the validation dataset JSON file.")
     vision_input_path: str | None = Field(None, description="Path to the vision input (either embeddings or images).")
-    vision_input_type: Literal["image", "embedding"] | None = Field(None, description="Vision input type.")
+    vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
 
     embedding_constant: float | Literal["random"] | None = Field(
         None,

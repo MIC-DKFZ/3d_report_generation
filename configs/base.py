@@ -10,7 +10,8 @@ class ConfigBase(BaseModel):
     """
     model_config = ConfigDict(
         extra="forbid",
-        validate_assignment=True
+        validate_assignment=True,
+        use_enum_values=True
     )
 
 
