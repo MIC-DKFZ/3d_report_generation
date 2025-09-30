@@ -7,14 +7,13 @@ import safetensors.torch
 import torch
 from peft import get_peft_model
 from transformers import PreTrainedModel
-from transformers.trainer import TRAINER_STATE_NAME
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME
 
 from configs.model.model_config import ModelConfig
 from configs.model.trainable_params_config import TrainableParamsConfig, TrainableModuleConfig
 from configs.run_config import RunConfig
 from utils import logger
-from utils.helper import getattr_nested, setattr_nested
+from utils.helper import getattr_nested, setattr_nested, resolve_ckpt_dir_in_run_dir
 from utils.load_and_save_files import load_json, load_yaml
 from utils.load_sharded_checkpoint import load_sharded_checkpoint, apply_regex_subs, assert_keys_equality
 
@@ -144,25 +143,9 @@ class AbstractVLMModel(ABC):
         Returns:
             An instance of the model with weights restored.
         """
-        run_dir = Path(run_dir)
-        if not run_dir.exists():
-            raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
-        ckpt_dirs = [d for d in run_dir.glob("checkpoint-*") if d.is_dir()]
-        if not ckpt_dirs:
-            raise FileNotFoundError(f"No checkpoint directories found in {run_dir}")
-        ckpt_dirs_sorted = sorted(ckpt_dirs, key=lambda d: int(d.name.split("-")[-1]))
-
-        final_ckpt_dir = ckpt_dirs_sorted[-1]
-        if mode == "final":
-            ckpt_dir = final_ckpt_dir
-        elif mode == "best":
-            final_trainer_state = load_json(final_ckpt_dir / TRAINER_STATE_NAME)
-            best_ckpt_dir = Path(final_trainer_state["best_model_checkpoint"])
-            ckpt_dir = best_ckpt_dir
-        else:
-            raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
-
+        ckpt_dir = resolve_ckpt_dir_in_run_dir(run_dir=run_dir, mode=mode)
         logger.info(f"Loading {mode} model from {str(run_dir)}")
+
         return AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
 
     @staticmethod

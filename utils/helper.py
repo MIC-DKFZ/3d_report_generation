@@ -1,10 +1,13 @@
 import argparse
 import random
+from pathlib import Path
+
 import numpy as np
 import torch
 import os
 from pydantic import BaseModel
-from typing import TypeVar, Any
+from typing import TypeVar, Any, Literal
+from transformers.trainer import TRAINER_STATE_NAME
 from utils.load_and_save_files import load_yaml, load_json
 
 
@@ -98,6 +101,38 @@ def merge_config_with_cli_args(default_model: ConfigT) -> ConfigT:
     return default_model.__class__.model_validate(
         {**default_model.model_dump(), **vars(args_parsed)}
     )
+
+
+def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "best"]) -> Path:
+    """
+    Determine the checkpoint directory within a run directory.
+
+    Args:
+        run_dir: Path to the run directory containing checkpoint subdirectories.
+        mode: Select the 'final' or the 'best' checkpoint within the run directory.
+
+    Returns:
+        Path to the resolved checkpoint directory.
+    """
+    run_dir = Path(run_dir)
+    if not run_dir.exists():
+        raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
+    ckpt_dirs = [d for d in run_dir.glob("checkpoint-*") if d.is_dir()]
+    if not ckpt_dirs:
+        raise FileNotFoundError(f"No checkpoint directories found in {run_dir}")
+    ckpt_dirs_sorted = sorted(ckpt_dirs, key=lambda d: int(d.name.split("-")[-1]))
+
+    final_ckpt_dir = ckpt_dirs_sorted[-1]
+    if mode == "final":
+        ckpt_dir = final_ckpt_dir
+    elif mode == "best":
+        final_trainer_state = load_json(final_ckpt_dir / TRAINER_STATE_NAME)
+        best_ckpt_dir = Path(final_trainer_state["best_model_checkpoint"])
+        ckpt_dir = best_ckpt_dir
+    else:
+        raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
+
+    return ckpt_dir
 
 
 def is_main_process():
