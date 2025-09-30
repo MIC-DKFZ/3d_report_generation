@@ -10,10 +10,10 @@ def load_json(path: str | Path) -> Any:
         return json.load(f)
 
 
-def save_json(obj: Any, path: str | Path, indent: int = 2) -> None:
+def save_json(obj: Any, path: str | Path, indent: int = 4, **kwargs) -> None:
     path = Path(path)
     with path.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=indent, ensure_ascii=False)
+        json.dump(obj, f, indent=indent, **kwargs)
 
 
 def load_yaml(path: str | Path) -> Any:
@@ -22,7 +22,7 @@ def load_yaml(path: str | Path) -> Any:
         return yaml.safe_load(f)
 
 
-def save_yaml(obj: Any, path: str | Path) -> None:
+def save_yaml(obj: Any, path: str | Path, indent: int = 2, **kwargs) -> None:
     path = Path(path)
     with path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(obj, f, sort_keys=False, allow_unicode=True)
+        yaml.safe_dump(obj, f, indent=indent, **kwargs)

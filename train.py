@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 import shutil
 import sys
@@ -8,7 +7,6 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
-import yaml
 from transformers import BitsAndBytesConfig
 from trl import SFTConfig, SFTTrainer
 
@@ -20,6 +18,7 @@ from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
 from utils import logger
 from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args, setattr_nested, is_main_process
+from utils.load_and_save_files import save_yaml, save_json, load_json
 from utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
@@ -129,11 +128,13 @@ class UnifiedVLMTrainer:
 
         # Save final run config
         final_config_path = os.path.join(self.cfg.general.output_dir, "final_config.yml")
-        with open(final_config_path, "w") as f:
-            yaml.safe_dump({
+        save_yaml(
+            {
                 "command": " ".join(sys.argv),
                 "run": self.cfg.model_dump()
-            }, f)
+            },
+            final_config_path
+        )
 
         print(f"Successfully setup output directory in {self.cfg.general.output_dir}")
 
@@ -352,10 +353,7 @@ def ensure_wandb_config_logging():
                 if hasattr(wandb.run, "dir") and wandb.run.dir:
                     config_backup_path = os.path.join(wandb.run.dir, "config_backup.json")
                     try:
-                        import json
-
-                        with open(config_backup_path, "w") as f:
-                            json.dump(config_dict, f, indent=2, default=str)
+                        save_json(config_dict, config_backup_path, default=str)
                         logger.info(f"Config backup saved to: {config_backup_path}")
                     except Exception as e:
                         logger.warning(f"Could not save config backup: {e}")
@@ -461,9 +459,8 @@ def main():
                 logger.info(f"  - cfg.{_module} set to {_val}")
 
     if cfg.data.vision_input_type == VisionInputType.IMAGE:
-        with open(Path(cfg.model.vision_encoder.vision_encoder_path) / "plans.json", "r") as f:
-            ve_plans = json.load(f)
-            vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+        ve_plans = load_json(Path(cfg.model.vision_encoder.vision_encoder_path, "plans.json"))
+        vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
     else:
         vision_encoder_patch_size = None
 

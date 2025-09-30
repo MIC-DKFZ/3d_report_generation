@@ -2,11 +2,10 @@ import argparse
 import random
 import numpy as np
 import torch
-import yaml
-import json
 import os
 from pydantic import BaseModel
 from typing import TypeVar, Any
+from utils.load_and_save_files import load_yaml, load_json
 
 
 def seed_everything(seed: int):
@@ -40,13 +39,12 @@ def setattr_nested(obj, attr_path: str, value) -> None:
 
 def load_config_file(config_path: str) -> dict:
     file_ext = os.path.splitext(config_path)[1].lower()
-    with open(config_path, "r") as file:
-        if file_ext == ".yaml" or file_ext == ".yml":
-            config_file = yaml.safe_load(file)
-        elif file_ext == ".json":
-            config_file = json.load(file)
-        else:
-            raise ValueError(f"Unsupported config file format: {file_ext}")
+    if file_ext == ".yaml" or file_ext == ".yml":
+        config_file = load_yaml(config_path)
+    elif file_ext == ".json":
+        config_file = load_json(config_path)
+    else:
+        raise ValueError(f"Unsupported config file format: {file_ext}")
 
     return config_file
 

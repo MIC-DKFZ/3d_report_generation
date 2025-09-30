@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 import re
 from datetime import datetime
@@ -8,7 +7,6 @@ from uuid import uuid4
 
 import torch
 import torch.distributed as dist
-import yaml
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
@@ -20,6 +18,8 @@ from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
 from utils import logger, rank_zero_filter
 from utils.filter_batch import extract_batch_prompt_only
+from utils.helper import load_config_file
+from utils.load_and_save_files import load_json, save_json
 from utils.vision_input_type import VisionInputType
 
 
@@ -186,8 +186,7 @@ class UnifiedVLMInference:
 
         results_filename = "inference_results.json"
 
-        with open(os.path.join(self.output_dir, results_filename), "w") as f:
-            json.dump(results, f, indent=4)
+        save_json(results, Path(self.output_dir, results_filename))
 
         logger.info(
             f"Saved inference results to {os.path.join(self.output_dir, results_filename)}"
@@ -270,17 +269,10 @@ def parse_args(default_config=None):
 
     # Load config file if provided
     if general_args.inference_config and os.path.exists(general_args.inference_config):
-        file_ext = os.path.splitext(general_args.inference_config)[1].lower()
-        with open(general_args.inference_config, "r") as file:
-            if file_ext == ".yaml" or file_ext == ".yml":
-                file_config = yaml.safe_load(file)
-            elif file_ext == ".json":
-                file_config = json.load(file)
-            else:
-                raise ValueError(f"Unsupported config file format: {file_ext}")
+        file_config = load_config_file(general_args.inference_config)
 
-            # Update config with values from file
-            default_config.update(file_config)
+        # Update config with values from file
+        default_config.update(file_config)
     if general_args.embedding_constant is not None:
         try:
             general_args.embedding_constant = float(general_args.embedding_constant)
@@ -330,9 +322,8 @@ def main():
     )
     vision_input_type = VisionInputType.IMAGE if args.vision_encoder_path else VisionInputType.EMBEDDING
     if vision_input_type == VisionInputType.IMAGE:
-        with open(Path(args.vision_encoder_path) / "plans.json", "r") as f:
-            ve_plans = json.load(f)
-            vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+        ve_plans = load_json(Path(args.vision_encoder_path, "plans.json"))
+        vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
     else:
         vision_encoder_patch_size = None
     if args.dataset_name == "amosmm":
