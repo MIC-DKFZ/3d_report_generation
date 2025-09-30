@@ -162,8 +162,8 @@ class UnifiedVLMTrainer:
         # Setup base model with quantization config if applicable
         model = self.vlm_model.setup_model(bnb_config=bnb_config)
 
-        # Apply trainable parameter configs
-        self.vlm_model.set_trainable_params()
+        # Apply trainable parameter configs and possibly add PEFT adapter layers
+        self.vlm_model.apply_trainable_config()
 
         # Create comprehensive config for WandB logging
         config_dict = create_comprehensive_wandb_config(
@@ -219,7 +219,7 @@ class UnifiedVLMTrainer:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=self.vlm_model.collate_fn,
-            callbacks=callbacks,
+            callbacks=callbacks
         )
 
         # Train model

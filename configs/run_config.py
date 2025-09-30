@@ -9,7 +9,7 @@ class RunConfig(ConfigBase):
     """
     Aggregates all sub-configurations for a training run.
 
-    Currently, the following configuration are held by the RunConfig class:
+    Currently, the following configurations are held by the RunConfig class:
             - general: general info and configurations
             - model: model configs, trainable parameters
             - data: dataset, images/embeddings, data augs, number of samples

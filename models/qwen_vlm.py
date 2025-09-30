@@ -25,9 +25,6 @@ class QwenVLModel(AbstractVLMModel):
                          vision_input_type=vision_input_type,
                          local_files_only=local_files_only)
         self._model_str = "qwen"
-        self.model = None   # init in 'self.setup_model()'
-        self.model_cfg = model_cfg
-
         self.batch_count = 0
 
     @property

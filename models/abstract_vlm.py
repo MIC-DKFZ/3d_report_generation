@@ -18,15 +18,17 @@ class AbstractVLMModel(ABC):
                  local_files_only=True,
                  device=None):
         self.model_id = model_cfg.model_id
+        self.model: PreTrainedModel | None = None
+        self.tokenizer = None
+        self.processor = None
+
         self.vision_encoder_path = model_cfg.vision_encoder.vision_encoder_path
         self.vision_input_type = vision_input_type
         self.checkpoint_dir = checkpoint_dir
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = None
-        self.tokenizer = None
-        self.processor = None
         self.local_files_only = local_files_only
 
+        self.model_cfg = model_cfg
         self.trainable_params: TrainableParamsConfig = model_cfg.trainable_params
 
     @abstractmethod
@@ -88,13 +90,13 @@ class AbstractVLMModel(ABC):
         """
         ...
 
-    def set_trainable_params(self) -> None:
+    def apply_trainable_config(self, verbose=False) -> None:
         """
         Apply the TrainableParamsConfig in self.trainable_params to each submodule.
 
         The 'self.module_attr_map' property must be defined in the subclass before calling this function.
         """
-        logger.info("Setting trainable parameters according to input config:")
+        logger.info("[Trainable Parameters] Setting trainable parameters and/or adding PEFT layers according to input config:")
         for module_name, module_attr_path in self.module_attr_map.items():
             trainable_module_cfg: TrainableModuleConfig = getattr(self.trainable_params, module_name)
             mode = trainable_module_cfg.mode
