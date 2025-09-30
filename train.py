@@ -424,7 +424,7 @@ def main():
     cfg.general.output_dir = os.path.join(
         VLM_OUTPUT_DIR,
         cfg.data.dataset_name,
-        os.path.basename(cfg.data.vision_input_path),
+        os.path.basename(cfg.data.vision_input_path) + "__" + cfg.data.vision_input_type,
         # os.path.dirname(os.path.relpath(cfg.general.train_config, vlm_config_dir)),
         cfg.general.run_name
     )
@@ -447,7 +447,7 @@ def main():
     # - set object references to None
     # - set preprocessing flags to False
     if cfg.data.vision_input_type == VisionInputType.EMBEDDING:
-        logger.info("Resetting vision-encoder-specific arguments for embedding input mode:")
+        logger.info("[Embeddings] Resetting vision-encoder-specific arguments for embedding input mode:")
 
         _lis = [
             (["model.vision_encoder", "model.trainable_params.vision_encoder", "data.embedding_constant"], None),
@@ -456,7 +456,7 @@ def main():
         for _modules, _val in _lis:
             for _module in _modules:
                 setattr_nested(cfg, _module, _val)
-                logger.info(f"  - cfg.{_module} set to {_val}")
+                logger.info(f"  > cfg.{_module} set to {_val}")
 
     if cfg.data.vision_input_type == VisionInputType.IMAGE:
         ve_plans = load_json(Path(cfg.model.vision_encoder.vision_encoder_path, "plans.json"))

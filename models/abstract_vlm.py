@@ -105,6 +105,12 @@ class AbstractVLMModel(ABC):
         logger.info("[Trainable Parameters] Setting trainable parameters and/or adding PEFT layers according to input config:")
         for module_name, module_attr_path in self.module_attr_map.items():
             trainable_module_cfg: TrainableModuleConfig = getattr(self.trainable_params, module_name)
+
+            # trainable_module_cfg can be None (e.g., when embeddings are used directly,
+            # meaning no vision encoder and thus no TrainableModuleConfig for it)
+            if trainable_module_cfg is None:
+                continue
+
             mode = trainable_module_cfg.mode
             if mode == "frozen":
                 module: torch.nn.Module = getattr_nested(self.model, module_attr_path)

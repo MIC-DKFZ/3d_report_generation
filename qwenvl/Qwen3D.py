@@ -39,8 +39,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         self.rope_deltas = None     # cache rope_deltas here
 
         model_cfg = ModelConfig(**model_cfg)
-        self.vision_encoder_path = model_cfg.vision_encoder.vision_encoder_path
-        self.vision_encoder_type = model_cfg.vision_encoder.type
+        self.ve_cfg = model_cfg.vision_encoder
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -51,8 +50,9 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
     def setup_vision_encoder(self):
         # currently only working with MAE 
         # TODO implement other vision encoders
-        plans_file = f"{self.vision_encoder_path}/plans.json"
-        checkpoint_paths = glob.glob(f"{self.vision_encoder_path}/fold_all/checkpoint_*.pth")
+        vision_encoder_path = self.ve_cfg.vision_encoder_path
+        plans_file = f"{vision_encoder_path}/plans.json"
+        checkpoint_paths = glob.glob(f"{vision_encoder_path}/fold_all/checkpoint_*.pth")
         if len(checkpoint_paths) > 1:
             checkpoint_path = [c for c in checkpoint_paths if "final" in c][0]
             logger.info(f"Multiple VE checkpoints found, using final: {checkpoint_path}")
@@ -63,7 +63,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
             checkpoint_path = checkpoint_paths[0]
 
         config = get_config_from_plans(plans_file)
-        vision_encoder_class = vision_encoder_registry[self.vision_encoder_type]
+        vision_encoder_class = vision_encoder_registry[self.ve_cfg.vision_encoder_type]
         self.vision_encoder = vision_encoder_class(
             input_channels=1, output_channels=1, pretrained_weights_file=checkpoint_path, **config
         )
