@@ -1,13 +1,22 @@
+from __future__ import annotations
 import gc
-import os.path
 from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Literal
+import safetensors.torch
 import torch
 from peft import get_peft_model
+from transformers import PreTrainedModel
+from transformers.trainer import TRAINER_STATE_NAME
+from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME
 
 from configs.model.model_config import ModelConfig
 from configs.model.trainable_params_config import TrainableParamsConfig, TrainableModuleConfig
+from configs.run_config import RunConfig
 from utils import logger
 from utils.helper import getattr_nested, setattr_nested
+from utils.load_and_save_files import load_json, load_yaml
+from utils.load_sharded_checkpoint import load_sharded_checkpoint, apply_regex_subs, assert_keys_equality
 
 
 class AbstractVLMModel(ABC):
@@ -118,6 +127,107 @@ class AbstractVLMModel(ABC):
                 logger.info(f"  > {module_name}: PEFT ({trainable_module_cfg.peft.type.upper()})")
             else:
                 raise ValueError(f"Unknown mode in {TrainableModuleConfig.__name__}: {mode}")
+
+        if verbose:
+            for name, param in self.model.named_parameters():
+                print(f"{name}, requires_grad={param.requires_grad}")
+
+    @staticmethod
+    def load_from_run_dir(run_dir: str | Path, mode: Literal["best", "final"] = "best") -> AbstractVLMModel:
+        """
+        Load a trained VLM model from a run directory.
+
+        Args:
+            run_dir: Path to the run directory containing checkpoint subfolders and the final configuration file.
+            mode: Which checkpoint to restore.
+                - "best": Load the checkpoint with the best validation score.
+                - "final": Load the last saved checkpoint after training.
+
+        Returns:
+            An instance of the model with weights restored.
+        """
+        run_dir = Path(run_dir)
+        if not run_dir.exists():
+            raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
+        ckpt_dirs = [d for d in run_dir.glob("checkpoint-*") if d.is_dir()]
+        if not ckpt_dirs:
+            raise FileNotFoundError(f"No checkpoint directories found in {run_dir}")
+        ckpt_dirs_sorted = sorted(ckpt_dirs, key=lambda d: int(d.name.split("-")[-1]))
+
+        final_ckpt_dir = ckpt_dirs_sorted[-1]
+        if mode == "final":
+            ckpt_dir = final_ckpt_dir
+        elif mode == "best":
+            final_trainer_state = load_json(final_ckpt_dir / TRAINER_STATE_NAME)
+            best_ckpt_dir = Path(final_trainer_state["best_model_checkpoint"])
+            ckpt_dir = best_ckpt_dir
+        else:
+            raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
+
+        logger.info(f"Loading {mode} model from {str(run_dir)}")
+        return AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
+
+    @staticmethod
+    def load_from_checkpoint_dir(ckpt_dir: str | Path, strict=True) -> AbstractVLMModel:
+        """
+        Restore a VLM model from a checkpoint directory.
+
+        Args:
+            ckpt_dir: Path to the checkpoint directory.
+                Must contain either a single 'model.safetensors' file or a sharded
+                'model.safetensors.index.json' with corresponding shard files.
+            strict: Whether to strictly enforce that the keys in the checkpoint
+                match the model’s architecture when loading the state dict.
+
+        Returns:
+            An instance of the model with weights restored.
+        """
+        ckpt_dir = Path(ckpt_dir)
+        cfg_dict = load_yaml(ckpt_dir.parent / "final_config.yml")["run"]
+        cfg = RunConfig(**cfg_dict)
+
+        logger.info(f"Loading model from {str(ckpt_dir)}")
+
+        from registries.vlm_registry import vlm_registry
+        vlm_model_class = vlm_registry[cfg.model.model_type].model_class
+        vlm_model: AbstractVLMModel = vlm_model_class(model_cfg=cfg.model,
+                                vision_input_type=cfg.data.vision_input_type,
+                                local_files_only=cfg.general.local_files_only)
+        vlm_model.setup_model()
+        vlm_model.apply_trainable_config()
+        keys_to_ignore = vlm_model.model._tied_weights_keys
+
+        # Try to restore model weights from the checkpoint directory:
+        # 1. If a single safetensors file exists (model.safetensors), load it directly.
+        # 2. Otherwise, if a sharded safetensors index exists (model.safetensors.index.json),
+        #    load all shard files referenced in the index.
+        # 3. If neither exists, raise an error because no valid checkpoint was found.
+        single_path = ckpt_dir / SAFE_WEIGHTS_NAME
+        index_path = ckpt_dir / SAFE_WEIGHTS_INDEX_NAME
+        checkpoint_conversion_mapping = vlm_model.model._checkpoint_conversion_mapping
+
+        if single_path.exists():
+            state_dict = safetensors.torch.load_file(single_path)
+            state_dict = apply_regex_subs(state_dict, checkpoint_conversion_mapping)
+
+            if strict:
+                loaded_keys = state_dict.keys()
+                model_keys = vlm_model.model.state_dict().keys()
+                assert_keys_equality(loaded_keys, model_keys, keys_to_ignore)
+
+            vlm_model.model.load_state_dict(state_dict, strict=False)
+
+            return vlm_model
+
+        if index_path.exists():
+            load_sharded_checkpoint(model=vlm_model.model, folder=ckpt_dir, strict=strict,
+                                    key_mapping=checkpoint_conversion_mapping,
+                                    keys_to_ignore=keys_to_ignore)
+            return vlm_model
+
+        raise FileNotFoundError(
+            f"Neither {SAFE_WEIGHTS_NAME!r} nor {SAFE_WEIGHTS_INDEX_NAME!r} found in {ckpt_dir}"
+        )
 
     def clear_memory(self):
         """Clear GPU memory and cached objects"""
