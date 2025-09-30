@@ -18,10 +18,8 @@ class QwenVLModel(AbstractVLMModel):
         model_cfg: ModelConfig,
         vision_input_type: str,
         local_files_only=False,
-        checkpoint_path=None,
     ):
         super().__init__(model_cfg=model_cfg,
-                         checkpoint_dir=checkpoint_path,
                          vision_input_type=vision_input_type,
                          local_files_only=local_files_only)
         self._model_str = "qwen"
@@ -48,38 +46,14 @@ class QwenVLModel(AbstractVLMModel):
         )
         self.tokenizer = self.processor.tokenizer
 
-        if self.checkpoint_dir:
-            # If a checkpoint path is provided, load the model from the checkpoint
-            logger.info(f"Loading model from checkpoint: {self.checkpoint_dir}")
-            self.model = QwenVLForConditionalGeneration3D.from_pretrained(
-                self.model_id,
-                torch_dtype=torch.bfloat16,
-                quantization_config=bnb_config,
-                model_cfg=self.model_cfg.model_dump(),
-                vision_encoder_path=self.vision_encoder_path
-            )
-        elif bnb_config: # and not self.train_only_vision_adapter:
-            self.model = QwenVLForConditionalGeneration3D.from_pretrained(
-                self.model_id,
-                torch_dtype=torch.bfloat16,
-                quantization_config=bnb_config,
-                model_cfg=self.model_cfg.model_dump(),
-                vision_encoder_path=self.vision_encoder_path
-            )
-        else:
-            self.model = QwenVLForConditionalGeneration3D.from_pretrained(
-                self.model_id,
-                model_cfg=self.model_cfg.model_dump(),
-                torch_dtype=torch.bfloat16
-            )
+        self.model = QwenVLForConditionalGeneration3D.from_pretrained(
+            self.model_id,
+            model_cfg=self.model_cfg.model_dump(),
+            torch_dtype=torch.bfloat16
+        )
         
         if self.vision_input_type == VisionInputType.IMAGE:
             self.model.model.setup_vision_encoder()
-
-        # TODO: since submodules are each wrapped by PEFT, this behaviour probably has to be adjusted
-        if self.checkpoint_dir:
-            # this is the peft adapter, not the adapter between vision encoder and language model
-            self.model.load_adapter(self.checkpoint_dir)
 
         return self.model
 

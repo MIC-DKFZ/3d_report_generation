@@ -23,7 +23,6 @@ class AbstractVLMModel(ABC):
     def __init__(self,
                  model_cfg: ModelConfig | None = None,
                  vision_input_type: str | None = None,
-                 checkpoint_dir = None,
                  local_files_only=True,
                  device=None):
         self.model_id = model_cfg.model_id
@@ -33,7 +32,6 @@ class AbstractVLMModel(ABC):
 
         self.vision_encoder_path = model_cfg.vision_encoder.vision_encoder_path
         self.vision_input_type = vision_input_type
-        self.checkpoint_dir = checkpoint_dir
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.local_files_only = local_files_only
 
