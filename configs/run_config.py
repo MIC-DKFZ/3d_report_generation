@@ -1,8 +1,13 @@
+import os
+from pathlib import Path
+from typing import Any
+from pydantic import Field
 from configs.base import ConfigBase
 from configs.data_config import DataConfig
 from configs.general_config import GeneralConfig
 from configs.model.model_config import ModelConfig
 from configs.trainer_config import SFTTrainerConfig
+from utils.helper import load_config_file, recursive_dict_merge, add_datetime_tag
 
 
 class RunConfig(ConfigBase):
@@ -15,7 +20,57 @@ class RunConfig(ConfigBase):
             - data: dataset, images/embeddings, data augs, number of samples
             - trainer: SFTTrainer hyperparameters
     """
+    base_configs: list[str] | None = Field(
+        None,
+        description="Path(s) to base config(s) to apply first, in left-to-right order."
+    )
     general: GeneralConfig
     model: ModelConfig
     data: DataConfig
     trainer: SFTTrainerConfig
+
+    def resolve_run_name(self) -> None:
+        config_name, _ = os.path.splitext(os.path.basename(self.general.train_config))
+        self.general.run_name = add_datetime_tag(config_name)
+        
+    def resolve_output_dir(self, output_dir: str | Path) -> None:
+        self.general.output_dir = os.path.join(
+            output_dir,
+            self.data.dataset_name,
+            os.path.basename(self.data.vision_input_path),
+            # os.path.dirname(os.path.relpath(self.general.train_config, config_dir)),
+            self.general.run_name
+        )
+
+    @staticmethod
+    def apply_base_configs(cfg_dict: dict[str, Any], config_dir: str | Path, seen: list[str] | None = None) -> dict:
+        """
+        Recursively applies base configurations defined in 'cfg_dict["base_configs"]'.
+
+        Each base configuration is loaded and merged into 'cfg_dict', with values in
+        'cfg_dict' taking precedence over those from the base configurations.
+        Raises a 'RecursionError' if a cyclic reference is detected.
+        """
+        if seen is None:
+            seen = []
+
+        base_configs: list[str] | None = cfg_dict.get("base_configs")
+        if not base_configs:
+            return cfg_dict
+
+        for base_config in base_configs:
+            if base_config in seen:
+                raise RecursionError(
+                    f"Cyclic base config reference: {base_config} found in {seen}"
+                )
+            seen.append(base_config)
+
+            base_cfg_dict = load_config_file(Path(config_dir, base_config))
+            RunConfig.apply_base_configs(base_cfg_dict, config_dir, seen=seen)
+
+            # 'cfg_dict' overrides 'base_cfg_dict'
+            cfg_dict = recursive_dict_merge(base_cfg_dict, cfg_dict)
+
+            seen.pop()
+
+        return cfg_dict

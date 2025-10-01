@@ -38,7 +38,7 @@ class QwenVLModel(AbstractVLMModel):
         """Initialize model, processor and PEFT configuration"""
 
         self.processor = QwenVLProcessor3D.from_pretrained(
-            self.model_id,
+            self.model_cfg.model_id,
             cache_dir=os.path.expanduser("~/.cache/huggingface/hub"),
             local_files_only=self.local_files_only,
             reduce_block=self.model_cfg.adapter.reduce_block,
@@ -47,7 +47,7 @@ class QwenVLModel(AbstractVLMModel):
         self.tokenizer = self.processor.tokenizer
 
         self.model = QwenVLForConditionalGeneration3D.from_pretrained(
-            self.model_id,
+            self.model_cfg.model_id,
             model_cfg=self.model_cfg.model_dump(),
             torch_dtype=torch.bfloat16
         )

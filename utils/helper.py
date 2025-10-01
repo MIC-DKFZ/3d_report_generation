@@ -1,5 +1,6 @@
 import argparse
 import random
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -40,8 +41,8 @@ def setattr_nested(obj, attr_path: str, value) -> None:
     setattr(obj, parts[-1], value)
 
 
-def load_config_file(config_path: str) -> dict:
-    file_ext = os.path.splitext(config_path)[1].lower()
+def load_config_file(config_path: str | Path) -> dict:
+    file_ext = os.path.splitext(str(config_path))[1].lower()
     if file_ext == ".yaml" or file_ext == ".yml":
         config_file = load_yaml(config_path)
     elif file_ext == ".json":
@@ -50,6 +51,10 @@ def load_config_file(config_path: str) -> dict:
         raise ValueError(f"Unsupported config file format: {file_ext}")
 
     return config_file
+
+
+def add_datetime_tag(s: str) -> str:
+    return datetime.now().strftime(f"{s}_%Y-%m-%d_%H-%M-%S")
 
 
 ConfigT = TypeVar("ConfigT", bound=BaseModel)
@@ -133,6 +138,22 @@ def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "bes
         raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
 
     return ckpt_dir
+
+
+def recursive_dict_merge(d1: dict[str, Any], d2: dict[str, Any]) -> dict[str, Any]:
+    """
+    Recursively merge two dictionaries.
+
+    Values from d2 override those from d1.
+    Nested dictionaries are merged recursively, all other values are replaced.
+    """
+    merged = dict(d1)
+    for key, value in d2.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = recursive_dict_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def is_main_process():

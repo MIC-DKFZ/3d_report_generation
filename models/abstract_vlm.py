@@ -14,7 +14,7 @@ from configs.model.trainable_params_config import TrainableParamsConfig, Trainab
 from configs.run_config import RunConfig
 from utils import logger
 from utils.helper import getattr_nested, setattr_nested, resolve_ckpt_dir_in_run_dir
-from utils.load_and_save_files import load_json, load_yaml
+from utils.load_and_save_files import load_yaml
 from utils.load_sharded_checkpoint import load_sharded_checkpoint, apply_regex_subs, assert_keys_equality
 
 
@@ -24,18 +24,15 @@ class AbstractVLMModel(ABC):
                  vision_input_type: str | None = None,
                  local_files_only=True,
                  device=None):
-        self.model_id = model_cfg.model_id
         self.model: PreTrainedModel | None = None
         self.tokenizer = None
         self.processor = None
 
-        self.vision_encoder_path = model_cfg.vision_encoder.vision_encoder_path
-        self.vision_input_type = vision_input_type
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.vision_input_type = vision_input_type
         self.local_files_only = local_files_only
 
         self.model_cfg = model_cfg
-        self.trainable_params: TrainableParamsConfig = model_cfg.trainable_params
 
     @abstractmethod
     def setup_model(self, bnb_config=None):
@@ -104,7 +101,7 @@ class AbstractVLMModel(ABC):
         """
         logger.info("[Trainable Parameters] Setting trainable parameters and/or adding PEFT layers according to input config:")
         for module_name, module_attr_path in self.module_attr_map.items():
-            trainable_module_cfg: TrainableModuleConfig = getattr(self.trainable_params, module_name)
+            trainable_module_cfg: TrainableModuleConfig = getattr(self.model_cfg.trainable_params, module_name)
 
             # trainable_module_cfg can be None (e.g., when embeddings are used directly,
             # meaning no vision encoder and thus no TrainableModuleConfig for it)

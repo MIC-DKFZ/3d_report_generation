@@ -133,10 +133,11 @@ class UnifiedVLMTrainer:
                 "command": " ".join(sys.argv),
                 "run": self.cfg.model_dump()
             },
-            final_config_path
+            final_config_path,
+            sort_keys=False
         )
 
-        print(f"Successfully setup output directory in {self.cfg.general.output_dir}")
+        logger.info(f"Successfully set up output directory in {self.cfg.general.output_dir}")
 
     def train(self, train_dataset, val_dataset):
         """
@@ -277,28 +278,17 @@ def parse_args() -> RunConfig:
 
     args, _ = args_parser.parse_known_args()
 
-    train_config_path = os.path.join(VLM_CONFIG_DIR, args.train_config)
-    if not os.path.exists(train_config_path):
+    train_config_path = Path(VLM_CONFIG_DIR, args.train_config)
+    if not train_config_path.exists():
         raise ValueError(f"The provided config file does not exist: {train_config_path}")
 
-    config_file = load_config_file(train_config_path)
-    general_args = config_file["general"]
-    model_args = config_file["model"]
-    data_args = config_file["data"]
-    sft_trainer_args = config_file["trainer"]
+    cfg_dict = load_config_file(train_config_path)
 
-    # Resolve model_id if not provided
-    if model_args.get("model_id") is None and model_args["model_type"] not in vlm_registry:
-        raise ValueError(f"Unknown model type: {model_args['model_type']}")
-    model_id = model_args.get("model_id") or vlm_registry[model_args["model_type"]].model_id
+    # Merge base configs into cfg_dict
+    cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
 
     # Parse all args into their respective Pydantic models/configs
-    cfg = RunConfig.model_validate({
-        "general": {**general_args, "train_config": args.train_config},
-        "model": {**model_args, "model_id": model_id},
-        "data": {**data_args},
-        "trainer": {**sft_trainer_args},
-    })
+    cfg = RunConfig.model_validate(cfg_dict)
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
     cfg.general = merge_config_with_cli_args(cfg.general)
@@ -306,12 +296,16 @@ def parse_args() -> RunConfig:
     cfg.trainer = merge_config_with_cli_args(cfg.trainer)
     cfg.data = merge_config_with_cli_args(cfg.data)
 
-    # Resolve 'train_config' to absolute path
-    cfg.general.train_config = train_config_path
+    # Set 'train_config' for the first time
+    cfg.general.train_config = str(train_config_path)
 
-    # Use the config filename (without extension) as both 'run_name' and the results folder name later on
-    config_name, _ = os.path.splitext(os.path.basename(cfg.general.train_config))
-    cfg.general.run_name = datetime.now().strftime(f"{config_name}_%Y-%m-%d_%H-%M-%S")
+    # Resolve model_id if not provided
+    if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:
+        raise ValueError(f"Unknown model type: {cfg.model.model_type}")
+    cfg.model.model_id = cfg.model.model_id or vlm_registry[cfg.model.model_type].model_id
+
+    cfg.resolve_run_name()
+    cfg.resolve_output_dir(output_dir=VLM_OUTPUT_DIR)
 
     return cfg
 
@@ -418,16 +412,7 @@ def create_comprehensive_wandb_config(
 
 
 def main():
-
     cfg = parse_args()
-
-    cfg.general.output_dir = os.path.join(
-        VLM_OUTPUT_DIR,
-        cfg.data.dataset_name,
-        os.path.basename(cfg.data.vision_input_path) + "__" + cfg.data.vision_input_type,
-        # os.path.dirname(os.path.relpath(cfg.general.train_config, vlm_config_dir)),
-        cfg.general.run_name
-    )
 
     # TODO: could add it as an argument
     seed_everything(42)  # Set a random seed for reproducibility
@@ -447,7 +432,7 @@ def main():
     # - set object references to None
     # - set preprocessing flags to False
     if cfg.data.vision_input_type == VisionInputType.EMBEDDING:
-        logger.info("[Embeddings] Resetting vision-encoder-specific arguments for embedding input mode:")
+        logger.info("[VisionInputType] Resetting vision-encoder-specific arguments for EMBEDDING input mode:")
 
         _lis = [
             (["model.vision_encoder", "model.trainable_params.vision_encoder", "data.embedding_constant"], None),

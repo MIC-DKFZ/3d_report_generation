@@ -63,7 +63,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
             checkpoint_path = checkpoint_paths[0]
 
         config = get_config_from_plans(plans_file)
-        vision_encoder_class = vision_encoder_registry[self.ve_cfg.vision_encoder_type]
+        vision_encoder_class = vision_encoder_registry[self.ve_cfg.type]
         self.vision_encoder = vision_encoder_class(
             input_channels=1, output_channels=1, pretrained_weights_file=checkpoint_path, **config
         )

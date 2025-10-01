@@ -47,7 +47,7 @@ class TrainableModuleConfig(ConfigBase):
 
 
 class TrainableParamsConfig(ConfigBase):
-    vision_encoder: TrainableModuleConfig | None
+    vision_encoder: TrainableModuleConfig | None = None
     adapter: TrainableModuleConfig
     language_model: TrainableModuleConfig
     lm_head: TrainableModuleConfig
