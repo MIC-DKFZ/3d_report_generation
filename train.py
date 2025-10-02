@@ -713,6 +713,7 @@ def main():
         vlm_model,
         output_dir=general_args.output_dir,
         sft_trainer_config=sft_trainer_config,
+        wandb_project=general_args.wandb_project,
     )
 
     # Update trainer with additional config for wandb logging
