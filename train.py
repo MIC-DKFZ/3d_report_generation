@@ -25,6 +25,7 @@ from utils.memory_utils import (
     setup_memory_efficient_training,
 )
 from utils.paths import VLM_CONFIG_DIR, VLM_OUTPUT_DIR
+from utils.setup_logging_dir import setup_logging_dir
 from utils.vision_input_type import VisionInputType
 
 
@@ -81,10 +82,6 @@ class UnifiedVLMTrainer:
          self.local_rank,
          self.local_world_size) = setup_distributed_training()
 
-        # Setup output directory (only on main process)
-        if is_main_process():
-            self.setup_logging_dir()
-
     def get_training_args(self):
         """Configure standard training arguments for distributed training"""
         num_cores = os.cpu_count()
@@ -114,31 +111,6 @@ class UnifiedVLMTrainer:
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.bfloat16,
         )
-
-    def setup_logging_dir(self) -> None:
-        """
-        Prepare the logging directory and initialize its contents:
-            - input_config.yml: a copy of the provided input config file
-            - final_config.yml: final merged configuration (defaults + input config + CLI args)
-            - train.log: log file for runtime logs
-        """
-        os.makedirs(self.cfg.general.output_dir, exist_ok=True)
-        shutil.copyfile(self.cfg.general.train_config, os.path.join(self.cfg.general.output_dir, "input_config.yml"))
-        log_file_path = os.path.join(self.cfg.general.output_dir, "train.log")
-        logger.add(log_file_path)
-
-        # Save final run config
-        final_config_path = os.path.join(self.cfg.general.output_dir, "final_config.yml")
-        save_yaml(
-            {
-                "command": " ".join(sys.argv),
-                "run": self.cfg.model_dump()
-            },
-            final_config_path,
-            sort_keys=False
-        )
-
-        logger.info(f"Successfully set up output directory in {self.cfg.general.output_dir}")
 
     def train(self, train_dataset, val_dataset):
         """
@@ -414,6 +386,10 @@ def create_comprehensive_wandb_config(
 
 def main():
     cfg = parse_args()
+
+    # Setup output directory (only on main process)
+    if is_main_process():
+        setup_logging_dir(cfg=cfg)
 
     # TODO: could add it as an argument
     seed_everything(42)  # Set a random seed for reproducibility
