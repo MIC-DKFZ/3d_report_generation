@@ -103,6 +103,7 @@ class UnifiedVLMTrainer:
 
         return SFTConfig(**self.cfg.trainer.model_dump(),
                          **model_args,
+                         run_name=self.cfg.general.run_name,
                          output_dir=self.cfg.general.output_dir)
 
     def get_quantization_config(self):
@@ -234,8 +235,8 @@ class UnifiedVLMTrainer:
             log_memory_usage("After Training")
 
         # Save model (only on main process)
-        if is_main_process():
-            self.trainer.save_model(self.cfg.general.output_dir)
+        # if is_main_process():
+        #     self.trainer.save_model(self.cfg.general.output_dir)
 
         # Synchronize all processes before cleanup
         if self.is_distributed:
