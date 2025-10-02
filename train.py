@@ -18,7 +18,7 @@ from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
 from utils import logger
 from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args, setattr_nested, is_main_process
-from utils.load_and_save_files import save_yaml, save_json, load_json
+from utils.load_and_save_files import save_json, load_json
 from utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
@@ -435,6 +435,7 @@ def main():
             split="train",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
+            answer_types=cfg.data.answer_types,
             n_samples=cfg.data.n_train_samples,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
@@ -449,6 +450,7 @@ def main():
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_val_samples,  # Limit the validation set size
+            answer_types=cfg.data.answer_types,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
@@ -463,7 +465,7 @@ def main():
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_train_samples,
-            answer_types=[{"TEXT": ["VQA", "REPORT_DIAGNOSIS"]}],
+            answer_types=cfg.data.answer_types,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
@@ -477,7 +479,7 @@ def main():
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_val_samples,  # Limit the validation set size
-            answer_types=[{"TEXT": ["VQA", "REPORT_DIAGNOSIS"]}],
+            answer_types=cfg.data.answer_types,
             do_resize=cfg.data.do_resize,
             embedding_constant=cfg.data.embedding_constant,
             # no transforms for val dataset

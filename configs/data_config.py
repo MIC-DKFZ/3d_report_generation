@@ -14,6 +14,8 @@ class DataConfig(ConfigBase):
     vision_input_path: str | None = Field(None, description="Path to the vision input (either embeddings or images).")
     vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
 
+    answer_types: str | list = Field(..., description="Which answer types and subtypes to include during training.")
+
     embedding_constant: float | Literal["random"] | None = Field(
         None,
         description="Constant value for language-only baseline. Either a float or 'random'."
