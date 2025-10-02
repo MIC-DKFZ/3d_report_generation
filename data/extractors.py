@@ -158,7 +158,6 @@ class AMOSMMExtractor:
         Extract all relevant information from an AMOS-MM sample.
         """
         extracted = {
-            "image_path": sample["image"],
             "image_id": sample["image"],
             "qa_items": [],
             "report": {},
@@ -217,7 +216,6 @@ class AMOSMMRegionExtractor(AMOSMMExtractor):
         Extract all relevant information from an AMOS-MM sample.
         """
         extracted = {
-            "image_path": sample["image"],
             "image_id": sample["original_case"],
             "qa_items": [],
             "report": {},
@@ -391,7 +389,6 @@ class CTRATEExtractor:
                         extracted_samples.append(
                             {
                                 "image_id": sample["image_id"],
-                                "image_path": sample["embedding_path"],
                                 "question": f"Is there evidence of {condition} in this CT scan?",
                                 "answer": "Yes" if value == 1 else "No",
                                 "full_answer": "Yes" if value == 1 else "No",
@@ -401,65 +398,56 @@ class CTRATEExtractor:
                                 "system_text": "You are a medical imaging AI trained to analyze CT scans.",
                             }
                         )
-            if (
-                "report_gen" in sample["tasks"]
-                and sample["tasks"]["report_gen"]
-                and "diagnosis" in sample["tasks"]
-                and sample["tasks"]["diagnosis"]
-            ):
-                # If both report generation and diagnosis are present, we can combine them
+
+            # Combination of report and diagnosis
+            report_text = extractor._shuffle_sentences(sample["tasks"]["report_gen"])
+            diagnosis_text = extractor._shuffle_sentences(sample["tasks"]["diagnosis"])
+            full_answer = f"Findings: {report_text}\nImpression: {diagnosis_text}"
+            
+            extracted_sample = {
+                "image_id": sample["image_id"],
+                "question": "Generate a detailed report and diagnosis for this CT scan.",
+                "answer": full_answer,
+                "full_answer": full_answer,
+                "answer_type": "TEXT",
+                "answer_subtype": "REPORT_DIAGNOSIS",
+                "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+            }
+            extracted_samples.append(extracted_sample)
+
+            # Report generation sample
+            if "report_gen" in sample["tasks"] and sample["tasks"]["report_gen"]:
                 report_text = extractor._shuffle_sentences(sample["tasks"]["report_gen"])
-                diagnosis_text = extractor._shuffle_sentences(sample["tasks"]["diagnosis"])
-                full_answer = f"Findings: {report_text}\nImpression: {diagnosis_text}"
-                
                 extracted_sample = {
                     "image_id": sample["image_id"],
-                    "image_path": sample["embedding_path"],
-                    "question": "Generate a detailed report and diagnosis for this CT scan.",
-                    "answer": full_answer,
-                    "full_answer": full_answer,
+                    "question": "Generate a detailed report for this CT scan.",
+                    "answer": report_text,
+                    "full_answer": report_text,
                     "answer_type": "TEXT",
-                    "answer_subtype": "REPORT_DIAGNOSIS",
+                    "answer_subtype": "REPORT",
                     "system_text": "You are a medical imaging AI trained to analyze CT scans.",
                 }
                 extracted_samples.append(extracted_sample)
-            else:
-                # Report generation sample
-                if "report_gen" in sample["tasks"] and sample["tasks"]["report_gen"]:
-                    report_text = extractor._shuffle_sentences(sample["tasks"]["report_gen"])
-                    extracted_sample = {
-                        "image_id": sample["image_id"],
-                        "image_path": sample["embedding_path"],
-                        "question": "Generate a detailed report for this CT scan.",
-                        "answer": report_text,
-                        "full_answer": report_text,
-                        "answer_type": "TEXT",
-                        "answer_subtype": "REPORT",
-                        "system_text": "You are a medical imaging AI trained to analyze CT scans.",
-                    }
-                    extracted_samples.append(extracted_sample)
 
-                # Diagnosis sample
-                if "diagnosis" in sample["tasks"] and sample["tasks"]["diagnosis"]:
-                    diagnosis_text = extractor._shuffle_sentences(sample["tasks"]["diagnosis"])
-                    extracted_sample = {
-                        "image_id": sample["image_id"],
-                        "image_path": sample["embedding_path"],
-                        "question": "What is the diagnosis for this CT scan?",
-                        "answer": diagnosis_text,
-                        "full_answer": diagnosis_text,
-                        "answer_type": "TEXT",
-                        "answer_subtype": "DIAGNOSIS",
-                        "system_text": "You are a medical imaging AI trained to analyze CT scans.",
-                    }
-                    extracted_samples.append(extracted_sample)
+            # Diagnosis sample
+            if "diagnosis" in sample["tasks"] and sample["tasks"]["diagnosis"]:
+                diagnosis_text = extractor._shuffle_sentences(sample["tasks"]["diagnosis"])
+                extracted_sample = {
+                    "image_id": sample["image_id"],
+                    "question": "What is the diagnosis for this CT scan?",
+                    "answer": diagnosis_text,
+                    "full_answer": diagnosis_text,
+                    "answer_type": "TEXT",
+                    "answer_subtype": "DIAGNOSIS",
+                    "system_text": "You are a medical imaging AI trained to analyze CT scans.",
+                }
+                extracted_samples.append(extracted_sample)
 
             if "vqa_data" in sample:
                 for qa_pair in sample["vqa_data"]:
                     answer_text = extractor._shuffle_sentences(qa_pair["answer"])
                     vqa_sample = {
                         "image_id": sample["image_id"],
-                        "image_path": sample["embedding_path"],
                         "question": qa_pair["question"],
                         "answer": answer_text,
                         "full_answer": answer_text,

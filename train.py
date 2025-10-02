@@ -24,6 +24,7 @@ from utils.memory_utils import (
     log_memory_usage,
     setup_memory_efficient_training,
 )
+from utils.vision_input_type import VisionInputType
 
 
 def setup_distributed_training():
@@ -294,10 +295,10 @@ def parse_args(default_config=None):
     )
     general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
     general_parser.add_argument(
-        "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
+        "--train_dataset_json_path", type=str, required=True, help="Path to the train dataset JSON file"
     )
     general_parser.add_argument(
-        "--vqa_path", type=str, default=None, help="Path to generated CTRATE VQA data",
+        "--val_dataset_json_path", type=str, required=False, help="Path to the validation dataset JSON file"
     )
     general_parser.add_argument(
         "--output_dir",
@@ -311,17 +312,14 @@ def parse_args(default_config=None):
         default="debug",
         help="WandB project name",
     )
-    
     general_parser.add_argument(
-        "--embeddings_path",
+        "--vision_input_path",
         type=str,
         required=True,
-        help="Path to the vision embeddings",
+        help="Path to the vision input (either embeddings or images)",
     )
-
     general_parser.add_argument(
         "--embedding_constant",
-        # type=float,
         default=None,
         help="Constant value for training language only baseline (! Do not set this when training a VLM !). Can either be a float to set the whole embedding to a constant value or 'random' to set the embedding to a random values.",
     )
@@ -331,17 +329,14 @@ def parse_args(default_config=None):
         help="Train only the vision adapter (Qwen only)",
     )
     general_parser.add_argument(
-        "--train_vision_encoder", #TODO fix that this means use a vision encoder instead of loading frozen embeddings
+        "--train_vision_encoder",
         action="store_true",
-        help="Train the vision encoder (then embedding paths are the paths to the actual images).",
+        help="Train the vision encoder (then vision_input_path needs to point to the actual images).",
     )
     general_parser.add_argument(
-        "--freeze_vision_encoder",
-        action="store_true",
-        help="freeze vision encoder (and no lora adapter)",
-    )
-    general_parser.add_argument(
-        "--vision_encoder_path", type=str, help="Path to vision encoder checkpoint"
+        "--vision_encoder_path", type=str, 
+        help="Path to vision encoder checkpoint. If None, use precomputed embeddings as input.",
+        default=None
     )
     general_parser.add_argument(
         "--train_config", type=str, help="Path to config file (YAML or JSON)"
@@ -356,33 +351,16 @@ def parse_args(default_config=None):
         "--dataset_name", type=str, default="ctrate", help="Name of the dataset"
     )
     general_parser.add_argument(
-        "--dataset_cache", type=str, default=None, help="Path to cache file for the dataset"
-    )
-    general_parser.add_argument(
-        "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
-    )
-    general_parser.add_argument(
         "--n_train_samples", type=int, default=None, help="Number of training samples to use"
     )
     general_parser.add_argument(
         "--n_val_samples", type=int, default=50, help="Number of validation samples to use"
     )
     general_parser.add_argument(
-        "--use_csv_reports",
-        action="store_true",
-        help="Get reports from CSV file instead of yml files",
-    )
-    general_parser.add_argument(
         "--reduce_block",
         type=lambda s: [int(x) for x in s.strip("()").split(",")],
         default=[2, 2, 2],
         help="List for reduce_block, e.g. (2,2,2) or (4,4,4)",
-    )
-    general_parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=4,
-        help="Batch size for training (default: 4)",
     )
     general_parser.add_argument(
         "--do_resize",
@@ -608,7 +586,6 @@ def main():
     }   
     general_args, sft_trainer_args = parse_args(default_sft_trainer_config)
     sft_trainer_config = vars(sft_trainer_args)
-    sft_trainer_config["per_device_train_batch_size"] = general_args.batch_size
 
     # Log file setup (only on main process)
     if is_main_process():
@@ -646,64 +623,75 @@ def main():
         reduce_block=general_args.reduce_block,
         train_vision_encoder=general_args.train_vision_encoder,
         vision_encoder_path=general_args.vision_encoder_path,
-        freeze_vision_encoder=general_args.freeze_vision_encoder,
         local_files_only=general_args.local_files_only
     )
+
+    vision_input_type = VisionInputType.IMAGE if general_args.vision_encoder_path else VisionInputType.EMBEDDING
+    if vision_input_type == VisionInputType.IMAGE:
+        with open(Path(general_args.vision_encoder_path) / "plans.json", "r") as f:
+            ve_plans = json.load(f)
+            vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+    else:
+        vision_encoder_patch_size = None
 
     # Create datasets
     if general_args.dataset_name == "amosmm":
         # Use AMOSMM dataset
         train_dataset = AMOSMMDataset(
-            dataset_json_path=general_args.dataset_path,
+            dataset_json_path=general_args.train_dataset_json_path,
             model_name=general_args.model_type,
             split="train",
-            embeddings_path=general_args.embeddings_path,
-            cache_file=general_args.dataset_cache,  # Use cache file if provided
+            vision_input_path=general_args.vision_input_path,
+            vision_input_type=vision_input_type,
+            n_samples=general_args.n_train_samples,
+            do_resize=general_args.do_resize,
+            do_transforms=general_args.do_transforms,
             embedding_constant=general_args.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
 
         val_dataset = AMOSMMDataset(
-            dataset_json_path=general_args.dataset_path,
+            dataset_json_path=general_args.val_dataset_json_path,
             model_name=general_args.model_type,
             split="val",
-            embeddings_path=general_args.embeddings_path,
+            vision_input_path=general_args.vision_input_path,
+            vision_input_type=vision_input_type,
             n_samples=general_args.n_val_samples,  # Limit the validation set size
-            cache_file=general_args.dataset_cache_val,  # Use cache file if provided
+            do_resize=general_args.do_resize,
+            do_transforms=general_args.do_transforms,
             embedding_constant=general_args.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
     elif general_args.dataset_name == "ctrate":
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
-            dataset_json_path=general_args.dataset_path,
+            dataset_json_path=general_args.train_dataset_json_path,
             model_name=general_args.model_type,
             split="train" if general_args.split_idx is None else f"train_{general_args.split_idx}",
-            vqa_path=general_args.vqa_path,
-            embeddings_path=general_args.embeddings_path,
+            vision_input_path=general_args.vision_input_path,
+            vision_input_type=vision_input_type,
             n_samples=general_args.n_train_samples,
             split_files=general_args.split_file,
-            answer_types=("TEXT",),
-            cache_file=general_args.dataset_cache,  # Use cache file if provided
-            load_image=general_args.train_vision_encoder,
+            answer_types=[{"TEXT": ["REPORT_DIAGNOSIS"]}],
             do_resize=general_args.do_resize,
             do_transforms=general_args.do_transforms,
             embedding_constant=general_args.embedding_constant,
-            use_csv_reports=general_args.use_csv_reports
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
 
         val_dataset = CTRATEDataset(
-            dataset_json_path=general_args.dataset_path,
+            dataset_json_path=general_args.val_dataset_json_path,
             model_name=general_args.model_type,
             split="val" if general_args.split_idx is None else f"val_{general_args.split_idx}",
-            embeddings_path=general_args.embeddings_path,
+            vision_input_path=general_args.vision_input_path,
+            vision_input_type=vision_input_type,
             n_samples=general_args.n_val_samples,  # Limit the validation set size
             split_files=general_args.split_file,
-            answer_types=("TEXT",),
-            cache_file=general_args.dataset_cache_val,  # Use cache file if provided
-            load_image=general_args.train_vision_encoder,
+            answer_types=[{"TEXT": ["REPORT_DIAGNOSIS"]}],
             do_resize=general_args.do_resize,
             embedding_constant=general_args.embedding_constant,
-            use_csv_reports=general_args.use_csv_reports
             # no transforms for val dataset
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
 
     if general_args.embedding_constant is not None and is_main_process():
@@ -717,13 +705,15 @@ def main():
         print(
             f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
         )
-        logger.info(f"Using batch size: {general_args.batch_size}")
+        logger.info(f"Using train batch size: {sft_trainer_config['per_device_train_batch_size']}")
+        logger.info(f"Using eval batch size: {sft_trainer_config['per_device_eval_batch_size']}")
 
     # Create the trainer and train the model
     trainer = UnifiedVLMTrainer(
         vlm_model,
         output_dir=general_args.output_dir,
         sft_trainer_config=sft_trainer_config,
+        wandb_project=general_args.wandb_project,
     )
 
     # Update trainer with additional config for wandb logging

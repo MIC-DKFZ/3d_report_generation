@@ -247,7 +247,10 @@ class VisionAdapterReduceBlocks(nn.Module):
 
 
         if x.ndim == 3: # this is the case if we load embeddings
-            x = x.reshape(batch_size, embedding_dim, *video_grid_thw[0])
+            # Change x to shape (batch_size, embedding_dim, T, H, W), since embeddings are loaded flattened
+            # Video grid thw is the grid size after the reduce block, that's why we have to multiply with reduce block here
+            # Example: video_grid_thw = (12, 12, 12) and reduce_block=(2,2,2) -> resize to (batch_size, embedding_dim, 24, 24, 24)
+            x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
             #x = x.permute(0, 2, 3, 4, 1)  # Move embedding_dim to last dimension
 
 
@@ -284,7 +287,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
     config: Qwen2_5_VLConfig
     _no_split_modules = ["Qwen2_5_VLDecoderLayer", "Qwen2_5_VLVisionBlock"]
 
-    def __init__(self, config, reduce_block=[2, 2, 2], train_vision_encoder=False, vision_encoder_path=None):
+    def __init__(self, config, reduce_block=[2, 2, 2], vision_encoder_path=None):
         # we need to replace Qwen25VL init because it inits 'visual'
         Qwen2_5_VLPreTrainedModel.__init__(self, config)
         self.language_model = Qwen2_5_VLTextModel._from_config(config.text_config)
@@ -298,15 +301,16 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
             embedding_dim=864, embed_dim=2048, reduce_block=reduce_block
         )
 
-        self.train_vision_encoder = train_vision_encoder
+        self.vision_encoder_path = vision_encoder_path
+
 
         # self.vision_adapter = VisionAdapterHeterogeneous(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
 
-    def setup_vision_encoder(self, base_path):
+    def setup_vision_encoder(self):
         # currently only working with MAE 
         # TODO implement other vision encoders
-        plans_file = f"{base_path}/plans.json"
-        checkpoint_paths = glob.glob(f"{base_path}/fold_all/checkpoint_*.pth")
+        plans_file = f"{self.vision_encoder_path}/plans.json"
+        checkpoint_paths = glob.glob(f"{self.vision_encoder_path}/fold_all/checkpoint_*.pth")
         if len(checkpoint_paths) > 1:
             checkpoint_path = [c for c in checkpoint_paths if "final" in c][0]
             logger.info(f"Multiple VE checkpoints found, using final: {checkpoint_path}")
@@ -366,7 +370,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
             # Only these 3 lines (and bellow two lines) are different from the original Qwen2_5_VLModel
             #pixel_values_videos = torch.rand_like(pixel_values_videos) #TODO RANDOM IMAGE HERE!!!
             #pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
-            if self.train_vision_encoder:
+            if hasattr(self, "vision_encoder") and self.vision_encoder is not None:
                 video_embeds = self.vision_encoder(pixel_values_videos.unsqueeze(1))
                 #video_embeds = rearrange(video_embeds, 'b c h w d -> b c (h w d )')
                 video_embeds = self.vision_adapter(video_embeds, video_grid_thw)
@@ -472,10 +476,10 @@ class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, Gener
     }
     _tied_weights_keys = ["lm_head.weight"]
 
-    def __init__(self, config, reduce_block=[2, 2, 2], train_vision_encoder=False, vision_encoder_path=None):
+    def __init__(self, config, reduce_block=[2, 2, 2], vision_encoder_path=None):
         super().__init__(config)
         self.reduce_block = reduce_block
-        self.model = QwenVLModel3D(config, reduce_block=self.reduce_block, train_vision_encoder=train_vision_encoder, vision_encoder_path=vision_encoder_path)
+        self.model = QwenVLModel3D(config, reduce_block=self.reduce_block, vision_encoder_path=vision_encoder_path)
         self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
 
         self.post_init()

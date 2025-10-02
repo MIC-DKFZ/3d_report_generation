@@ -13,13 +13,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-from data.datasets import AMOSMMDataset, CTRATEDataset, CTRATEDataset_Submission
+from data.datasets import AMOSMMDataset, CTRATEDataset
 from eval_ctrate import main as eval_ctrate
 from evaluation.metrics import bleu_score, meteor_score, rouge_score
 from models.owl_vlm import OwlVLModel
 from models.qwen_vlm import QwenVLModel
 from utils import logger, rank_zero_filter
 from utils.filter_batch import extract_batch_prompt_only
+from utils.vision_input_type import VisionInputType
 
 
 class UnifiedVLMInference:
@@ -205,17 +206,8 @@ def parse_args(default_config=None):
         help="Type of VLM model to train (owl or qwen)",
     )
     general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
-    # general_parser.add_argument(
-    #     "--base_model_id",
-    #     type=str,
-    #     required=False,
-    #     help="Base Model ID or path. Only needed for Qwen if model_id is a fine-tuned checkpoint path",
-    # )
     general_parser.add_argument(
-        "--dataset_path", type=str, required=True, help="Path to the dataset JSON file"
-    )
-    general_parser.add_argument(
-        "--vision_encoder_path", type=str, required=False, help="Path to the dataset JSON file"
+        "--dataset_json_path", type=str, required=True, help="Path to the dataset JSON file"
     )
     general_parser.add_argument(
         "--output_dir",
@@ -224,17 +216,19 @@ def parse_args(default_config=None):
         help="Directory to save model outputs",
     )
     general_parser.add_argument(
-        "--embeddings_path",
+        "--vision_input_path",
         type=str,
         required=True,
-        help="Path to the vision embeddings",
+        help="Path to the vision input (either embeddings or images)",
     )
-
     general_parser.add_argument(
         "--embedding_constant",
         # type=float,
         default=None,
         help="Constant value for training language only baseline (! Do not set this when training a VLM !). Can either be a float to set the whole embedding to a constant value or 'random' to set the embedding to a random values.",
+    )
+    general_parser.add_argument(
+        "--vision_encoder_path", type=str, required=False, help="Path to the dataset JSON file"
     )
     general_parser.add_argument(
         "--inference_config", type=str, help="Path to config file (YAML or JSON)"
@@ -243,35 +237,23 @@ def parse_args(default_config=None):
         "--num_gpus", type=str, help="Number of GPUs to use for inference", default=1
     )
     general_parser.add_argument(
-        "--is_base_model",
-        action="store_true",
-        help="Set this flag for Owl model if you want to run inference on the base model, otherwise it will be assumed that model_id is a fine-tuned checkpoint path",
-    )
-    general_parser.add_argument(
         "--checkpoint_path", type=str, default=None, help="Path to a model checkpoint to load"
     )
     general_parser.add_argument(
         "--dataset_name", type=str, default="ctrate", help="Name of the dataset"
     )
     general_parser.add_argument(
-        "--dataset_cache_val", type=str, default=None, help="Path to cache file for the dataset"
-    )
-    general_parser.add_argument(
-        "--load_image",
-        action="store_true",
-        default=False,
-        help="Load image data during inference (default: False)",
-    )
-    general_parser.add_argument(
-        "--use_csv_reports",
-        action="store_true",
-        help="Get reports from CSV file instead of yml files",
+        "--n_samples",
+        type=int,
+        default=None,
+        help="Number of samples to use (for quick testing). Default: None (use all samples)",
     )
     general_parser.add_argument(
         "--do_resize",
         action="store_true",
         help="Resize the input image to 192x192x192",
     )
+    # TODO: Do we need this argument?
     general_parser.add_argument(
         "--do_training_transforms",
         action="store_true",
@@ -281,12 +263,6 @@ def parse_args(default_config=None):
         "--do_validation_transforms",
         action="store_true",
         help="Wheather or not to do data augmentation to the image during training",
-    )
-    general_parser.add_argument(
-        "--n_val_samples",
-        type=int,
-        default=None,
-        help="Number of validation samples to use (for quick testing). Default: None (use all samples)",
     )
 
     # First parse just the config argument to load the file
@@ -352,28 +328,41 @@ def main():
         train_only_vision_adapter=False,
         **model_specific_args,
     )
+    vision_input_type = VisionInputType.IMAGE if args.vision_encoder_path else VisionInputType.EMBEDDING
+    if vision_input_type == VisionInputType.IMAGE:
+        with open(Path(args.vision_encoder_path) / "plans.json", "r") as f:
+            ve_plans = json.load(f)
+            vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+    else:
+        vision_encoder_patch_size = None
     if args.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
-            dataset_json_path=args.dataset_path,
+            dataset_json_path=args.dataset_json_path,
             model_name=args.model_type,
             split="val",
-            embeddings_path=args.embeddings_path,
+            vision_input_path=args.vision_input_path,
+            vision_input_type=vision_input_type,
+            n_samples=args.n_samples,  # Limit the validation set size
+            do_resize=args.do_resize,
+            do_transforms=args.do_validation_transforms,
+            embedding_constant=args.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
         logger.info(f"Loaded {len(test_dataset)} test samples")
     elif args.dataset_name == "ctrate":
         test_dataset = CTRATEDataset(
-            dataset_json_path=args.dataset_path,
+            dataset_json_path=args.dataset_json_path,
             model_name=args.model_type,
             split="val",
-            embeddings_path=args.embeddings_path,
-            use_csv_reports=args.use_csv_reports,
-            n_samples=args.n_val_samples,  # Limit the validation set size
+            vision_input_path=args.vision_input_path,
+            vision_input_type=vision_input_type,
+            n_samples=args.n_samples,  # Limit the validation set size
             # split_files=args.split_file,
             answer_types=("TEXT",),
-            cache_file=args.dataset_cache_val,  # Use cache file if provided
-            load_image=args.load_image,
             do_resize=args.do_resize,
-            do_transforms=args.do_validation_transforms
+            do_transforms=args.do_validation_transforms,
+            embedding_constant=args.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
     else:
         raise ValueError(f"Unsupported dataset name: {args.dataset_name}")
