@@ -136,6 +136,7 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
     ):
         self.vqa_path = vqa_path
         self.error_path_txt = error_path_txt
+        self.exclude_image_ids = ["train_1815_a_4", "train_2597_a_2"]
         super().__init__(
             dataset_path=dataset_path,
             split=split,
@@ -243,6 +244,8 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
             with open(self.error_path_txt, "r") as f:
                 error_paths = f.read().splitlines()
             error_paths = [os.path.basename(p).replace(".nii.gz","") for p in error_paths]
+            if self.split == "train":
+                error_paths.extend(self.exclude_image_ids)
             samples = [s for s in samples if s["image_id"] not in error_paths]
         logger.info(f"Number of samples after filtering: {len(samples)}")
         return samples
