@@ -672,7 +672,7 @@ def main():
             vision_input_type=vision_input_type,
             n_samples=general_args.n_train_samples,
             split_files=general_args.split_file,
-            answer_types=[{"TEXT": ["VQA", "REPORT_DIAGNOSIS"]}],
+            answer_types=[{"TEXT": ["REPORT_DIAGNOSIS"]}],
             do_resize=general_args.do_resize,
             do_transforms=general_args.do_transforms,
             embedding_constant=general_args.embedding_constant,
@@ -687,7 +687,7 @@ def main():
             vision_input_type=vision_input_type,
             n_samples=general_args.n_val_samples,  # Limit the validation set size
             split_files=general_args.split_file,
-            answer_types=[{"TEXT": ["VQA", "REPORT_DIAGNOSIS"]}],
+            answer_types=[{"TEXT": ["REPORT_DIAGNOSIS"]}],
             do_resize=general_args.do_resize,
             embedding_constant=general_args.embedding_constant,
             # no transforms for val dataset
