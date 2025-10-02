@@ -174,48 +174,43 @@ class MedicalImageDataset(Dataset, ABC):
 
     def _load_vision_input(self, vision_input_path:Path):
         """Load vision input from file"""
-        try:
-            if str(vision_input_path).endswith(".npy"):
-                vision_input = np.load(vision_input_path)
-            elif str(vision_input_path).endswith(".npz"):
-                # Use context manager to ensure proper file closure
-                with np.load(vision_input_path) as npz_file:
-                    # Attempt to load the "embeddings" key if it exists, otherwise load the first array
-                    if "embedding" in npz_file:
-                        vision_input = npz_file["embeddings"].copy()  # Make a copy to avoid reference issues
-                    else:
-                        vision_input = npz_file[npz_file.files[0]].copy()  # Make a copy to avoid reference issues
+        if str(vision_input_path).endswith(".npy"):
+            vision_input = np.load(vision_input_path)
+        elif str(vision_input_path).endswith(".npz"):
+            # Use context manager to ensure proper file closure
+            with np.load(vision_input_path) as npz_file:
+                # Attempt to load the "embeddings" key if it exists, otherwise load the first array
+                if "embedding" in npz_file:
+                    vision_input = npz_file["embeddings"].copy()  # Make a copy to avoid reference issues
+                else:
+                    vision_input = npz_file[npz_file.files[0]].copy()  # Make a copy to avoid reference issues
 
-            elif str(vision_input_path).endswith(".b2nd"):
-                # Load b2nd file like nnUNet :)
-                dparams = {
-                    'nthreads': 1
-                }
-                mmap_kwargs = {} if os.name == "nt" else {'mmap_mode': 'r'}
-                
-                vision_input = np.array(blosc2.open(urlpath=vision_input_path, mode='r', dparams=dparams, **mmap_kwargs))
-
-            elif str(vision_input_path).endswith(".bl2"):
-                vision_input = blosc2.load_array(vision_input_path)
-                
-            elif str(vision_input_path).endswith(".nrrd"):     
-                vision_input, header = nrrd.read(vision_input_path)
-
-            elif str(vision_input_path).endswith((".nii.gz", ".nii")):
-                vision_input = sitk.GetArrayFromImage(sitk.ReadImage(vision_input_path))          
-
-            else:
-                raise ValueError(f"Unsupported vision input file format: {vision_input_path}")
+        elif str(vision_input_path).endswith(".b2nd"):
+            # Load b2nd file like nnUNet :)
+            dparams = {
+                'nthreads': 1
+            }
+            mmap_kwargs = {} if os.name == "nt" else {'mmap_mode': 'r'}
             
-            if self.vision_input_type == VisionInputType.IMAGE:
-                vision_input = z_score_normalization(vision_input, False, None, np.float32)
-                vision_input = preprocess_3d_image(image_array=vision_input, do_resize=self.do_resize, do_transforms=self.do_transforms, patch_size=self.vision_encoder_patch_size, split=self.split, training_transforms=self.training_transforms)
+            vision_input = np.array(blosc2.open(urlpath=vision_input_path, mode='r', dparams=dparams, **mmap_kwargs))
 
-            return vision_input
+        elif str(vision_input_path).endswith(".bl2"):
+            vision_input = blosc2.load_array(vision_input_path)
             
-        except Exception as e:
-            logger.error(f"Error loading vision input from {vision_input_path}: {e}")
-            return None
+        elif str(vision_input_path).endswith(".nrrd"):     
+            vision_input, header = nrrd.read(vision_input_path)
+
+        elif str(vision_input_path).endswith((".nii.gz", ".nii")):
+            vision_input = sitk.GetArrayFromImage(sitk.ReadImage(vision_input_path))          
+
+        else:
+            raise ValueError(f"Unsupported vision input file format: {vision_input_path}")
+        
+        if self.vision_input_type == VisionInputType.IMAGE:
+            vision_input = z_score_normalization(vision_input, False, None, np.float32)
+            vision_input = preprocess_3d_image(image_array=vision_input, do_resize=self.do_resize, do_transforms=self.do_transforms, patch_size=self.vision_encoder_patch_size, split=self.split, training_transforms=self.training_transforms)
+
+        return vision_input
 
     def _embedding_2_tensor(self, embedding):
         """Convert embedding to tensor"""
