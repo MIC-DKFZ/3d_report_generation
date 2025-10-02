@@ -81,7 +81,6 @@ class MedicalImageDataset(Dataset, ABC):
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of qa pairs to include
-        split_files (dict, optional): Dictionary with split file paths
         embedding_constant (float or str, optional): If set, use a constant or random embedding
         do_resize (bool, optional): If True, resize images to a fixed size
         do_transforms (bool, optional): If True, apply data augmentations to images
@@ -97,7 +96,6 @@ class MedicalImageDataset(Dataset, ABC):
         vision_input_type=VisionInputType.EMBEDDING,
         n_samples=None,
         answer_types=("CHOICE",),
-        split_files=None,
         embedding_constant=None,
         do_resize=False,
         do_transforms=False,
@@ -111,7 +109,6 @@ class MedicalImageDataset(Dataset, ABC):
         self.model_name = model_name
         self.split = split
         self.n_samples = n_samples
-        self.split_files = split_files
         self.embedding_constant = embedding_constant
         self.do_resize = do_resize
         self.do_transforms = do_transforms
@@ -296,7 +293,6 @@ class AMOSMMDataset(MedicalImageDataset):
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of qa pairs to include
-        split_files (dict, optional): Dictionary with split file paths
         embedding_constant (float or str, optional): If set, use a constant or random embedding
         do_resize (bool, optional): If True, resize images to a fixed size
         do_transforms (bool, optional): If True, apply data augmentations to images
@@ -329,7 +325,6 @@ class CTRATEDataset(MedicalImageDataset):
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of qa pairs to include
-        split_files (dict, optional): Dictionary with split file paths
         embedding_constant (float or str, optional): If set, use a constant or random embedding
         do_resize (bool, optional): If True, resize images to a fixed size
         do_transforms (bool, optional): If True, apply data augmentations to images

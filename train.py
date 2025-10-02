@@ -459,11 +459,10 @@ def main():
         train_dataset = CTRATEDataset(
             dataset_json_path=cfg.data.train_dataset_json_path,
             model_name=cfg.model.model_type,
-            split="train" if cfg.data.split_idx is None else f"train_{cfg.general.split_idx}",
+            split="train",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_train_samples,
-            split_files=cfg.data.split_file,
             answer_types=[{"TEXT": ["VQA", "REPORT_DIAGNOSIS"]}],
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
@@ -474,11 +473,10 @@ def main():
         val_dataset = CTRATEDataset(
             dataset_json_path=cfg.data.val_dataset_json_path,
             model_name=cfg.model.model_type,
-            split="val" if cfg.data.split_idx is None else f"val_{cfg.general.split_idx}",
+            split="val",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_val_samples,  # Limit the validation set size
-            split_files=cfg.data.split_file,
             answer_types=[{"TEXT": ["VQA", "REPORT_DIAGNOSIS"]}],
             do_resize=cfg.data.do_resize,
             embedding_constant=cfg.data.embedding_constant,
