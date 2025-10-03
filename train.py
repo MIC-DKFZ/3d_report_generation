@@ -17,15 +17,14 @@ from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
 from utils import logger
-from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args, setattr_nested, is_main_process
-from utils.load_and_save_files import save_json, load_json
+from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args, is_main_process
+from utils.load_and_save_files import save_json, load_json, save_yaml
 from utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
     setup_memory_efficient_training,
 )
 from utils.paths import VLM_CONFIG_DIR, VLM_OUTPUT_DIR
-from utils.setup_logging_dir import setup_logging_dir
 from utils.vision_input_type import VisionInputType
 
 
@@ -263,22 +262,45 @@ def parse_args() -> RunConfig:
     # Parse all args into their respective Pydantic models/configs
     cfg = RunConfig.model_validate(cfg_dict)
 
+    cfg.general.train_config = str(train_config_path)
+    cfg.resolve_run_name()
+    cfg.resolve_output_dir(output_dir=VLM_OUTPUT_DIR)
+
+    # Setup output directory and log file
+    if is_main_process():
+        os.makedirs(cfg.general.output_dir, exist_ok=True)
+        log_file_path = os.path.join(cfg.general.output_dir, "train.log")
+        logger.add(log_file_path)
+        logger.info(f"Successfully set up output directory at {cfg.general.output_dir}")
+        print(f"Successfully set up output directory at {cfg.general.output_dir}")
+
+        shutil.copyfile(cfg.general.train_config, os.path.join(cfg.general.output_dir, "input_config.yml"))
+
+    # Reset some args in case the vision input are embedding (instead of images)
+    cfg.maybe_reset_vision_encoder_specific_args(logger=logger)
+
+    # Log the final configuration
+    if is_main_process():
+        final_config_path = os.path.join(cfg.general.output_dir, "final_config.yml")
+        save_yaml(
+            {
+                "command": " ".join(sys.argv),
+                "run": cfg.model_dump()
+            },
+            final_config_path,
+            sort_keys=False
+        )
+
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
     cfg.general = merge_config_with_cli_args(cfg.general)
     cfg.model = merge_config_with_cli_args(cfg.model)
     cfg.trainer = merge_config_with_cli_args(cfg.trainer)
     cfg.data = merge_config_with_cli_args(cfg.data)
 
-    # Set 'train_config' for the first time
-    cfg.general.train_config = str(train_config_path)
-
     # Resolve model_id if not provided
     if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:
         raise ValueError(f"Unknown model type: {cfg.model.model_type}")
     cfg.model.model_id = cfg.model.model_id or vlm_registry[cfg.model.model_type].model_id
-
-    cfg.resolve_run_name()
-    cfg.resolve_output_dir(output_dir=VLM_OUTPUT_DIR)
 
     return cfg
 
@@ -387,10 +409,6 @@ def create_comprehensive_wandb_config(
 def main():
     cfg = parse_args()
 
-    # Setup output directory (only on main process)
-    if is_main_process():
-        setup_logging_dir(cfg=cfg)
-
     # TODO: could add it as an argument
     seed_everything(42)  # Set a random seed for reproducibility
 
@@ -404,21 +422,6 @@ def main():
         vision_input_type=cfg.data.vision_input_type,
         local_files_only=cfg.general.local_files_only
     )
-
-    # When using embeddings, reset vision-encoder-specific arguments:
-    # - set object references to None
-    # - set preprocessing flags to False
-    if cfg.data.vision_input_type == VisionInputType.EMBEDDING:
-        logger.info("[VisionInputType] Resetting vision-encoder-specific arguments for EMBEDDING input mode:")
-
-        _lis = [
-            (["model.vision_encoder", "model.trainable_params.vision_encoder", "data.embedding_constant"], None),
-            (["data.do_resize", "data.do_transforms"], False),
-        ]
-        for _modules, _val in _lis:
-            for _module in _modules:
-                setattr_nested(cfg, _module, _val)
-                logger.info(f"  > cfg.{_module} set to {_val}")
 
     if cfg.data.vision_input_type == VisionInputType.IMAGE:
         ve_plans = load_json(Path(cfg.model.vision_encoder.vision_encoder_path, "plans.json"))
