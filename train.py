@@ -240,7 +240,7 @@ class UnifiedVLMTrainer:
             wandb.finish()
 
 
-def parse_args() -> RunConfig:
+def setup_config_and_logging() -> RunConfig:
     args_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
 
     args_parser.add_argument(
@@ -407,7 +407,7 @@ def create_comprehensive_wandb_config(
 
 
 def main():
-    cfg = parse_args()
+    cfg = setup_config_and_logging()
 
     # TODO: could add it as an argument
     seed_everything(42)  # Set a random seed for reproducibility
