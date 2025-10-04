@@ -279,6 +279,17 @@ def setup_config_and_logging() -> RunConfig:
     # Reset some args in case the vision input are embedding (instead of images)
     cfg.maybe_reset_vision_encoder_specific_args(logger=logger)
 
+    # Apply CLI argument overrides to configs (intended for testing/debugging only)
+    cfg.general = merge_config_with_cli_args(cfg.general)
+    cfg.model = merge_config_with_cli_args(cfg.model)
+    cfg.trainer = merge_config_with_cli_args(cfg.trainer)
+    cfg.data = merge_config_with_cli_args(cfg.data)
+
+    # Resolve model_id if not provided
+    if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:
+        raise ValueError(f"Unknown model type: {cfg.model.model_type}")
+    cfg.model.model_id = cfg.model.model_id or vlm_registry[cfg.model.model_type].model_id
+
     # Log the final configuration
     if is_main_process():
         final_config_path = os.path.join(cfg.general.output_dir, "final_config.yml")
@@ -290,17 +301,6 @@ def setup_config_and_logging() -> RunConfig:
             final_config_path,
             sort_keys=False
         )
-
-    # Apply CLI argument overrides to configs (intended for testing/debugging only)
-    cfg.general = merge_config_with_cli_args(cfg.general)
-    cfg.model = merge_config_with_cli_args(cfg.model)
-    cfg.trainer = merge_config_with_cli_args(cfg.trainer)
-    cfg.data = merge_config_with_cli_args(cfg.data)
-
-    # Resolve model_id if not provided
-    if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:
-        raise ValueError(f"Unknown model type: {cfg.model.model_type}")
-    cfg.model.model_id = cfg.model.model_id or vlm_registry[cfg.model.model_type].model_id
 
     return cfg
 
