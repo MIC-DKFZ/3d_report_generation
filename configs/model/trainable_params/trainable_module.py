@@ -1,9 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Literal, Union
-
+from typing import Literal, Annotated, Union
 from peft import LoraConfig
 from pydantic import Field, model_validator
-from configs.base import ConfigBase, DiscriminatedConfigBase
+from configs.base import DiscriminatedConfigBase, ConfigBase
 
 
 class DiscriminatedPEFTConfigBase(DiscriminatedConfigBase, ABC):
@@ -19,22 +18,23 @@ class PEFTLoraConfig(DiscriminatedPEFTConfigBase):
     lora_alpha: int = Field(16, description="Scaling factor applied to LoRA updates.")
     lora_dropout: float = Field(0.05, description="Dropout probability applied to LoRA branch.")
     target_modules: list[str] | str = Field(..., description="Name(s) of module(s) where LoRA adapters are injected.")
-    # exclude_modules: list[str] | str | None = Field(None, description="Name(s) of module(s) to not apply the adapter.")
     modules_to_save: list[str] | None = Field(None, description="Extra modules to keep trainable and save with adapter.")
     bias: Literal["none", "lora_only", "all"] = Field("none", description="Bias handling.")
-    task_type: str = Field("FEATURE_EXTRACTION", description="Task type.")
 
     def to_peft_config(self):
         return LoraConfig(**self.to_dict_no_type())
 
 
+# Discriminated union for different PEFT configs
+PEFTConfig = Annotated[Union[PEFTLoraConfig], Field(discriminator="type")]
+
 class TrainableModuleConfig(ConfigBase):
     mode: Literal["frozen", "full", "peft"] = Field(...,
         description="Training mode: freeze module ('frozen'), finetune fully ('full'), or apply PEFT ('peft')."
     )
-    peft: Union[PEFTLoraConfig] | None = Field(
+    peft: PEFTConfig | None = Field(
         None,
-        description="PEFT configuration (e.g. LoRA); required if mode='peft'."
+        description="PEFT configuration (e.g. LoRA, LoHa); required if mode='peft'."
     )
 
     @model_validator(mode="after")
@@ -44,10 +44,3 @@ class TrainableModuleConfig(ConfigBase):
         if self.mode != "peft" and self.peft is not None:
             raise ValueError("'peft' must be None unless mode='peft'.")
         return self
-
-
-class TrainableParamsConfig(ConfigBase):
-    vision_encoder: TrainableModuleConfig | None = None
-    adapter: TrainableModuleConfig
-    language_model: TrainableModuleConfig
-    lm_head: TrainableModuleConfig

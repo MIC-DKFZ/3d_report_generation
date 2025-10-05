@@ -137,7 +137,7 @@ class UnifiedVLMTrainer:
         model = self.vlm_model.setup_model(bnb_config=bnb_config)
 
         # Apply trainable parameter configs and possibly add PEFT adapter layers
-        self.vlm_model.apply_trainable_config()
+        self.vlm_model.apply_trainable_config(verbose=True)
 
         # Create comprehensive config for WandB logging
         config_dict = create_comprehensive_wandb_config(

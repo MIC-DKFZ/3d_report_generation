@@ -5,15 +5,16 @@ from pathlib import Path
 from typing import Literal
 import safetensors.torch
 import torch
-from peft import get_peft_model
+from peft import PeftModel
 from transformers import PreTrainedModel
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME
 
 from configs.model.model_config import ModelConfig
-from configs.model.trainable_params_config import TrainableParamsConfig, TrainableModuleConfig
+from configs.model.trainable_params.trainable_linear_layer import TrainableLinearConfig
+from configs.model.trainable_params.trainable_module import TrainableModuleConfig
 from configs.run_config import RunConfig
 from utils import logger
-from utils.helper import getattr_nested, setattr_nested, resolve_ckpt_dir_in_run_dir
+from utils.helper import getattr_nested, setattr_nested, resolve_ckpt_dir_in_run_dir, is_main_process
 from utils.load_and_save_files import load_yaml
 from utils.load_sharded_checkpoint import load_sharded_checkpoint, apply_regex_subs, assert_keys_equality
 
@@ -101,14 +102,15 @@ class AbstractVLMModel(ABC):
         """
         logger.info("[Trainable Parameters] Setting trainable parameters and/or adding PEFT layers according to input config:")
         for module_name, module_attr_path in self.module_attr_map.items():
-            trainable_module_cfg: TrainableModuleConfig = getattr(self.model_cfg.trainable_params, module_name)
+            trainable_component_cfg: TrainableModuleConfig | TrainableLinearConfig = getattr(
+                self.model_cfg.trainable_params, module_name)
 
-            # trainable_module_cfg can be None (e.g., when embeddings are used directly,
+            # trainable_component_cfg can be None (e.g., when embeddings are used directly,
             # meaning no vision encoder and thus no TrainableModuleConfig for it)
-            if trainable_module_cfg is None:
+            if trainable_component_cfg is None:
                 continue
 
-            mode = trainable_module_cfg.mode
+            mode = trainable_component_cfg.mode
             if mode == "frozen":
                 module: torch.nn.Module = getattr_nested(self.model, module_attr_path)
                 for name, param in module.named_parameters():
@@ -120,16 +122,37 @@ class AbstractVLMModel(ABC):
                     param.requires_grad = True
                 logger.info(f"  > {module_name}: full finetuning")
             elif mode == "peft":
-                peft_config = trainable_module_cfg.peft.to_peft_config()
-                original_module = getattr_nested(self.model, module_attr_path)
-                wrapped_module = get_peft_model(original_module, peft_config)
-                setattr_nested(self.model, module_attr_path, wrapped_module)
-                logger.info(f"  > {module_name}: PEFT ({trainable_module_cfg.peft.type.upper()})")
+                original = getattr_nested(self.model, module_attr_path)
+
+                # PEFT injects adapters (e.g. LoRA) into specific submodules of a larger nn.Module.
+                # For composite modules, use the PeftModel class. For single layers (e.g. 'lm_head'),
+                # replace the layer directly with PEFT's Linear class (e.g. peft.tuners.lora.Linear for LoRA).
+                if isinstance(trainable_component_cfg, TrainableModuleConfig):
+                    peft_config = trainable_component_cfg.peft.to_peft_config()
+                    wrapped = PeftModel(original, peft_config)
+                elif isinstance(trainable_component_cfg, TrainableLinearConfig):
+                    base_linear_layer = original
+                    wrapped = trainable_component_cfg.peft.to_peft_linear_layer(base_linear_layer=base_linear_layer)
+
+                    # Some models (e.g. Qwen2.5-VL) tie 'lm_head.weight' to 'embed_tokens.weight'.
+                    # After wrapping, the tied weight lives under 'lm_head.base_layer.weight', so update
+                    # '_tied_weights_keys' to keep Transformers’ save/load logic consistent.
+                    if (module_name == "lm_head"
+                            and getattr(self.model.config.get_text_config(decoder=True), "tie_word_embeddings", True)):
+                        self.model._tied_weights_keys = ["lm_head.base_layer.weight"]
+                        logger.info("    > Updated '_tied_weights_keys' from ['lm_head.weight'] to ['lm_head.base_layer.weight']")
+                else:
+                    raise ValueError(f"Unknown class: {type(trainable_component_cfg).__name__}")
+
+                setattr_nested(self.model, module_attr_path, wrapped)
+                logger.info(f"  > {module_name}: PEFT ({trainable_component_cfg.peft.type.upper()})")
             else:
                 raise ValueError(f"Unknown mode in {TrainableModuleConfig.__name__}: {mode}")
 
-        if verbose:
-            for name, param in self.model.named_parameters():
+        if verbose and is_main_process():
+            # With 'remove_duplicate=True', tied/shared parameters like 'lm_head.weight' are only listed once
+            # in named_parameters(), under their first occurrence (here: 'embed_tokens.weight').
+            for name, param in self.model.named_parameters(remove_duplicate=True):
                 print(f"{name}, requires_grad={param.requires_grad}")
 
     @staticmethod
