@@ -37,9 +37,14 @@ class QwenVLModel(AbstractVLMModel):
     def setup_model(self, bnb_config=None):
         """Initialize model, processor and PEFT configuration"""
 
+        if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
+            cache_dir = os.getenv("HF_HUB_CACHE")
+        else:
+            cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+
         self.processor = QwenVLProcessor3D.from_pretrained(
             self.model_cfg.model_id,
-            cache_dir=os.path.expanduser("~/.cache/huggingface/hub"),
+            cache_dir=cache_dir,
             local_files_only=self.local_files_only,
             reduce_block=self.model_cfg.adapter.reduce_block,
             vision_input_type=self.vision_input_type

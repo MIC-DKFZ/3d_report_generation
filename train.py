@@ -92,6 +92,7 @@ class UnifiedVLMTrainer:
         else:
             num_workers = 2
 
+        # TODO: Do calculation before final_config.yml is logged
         self.cfg.trainer.dataloader_num_workers = num_workers
 
         # Add model-specific arguments
@@ -150,9 +151,7 @@ class UnifiedVLMTrainer:
             wandb.init(
                 entity="mic-rocket-vlm",
                 project=self.cfg.general.wandb_project,
-                name=datetime.now().strftime(
-                    f"{self.cfg.general.run_name}_%Y-%m-%d_%H-%M-%S"
-                ),
+                name=self.cfg.general.run_name,
                 reinit=True,
                 group=f"{type(self.vlm_model).__name__}_run",
                 config=config_dict,
@@ -276,7 +275,7 @@ def setup_config_and_logging() -> RunConfig:
 
     cfg.general.train_config = str(train_config_path)
     cfg.resolve_run_name()
-    cfg.resolve_output_dir(output_dir=VLM_OUTPUT_DIR)
+    cfg.resolve_output_dir(base_output_dir=VLM_OUTPUT_DIR, config_dir=VLM_CONFIG_DIR)
 
     # Setup output directory and log file
     if is_main_process():
@@ -417,7 +416,7 @@ def create_comprehensive_wandb_config(
 
     return config_dict
 
-
+@logger.catch(reraise=True)
 def main():
     cfg = setup_config_and_logging()
 

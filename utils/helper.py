@@ -53,8 +53,8 @@ def load_config_file(config_path: str | Path) -> dict:
     return config_file
 
 
-def add_datetime_tag(s: str) -> str:
-    return datetime.now().strftime(f"{s}_%Y-%m-%d_%H-%M-%S")
+def add_datetime_tag(s: str, sep: str = "__") -> str:
+    return datetime.now().strftime(f"{s}{sep}%Y-%m-%d_%H-%M-%S")
 
 
 ConfigT = TypeVar("ConfigT", bound=BaseModel)

@@ -54,12 +54,12 @@ class RunConfig(ConfigBase):
         config_name, _ = os.path.splitext(os.path.basename(self.general.train_config))
         self.general.run_name = add_datetime_tag(config_name)
         
-    def resolve_output_dir(self, output_dir: str | Path) -> None:
+    def resolve_output_dir(self, base_output_dir: str | Path, config_dir: str | Path) -> None:
         self.general.output_dir = os.path.join(
-            output_dir,
+            base_output_dir,
             self.data.dataset_name,
             os.path.basename(self.data.vision_input_path),
-            # os.path.dirname(os.path.relpath(self.general.train_config, config_dir)),
+            os.path.dirname(os.path.relpath(self.general.train_config, config_dir)),
             self.general.run_name
         )
 
