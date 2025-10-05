@@ -68,18 +68,20 @@ class RunConfig(ConfigBase):
         """
         Recursively applies base configurations defined in 'cfg_dict["base_configs"]'.
 
-        Each base configuration is loaded and merged into 'cfg_dict', with values in
-        'cfg_dict' taking precedence over those from the base configurations.
-        Raises a 'RecursionError' if a cyclic reference is detected.
-        """
-        if seen is None:
-            seen = []
+        Base configs are merged in reverse order so that earlier entries override later ones.
+        Values in 'cfg_dict' itself take final precedence over all base configurations.
 
+        Raises:
+            RecursionError: If a cyclic base config reference is detected.
+        """
         base_configs: list[str] | None = cfg_dict.get("base_configs")
         if not base_configs:
             return cfg_dict
 
-        for base_config in base_configs:
+        seen = seen.copy() if seen else []
+
+        new_cfg_dict = {}
+        for base_config in reversed(base_configs):
             if base_config in seen:
                 raise RecursionError(
                     f"Cyclic base config reference: {base_config} found in {seen}"
@@ -87,11 +89,13 @@ class RunConfig(ConfigBase):
             seen.append(base_config)
 
             base_cfg_dict = load_config_file(Path(config_dir, base_config))
-            RunConfig.apply_base_configs(base_cfg_dict, config_dir, seen=seen)
+            base_cfg_dict = RunConfig.apply_base_configs(base_cfg_dict, config_dir, seen=seen)
 
-            # 'cfg_dict' overrides 'base_cfg_dict'
-            cfg_dict = recursive_dict_merge(base_cfg_dict, cfg_dict)
+            # 'base_cfg_dict' overrides 'new_cfg_dict'
+            new_cfg_dict = recursive_dict_merge(new_cfg_dict, base_cfg_dict)
 
             seen.pop()
 
-        return cfg_dict
+        new_cfg_dict = recursive_dict_merge(new_cfg_dict, cfg_dict)
+
+        return new_cfg_dict
