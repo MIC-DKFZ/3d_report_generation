@@ -248,6 +248,14 @@ def setup_config_and_logging() -> RunConfig:
         help="Path to config file (YAML or JSON), relative to the 'VLM_CONFIG_DIR' environment variable"
     )
 
+    args_parser.add_argument(
+        "--add_base_configs",
+        type=str,
+        nargs="+",
+        default=[],
+        help="Optional list of base config files"
+    )
+
     args, _ = args_parser.parse_known_args()
 
     train_config_path = Path(VLM_CONFIG_DIR, args.train_config)
@@ -255,6 +263,10 @@ def setup_config_and_logging() -> RunConfig:
         raise ValueError(f"The provided config file does not exist: {train_config_path}")
 
     cfg_dict = load_config_file(train_config_path)
+
+    if args.add_base_configs:
+        # Give base configs that are passed via CLI higher prio
+        cfg_dict["base_configs"] = args.add_base_configs + cfg_dict.get("base_configs", [])
 
     # Merge base configs into cfg_dict
     cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
