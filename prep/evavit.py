@@ -242,7 +242,7 @@ class PretrainedEvaEncFromEvaMAE(EvaMAE):
         else:
             raise ValueError("pretrained_weights_file must be provided")
 
-    def load_pretrained_weights(self, pretrained_weights_file, verbose=True):
+    def load_pretrained_weights(self, pretrained_weights_file, verbose=False):
         # Load weights
         if dist.is_initialized():
             saved_model = torch.load(pretrained_weights_file, weights_only=False)

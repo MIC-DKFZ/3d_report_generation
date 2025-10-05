@@ -150,10 +150,18 @@ class AbstractVLMModel(ABC):
                 raise ValueError(f"Unknown mode in {TrainableModuleConfig.__name__}: {mode}")
 
         if verbose and is_main_process():
-            # With 'remove_duplicate=True', tied/shared parameters like 'lm_head.weight' are only listed once
-            # in named_parameters(), under their first occurrence (here: 'embed_tokens.weight').
+            print("\n" + "=" * 120)
+            print(f"{"Model parameters (requires_grad status):":^120}")
+            print("=" * 120 + "\n")
+
+            # With 'remove_duplicate=True', tied/shared parameters like 'lm_head.weight'
+            # are only listed once in named_parameters(), under their first occurrence.
             for name, param in self.model.named_parameters(remove_duplicate=True):
-                print(f"{name}, requires_grad={param.requires_grad}")
+                print(f"{name:100} requires_grad={param.requires_grad}")
+
+            print("\n" + "=" * 120)
+            print(f"{"End of model parameter listing":^120}")
+            print("=" * 120 + "\n")
 
     @staticmethod
     def load_from_run_dir(run_dir: str | Path, mode: Literal["best", "final"] = "best") -> AbstractVLMModel:
