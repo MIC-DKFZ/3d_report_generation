@@ -85,7 +85,7 @@ class AMOSMMExtractor:
             return None
 
         if isinstance(text, list):
-            text = ", ".join(text)
+            text = " ".join(text)
 
         question_prefix = "What are the findings in" if question_type == "FINDINGS" else "What is the impression of "
 
