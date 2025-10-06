@@ -272,15 +272,14 @@ class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, Gener
             # It is safe to assume that `length!=1` means we're in pre-fill because compiled
             # models currently cannot do asssisted decoding
             if cache_position[0] == 0 or self.model.rope_deltas is None:
-                 #########
+                #########
                 # wieder wie oben... just this part changed
                 video_grid_thw_for_rope = video_grid_thw.clone() if video_grid_thw is not None else None
                 for video in video_grid_thw_for_rope:
-                    # Since we use the time dimension as spatial dimension we have to apply the reduce factor already here since it is not done in the rope function below
-                    # For reduceblocks different to 2,2,2 we have to also adjus dim 1 and 2
-                    video[0] = torch.floor_divide(video[0], torch.tensor(self.reduce_block[0], device=video.device, dtype=video.dtype))
-                    video[1] = torch.floor_divide(video[1], torch.tensor(self.reduce_block[1] // 2, device=video.device, dtype=video.dtype))
-                    video[2] = torch.floor_divide(video[2], torch.tensor(self.reduce_block[2] // 2, device=video.device, dtype=video.dtype))
+                    # We multiply dimension 1 (height) and dimension 2 (width) by 2 in order to nullify the division
+                    # by the spatial_merge_size=2 in the get_rope_index() function below
+                    video[1] = video[1] * 2
+                    video[2] = video[2] * 2
                 #########
                 vision_positions, rope_deltas = self.model.get_rope_index(
                     model_inputs.get("input_ids", None),

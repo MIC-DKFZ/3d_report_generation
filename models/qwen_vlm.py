@@ -99,11 +99,11 @@ class QwenVLModel(AbstractVLMModel):
             labels[labels == image_token_id] = -100
 
         # Only keep the model's final assistant response as the prediction target.
-        # Everything before and including the last "<|im_start|>assistant\n" is ignored (-100).
+        # Everything before the last "<|im_start|>assistant\n" is ignored (-100).
         im_start_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
         for i in range(labels.shape[0]):
             last_im_start_pos = (labels[i] == im_start_token_id).nonzero(as_tuple=True)[0][-1]
-            labels[i, :last_im_start_pos + 3] = -100
+            labels[i, :last_im_start_pos] = -100
 
         raw_samples = extract_raw_samples_from_batch(examples)
         batch_out = {

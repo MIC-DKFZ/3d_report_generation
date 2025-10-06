@@ -94,7 +94,7 @@ class AbstractVLMModel(ABC):
         """
         ...
 
-    def apply_trainable_config(self, verbose=False) -> None:
+    def apply_trainable_config(self) -> None:
         """
         Apply the TrainableParamsConfig in self.trainable_params to each submodule.
 
