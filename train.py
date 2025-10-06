@@ -74,6 +74,7 @@ class UnifiedVLMTrainer:
         self.vlm_model: AbstractVLMModel = vlm_model
         self.trainer: SFTTrainer | None = None
         self.cfg: RunConfig = cfg
+        self.wandb_run_name = str(Path(self.cfg.general.output_dir).relative_to(VLM_OUTPUT_DIR))
 
         # Setup distributed training
         (self.is_distributed,
@@ -101,7 +102,7 @@ class UnifiedVLMTrainer:
 
         return SFTConfig(**self.cfg.trainer.model_dump(),
                          **model_args,
-                         run_name=self.cfg.general.run_name,
+                         run_name=self.wandb_run_name,
                          output_dir=self.cfg.general.output_dir)
 
     def get_quantization_config(self):
@@ -150,7 +151,6 @@ class UnifiedVLMTrainer:
                 # are only listed once in named_parameters(), under their first occurrence.
                 print_model_parameters(model=model, file=f, remove_duplicate=True)
 
-
         # Create comprehensive config for WandB logging
         config_dict = create_comprehensive_wandb_config(
             self.vlm_model, self.cfg,
@@ -162,10 +162,11 @@ class UnifiedVLMTrainer:
             wandb.init(
                 entity="mic-rocket-vlm",
                 project=self.cfg.general.wandb_project,
-                name=self.cfg.general.run_name,
+                name=self.wandb_run_name,
                 reinit=True,
                 group=f"{type(self.vlm_model).__name__}_run",
                 config=config_dict,
+                id=self.wandb_run_name.replace("/", "--")
             )
 
             # Ensure wandb properly logs hyperparameters in offline mode
@@ -286,7 +287,7 @@ def setup_config_and_logging() -> RunConfig:
 
     cfg.general.train_config = str(train_config_path)
     cfg.resolve_run_name()
-    cfg.resolve_output_dir(base_output_dir=VLM_OUTPUT_DIR, config_dir=VLM_CONFIG_DIR)
+    cfg.resolve_output_dir()
 
     # Setup output directory and log file
     if is_main_process():
@@ -302,7 +303,7 @@ def setup_config_and_logging() -> RunConfig:
     cfg.maybe_reset_vision_encoder_specific_args(logger=logger)
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
-    cfg.general = merge_config_with_cli_args(cfg.general)
+    cfg.general = merge_config_with_cli_args(cfg.general, ignore_keys="train_config")
     cfg.model = merge_config_with_cli_args(cfg.model)
     cfg.trainer = merge_config_with_cli_args(cfg.trainer)
     cfg.data = merge_config_with_cli_args(cfg.data)

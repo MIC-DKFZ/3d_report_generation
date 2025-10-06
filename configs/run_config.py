@@ -8,6 +8,7 @@ from configs.general_config import GeneralConfig
 from configs.model.model_config import ModelConfig
 from configs.trainer_config import SFTTrainerConfig
 from utils.helper import load_config_file, recursive_dict_merge, add_datetime_tag, setattr_nested
+from utils.paths import VLM_OUTPUT_DIR, VLM_CONFIG_DIR
 from utils.vision_input_type import VisionInputType
 
 
@@ -54,12 +55,12 @@ class RunConfig(ConfigBase):
         config_name, _ = os.path.splitext(os.path.basename(self.general.train_config))
         self.general.run_name = add_datetime_tag(config_name)
         
-    def resolve_output_dir(self, base_output_dir: str | Path, config_dir: str | Path) -> None:
+    def resolve_output_dir(self) -> None:
         self.general.output_dir = os.path.join(
-            base_output_dir,
+            VLM_OUTPUT_DIR,
             self.data.dataset_name,
             os.path.basename(self.data.vision_input_path),
-            os.path.dirname(os.path.relpath(self.general.train_config, config_dir)),
+            os.path.dirname(os.path.relpath(self.general.train_config, VLM_CONFIG_DIR)),
             self.general.run_name
         )
 
