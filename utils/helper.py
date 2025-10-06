@@ -3,6 +3,7 @@ import random
 from datetime import datetime
 from pathlib import Path
 
+import torch.nn as nn
 import numpy as np
 import torch
 import os
@@ -154,6 +155,26 @@ def recursive_dict_merge(d1: dict[str, Any], d2: dict[str, Any]) -> dict[str, An
         else:
             merged[key] = value
     return merged
+
+
+def print_model_parameters(model: nn.Module, file=None, width=120, **kwargs):
+    """Prints model parameters and their requires_grad status to stdout and optionally to a file."""
+
+    def _out(text=""):
+        print(text)
+        if file is not None:
+            print(text, file=file)
+
+    print("\n" + "=" * width)
+    print(f"{'Model parameters (requires_grad status):':^{width}}")
+    print("=" * width + "\n")
+
+    for name, param in model.named_parameters(**kwargs):
+        _out(f"{name:100} requires_grad={param.requires_grad}")
+
+    print("\n" + "=" * width)
+    print(f"{'End of model parameter listing':^{width}}")
+    print("=" * width + "\n")
 
 
 def is_main_process():

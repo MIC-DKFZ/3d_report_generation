@@ -14,7 +14,7 @@ from configs.model.trainable_params.trainable_linear_layer import TrainableLinea
 from configs.model.trainable_params.trainable_module import TrainableModuleConfig
 from configs.run_config import RunConfig
 from utils import logger
-from utils.helper import getattr_nested, setattr_nested, resolve_ckpt_dir_in_run_dir, is_main_process
+from utils.helper import getattr_nested, setattr_nested, resolve_ckpt_dir_in_run_dir
 from utils.load_and_save_files import load_yaml
 from utils.load_sharded_checkpoint import load_sharded_checkpoint, apply_regex_subs, assert_keys_equality
 
@@ -148,20 +148,6 @@ class AbstractVLMModel(ABC):
                 logger.info(f"  > {module_name}: PEFT ({trainable_component_cfg.peft.type.upper()})")
             else:
                 raise ValueError(f"Unknown mode in {TrainableModuleConfig.__name__}: {mode}")
-
-        if verbose and is_main_process():
-            print("\n" + "=" * 120)
-            print(f"{"Model parameters (requires_grad status):":^120}")
-            print("=" * 120 + "\n")
-
-            # With 'remove_duplicate=True', tied/shared parameters like 'lm_head.weight'
-            # are only listed once in named_parameters(), under their first occurrence.
-            for name, param in self.model.named_parameters(remove_duplicate=True):
-                print(f"{name:100} requires_grad={param.requires_grad}")
-
-            print("\n" + "=" * 120)
-            print(f"{"End of model parameter listing":^120}")
-            print("=" * 120 + "\n")
 
     @staticmethod
     def load_from_run_dir(run_dir: str | Path, mode: Literal["best", "final"] = "best") -> AbstractVLMModel:

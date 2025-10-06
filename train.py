@@ -17,7 +17,8 @@ from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
 from utils import logger
-from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args, is_main_process
+from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args, is_main_process, \
+    print_model_parameters
 from utils.load_and_save_files import save_json, load_json, save_yaml
 from utils.memory_utils import (
     aggressive_cleanup,
@@ -138,7 +139,17 @@ class UnifiedVLMTrainer:
         model = self.vlm_model.setup_model(bnb_config=bnb_config)
 
         # Apply trainable parameter configs and possibly add PEFT adapter layers
-        self.vlm_model.apply_trainable_config(verbose=True)
+        self.vlm_model.apply_trainable_config()
+
+        # Log trainable params including their 'requires_grad' status
+        if is_main_process():
+            trainable_params_log_path = Path(self.cfg.general.output_dir, "model_parameters.log")
+
+            with open(trainable_params_log_path, "w") as f:
+                # With 'remove_duplicate=True', tied/shared parameters like 'lm_head.weight'
+                # are only listed once in named_parameters(), under their first occurrence.
+                print_model_parameters(model=model, file=f, remove_duplicate=True)
+
 
         # Create comprehensive config for WandB logging
         config_dict = create_comprehensive_wandb_config(
@@ -176,14 +187,14 @@ class UnifiedVLMTrainer:
         # Create callbacks (only add print callback on main process)
         callbacks = [LossLoggingCallback()]
         
-        # if is_main_process():
-        #     callbacks.append(
-        #         PrintEvalBatchCallback(
-        #             tokenizer=self.vlm_model.tokenizer,
-        #             processor=self.vlm_model.processor,
-        #             sample_count=len(val_dataset),
-        #         )
-        #     )
+        if is_main_process():
+            callbacks.append(
+                PrintEvalBatchCallback(
+                    tokenizer=self.vlm_model.tokenizer,
+                    processor=self.vlm_model.processor,
+                    sample_count=len(val_dataset),
+                )
+            )
 
         # Initialize SFT trainer
         self.trainer = SFTTrainer(
