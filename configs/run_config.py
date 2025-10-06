@@ -41,7 +41,7 @@ class RunConfig(ConfigBase):
                 logger.info("[VisionInputType] Resetting vision-encoder-specific arguments for EMBEDDING input mode:")
 
             _lis = [
-                (["model.vision_encoder", "model.trainable_params.vision_encoder", "data.embedding_constant"], None),
+                (["model.vision_encoder", "model.trainable_params.vision_encoder"], None),
                 (["data.do_resize", "data.do_transforms"], False),
             ]
             for _modules, _val in _lis:

@@ -224,6 +224,9 @@ class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, Gener
         self.model = QwenVLModel3D(config, model_cfg=model_cfg)
         self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
 
+        # TODO: this should do the work until more adapters are implemented and this has to be generalized
+        self.reduce_block = model_cfg["adapter"]["reduce_block"]
+
         self.post_init()
 
 

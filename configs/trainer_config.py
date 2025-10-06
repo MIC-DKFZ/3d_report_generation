@@ -21,7 +21,7 @@ class SFTTrainerConfig(ConfigBase):
     warmup_ratio: float = Field(0.03, ge=0, le=1, description="Ratio of total steps used for linear learning rate warmup.")
     max_grad_norm: float = Field(0.3, gt=0, description="Maximum gradient norm for gradient clipping.")
 
-    logging_steps: int = Field(50, ge=1, description="Number of steps between logging events.")
+    logging_steps: int = Field(25, ge=1, description="Number of steps between logging events.")
 
     eval_steps: int = Field(250, ge=1, description="Number of steps between evaluation runs.")
     eval_strategy: Literal["no", "steps", "epoch"] = Field("steps", description="Evaluation strategy to adopt during training.")
