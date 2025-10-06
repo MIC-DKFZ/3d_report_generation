@@ -246,16 +246,10 @@ class MedicalImageDataset(Dataset, ABC):
             if type(self.embedding_constant) is float:
                 result["vision_input"] = np.full(vision_input.shape, self.embedding_constant, dtype=np.float32)
             elif type(self.embedding_constant) is str and self.embedding_constant == "random":
-                result["vision_input"] = np.random.rand(vision_input.shape).astype(np.float32)
+                result["vision_input"] = np.random.rand(*vision_input.shape).astype(np.float32)
             else:
                 raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
-
-        if self.vision_input_type == VisionInputType.IMAGE:
-            if self.embedding_constant is None:
-                result["vision_input"] = vision_input
         else:
-            # do we really need this function? why do reshaping and why use torch.tensor()?
-            # result["vision_input"] = self._embedding_2_tensor(embd)
             result["vision_input"] = vision_input
 
         return result
