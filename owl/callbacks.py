@@ -10,9 +10,6 @@ from owl.model import OwnOwlModel
 from utils.filter_batch import extract_batch_prompt_only
 from utils import logger
 
-from models.owl_vlm import OwlVLModel
-from models.qwen_vlm import QwenVLModel
-
 
 class PrintEvalBatchCallback(TrainerCallback):
     def __init__(
@@ -299,10 +296,10 @@ class LossLoggingCallback(TrainerCallback):
                 logger.log("LOSS", f"Step: {global_step} | Training Loss: {loss:.5f}")
 
             # You could also check for 'eval_loss' here if you wanted to log validation loss
-            # elif 'eval_loss' in logs:
-            #     eval_loss = logs['eval_loss']
-            #     global_step = state.global_step
-            #     print(f"Step: {global_step} | Validation Loss: {eval_loss:.4f}")
+            elif 'eval_loss' in logs:
+                eval_loss = logs['eval_loss']
+                global_step = state.global_step
+                logger.log("LOSS", f"Step: {global_step} | Validation Loss: {eval_loss:.5f}")
 
             # --- Add your custom logging logic here ---
             # Example: Append to a custom file

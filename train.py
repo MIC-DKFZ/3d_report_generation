@@ -1,29 +1,31 @@
 import argparse
-import json
 import os
+import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 import torch
 import torch.distributed as dist
-import yaml
-from peft import get_peft_model
 from transformers import BitsAndBytesConfig
 from trl import SFTConfig, SFTTrainer
 
 import wandb
+from configs.run_config import RunConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
-from models.owl_vlm import OwlVLModel
-from models.qwen_vlm import QwenVLModel
+from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
+from registries.vlm_registry import vlm_registry
 from utils import logger
-from utils.helper import seed_everything
+from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args, is_main_process, \
+    print_model_parameters
+from utils.load_and_save_files import save_json, load_json, save_yaml
 from utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
     setup_memory_efficient_training,
 )
+from utils.paths import VLM_CONFIG_DIR, VLM_OUTPUT_DIR
 from utils.vision_input_type import VisionInputType
 
 
@@ -33,13 +35,15 @@ def setup_distributed_training():
     This function handles the distributed training initialization as recommended in the JSC tutorial.
     """
     # Check if we're in a distributed environment
-    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+    if int(os.environ.get("WORLD_SIZE", 1)) > 1:
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        
-        logger.info(f"Distributed training detected: rank={rank}, world_size={world_size}, local_rank={local_rank}")
-        
+        local_rank = int(os.environ.get("LOCAL_RANK"))
+        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE"))
+
+        logger.info(f"Distributed training detected: rank={rank}, world_size={world_size}, "
+                    f"local_rank={local_rank}, local_world_size={local_world_size}")
+
         # Set the device for this process
         torch.cuda.set_device(local_rank)
         
@@ -48,49 +52,35 @@ def setup_distributed_training():
             dist.init_process_group(backend="nccl")
             logger.info(f"Process group initialized on rank {rank}")
         
-        return True, rank, world_size, local_rank
+        return True, rank, world_size, local_rank, local_world_size
     else:
         logger.info("Single GPU/CPU training detected")
-        return False, 0, 1, 0
-
-
-def is_main_process():
-    """
-    Check if this is the main process (rank 0).
-    As recommended in the JSC tutorial, only rank 0 should handle logging, saving, etc.
-    """
-    return int(os.environ.get("RANK", "0")) == 0
+        return False, 0, 1, 0, 1
 
 
 class UnifiedVLMTrainer:
     def __init__(
-        self,
-        vlm_model,
-        output_dir="vlm_output",
-        config_file_path: str = None,
-        sft_trainer_config: dict = None,
-        wandb_project: str = "debug",
+            self,
+            vlm_model: AbstractVLMModel,
+            cfg: RunConfig,
     ):
         """
         Initialize the unified VLM trainer.
 
         Args:
             vlm_model: An instance of a class derived from AbstractVLMModel
-            output_dir: Directory to save model outputs
+            cfg: The RunConfig of the experiment
         """
-        self.vlm_model = vlm_model
-        self.output_dir = output_dir
-        self.trainer = None
-        self.config_file_path = config_file_path
-        self.sft_trainer_config = sft_trainer_config
-        self.wandb_project = wandb_project
-        
-        # Setup distributed training
-        self.is_distributed, self.rank, self.world_size, self.local_rank = setup_distributed_training()
+        self.vlm_model: AbstractVLMModel = vlm_model
+        self.trainer: SFTTrainer | None = None
+        self.cfg: RunConfig = cfg
 
-        # Create output directory if it doesn't exist (only on main process)
-        if is_main_process():
-            os.makedirs(output_dir, exist_ok=True)
+        # Setup distributed training
+        (self.is_distributed,
+         self.rank,
+         self.world_size,
+         self.local_rank,
+         self.local_world_size) = setup_distributed_training()
 
     def get_training_args(self):
         """Configure standard training arguments for distributed training"""
@@ -99,33 +89,20 @@ class UnifiedVLMTrainer:
         # Adjust number of workers based on distributed setup
         if self.is_distributed:
             # Reduce workers per process in distributed training
-            num_workers = max(1, (num_cores // 4) // self.world_size)
+            num_workers = max(1, (num_cores // 4) // self.local_world_size)
         else:
             num_workers = 2
-            
-        base_args = {
-            "output_dir": self.output_dir,
-            "run_name": f"{type(self.vlm_model).__name__}_training",
-            "dataloader_num_workers": num_workers,
-            "dataloader_pin_memory": True,
-            # Reduce prefetch factor to minimize memory usage
-            "dataloader_prefetch_factor": 1,
-            # Disable persistent workers to prevent memory accumulation
-            "dataloader_persistent_workers": False,
-            # Add torch empty cache steps to clear memory periodically
-            "torch_empty_cache_steps": 20,
-            # Distributed training specific settings
-            "ddp_find_unused_parameters": False,  # Important for performance
-            "ddp_bucket_cap_mb": 25,  # Reduce bucket size for better memory usage
-        }
-        
-        base_args.update(self.sft_trainer_config)
+
+        # TODO: Do calculation before final_config.yml is logged
+        self.cfg.trainer.dataloader_num_workers = num_workers
 
         # Add model-specific arguments
         model_args = self.vlm_model.get_model_specific_training_args()
-        base_args.update(model_args)
 
-        return SFTConfig(**base_args)
+        return SFTConfig(**self.cfg.trainer.model_dump(),
+                         **model_args,
+                         run_name=self.cfg.general.run_name,
+                         output_dir=self.cfg.general.output_dir)
 
     def get_quantization_config(self):
         """Create and return the BitsAndBytes quantization config"""
@@ -135,13 +112,6 @@ class UnifiedVLMTrainer:
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.bfloat16,
         )
-
-    def apply_peft(self, base_model, peft_config):
-        """Apply PEFT configuration to the model and return the PEFT model"""
-        peft_model = get_peft_model(base_model, peft_config)
-        if is_main_process():
-            peft_model.print_trainable_parameters()
-        return peft_model
 
     def train(self, train_dataset, val_dataset):
         """
@@ -156,8 +126,6 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training Setup")
 
-        # Get trainable parameters configuration
-        trainable_params = self.vlm_model.get_trainable_params()
 
         # Create quantization config if needed
         bnb_config = None
@@ -168,36 +136,36 @@ class UnifiedVLMTrainer:
         #     bnb_config = None
 
         # Setup base model with quantization config if applicable
-        base_model = self.vlm_model.setup_model(bnb_config=bnb_config)
+        model = self.vlm_model.setup_model(bnb_config=bnb_config)
 
-        # Apply PEFT if specified in trainable_params
-        peft_config = trainable_params.get("peft_config", None)
-        if peft_config is not None:
-            model_to_train = self.apply_peft(base_model, peft_config)
-        else:
-            model_to_train = self.vlm_model.model
+        # Apply trainable parameter configs and possibly add PEFT adapter layers
+        self.vlm_model.apply_trainable_config()
+
+        # Log trainable params including their 'requires_grad' status
+        if is_main_process():
+            trainable_params_log_path = Path(self.cfg.general.output_dir, "model_parameters.log")
+
+            with open(trainable_params_log_path, "w") as f:
+                # With 'remove_duplicate=True', tied/shared parameters like 'lm_head.weight'
+                # are only listed once in named_parameters(), under their first occurrence.
+                print_model_parameters(model=model, file=f, remove_duplicate=True)
 
         # Create comprehensive config for WandB logging
-        general_args = getattr(self, "general_args", None)
-        dataset_info = getattr(self, "dataset_info", None)
         config_dict = create_comprehensive_wandb_config(
-            self.vlm_model, self.sft_trainer_config, general_args, dataset_info, 
+            self.vlm_model, self.cfg,
             self.world_size, self.rank
         )
-        # Ensure trainable_params are included in the config
-        config_dict["trainable_params"] = trainable_params
 
         # Only initialize wandb on the main process (rank 0) for DDP
         if is_main_process():
             wandb.init(
                 entity="mic-rocket-vlm",
-                project=self.wandb_project,
-                name=datetime.now().strftime(
-                    f"%Y-%m-%d_%H-%M-%S_train_{type(self.vlm_model).__name__}_run_{uuid4()}"
-                ),
+                project=self.cfg.general.wandb_project,
+                name=self.cfg.general.run_name,
                 reinit=True,
                 group=f"{type(self.vlm_model).__name__}_run",
                 config=config_dict,
+                id=str(Path(self.cfg.general.output_dir).relative_to(VLM_OUTPUT_DIR)).replace("/", "--")
             )
 
             # Ensure wandb properly logs hyperparameters in offline mode
@@ -230,12 +198,12 @@ class UnifiedVLMTrainer:
 
         # Initialize SFT trainer
         self.trainer = SFTTrainer(
-            model=model_to_train,
+            model=model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=self.vlm_model.collate_fn,
-            callbacks=callbacks,
+            callbacks=callbacks
         )
 
         # Train model
@@ -248,8 +216,8 @@ class UnifiedVLMTrainer:
             log_memory_usage("After Training")
 
         # Save model (only on main process)
-        if is_main_process():
-            self.trainer.save_model(self.output_dir)
+        # if is_main_process():
+        #     self.trainer.save_model(self.cfg.general.output_dir)
 
         # Synchronize all processes before cleanup
         if self.is_distributed:
@@ -282,158 +250,81 @@ class UnifiedVLMTrainer:
             wandb.finish()
 
 
-def parse_args(default_config=None):
-    if default_config is None:
-        default_config = {}
-    general_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
-    general_parser.add_argument(
-        "--model_type",
+def setup_config_and_logging() -> RunConfig:
+    args_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
+
+    args_parser.add_argument(
+        "--train_config", type=str, required=True,
+        help="Path to config file (YAML or JSON), relative to the 'VLM_CONFIG_DIR' environment variable"
+    )
+
+    args_parser.add_argument(
+        "--add_base_configs",
         type=str,
-        choices=["owl", "qwen"],
-        required=True,
-        help="Type of VLM model to train (owl or qwen)",
-    )
-    general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
-    general_parser.add_argument(
-        "--train_dataset_json_path", type=str, required=True, help="Path to the train dataset JSON file"
-    )
-    general_parser.add_argument(
-        "--val_dataset_json_path", type=str, required=False, help="Path to the validation dataset JSON file"
-    )
-    general_parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="output/vlm_output",
-        help="Directory to save model outputs",
-    )
-    general_parser.add_argument(
-        "--wandb_project",
-        type=str,
-        default="debug",
-        help="WandB project name",
-    )
-    general_parser.add_argument(
-        "--vision_input_path",
-        type=str,
-        required=True,
-        help="Path to the vision input (either embeddings or images)",
-    )
-    general_parser.add_argument(
-        "--embedding_constant",
-        default=None,
-        help="Constant value for training language only baseline (! Do not set this when training a VLM !). Can either be a float to set the whole embedding to a constant value or 'random' to set the embedding to a random values.",
-    )
-    general_parser.add_argument(
-        "--train_only_vision_adapter",
-        action="store_true",
-        help="Train only the vision adapter (Qwen only)",
-    )
-    general_parser.add_argument(
-        "--train_vision_encoder",
-        action="store_true",
-        help="Train the vision encoder (then vision_input_path needs to point to the actual images).",
-    )
-    general_parser.add_argument(
-        "--vision_encoder_path", type=str, 
-        help="Path to vision encoder checkpoint. If None, use precomputed embeddings as input.",
-        default=None
-    )
-    general_parser.add_argument(
-        "--train_config", type=str, help="Path to config file (YAML or JSON)"
-    )
-    general_parser.add_argument(
-        "--split_file", type=str, help="Path to cross validation split file (JSON)"
-    )
-    general_parser.add_argument(
-        "--split_idx", type=int, default=None, help="Index of the split to use (0-4)"
-    )
-    general_parser.add_argument(
-        "--dataset_name", type=str, default="ctrate", help="Name of the dataset"
-    )
-    general_parser.add_argument(
-        "--n_train_samples", type=int, default=None, help="Number of training samples to use"
-    )
-    general_parser.add_argument(
-        "--n_val_samples", type=int, default=50, help="Number of validation samples to use"
-    )
-    general_parser.add_argument(
-        "--reduce_block",
-        type=lambda s: [int(x) for x in s.strip("()").split(",")],
-        default=[2, 2, 2],
-        help="List for reduce_block, e.g. (2,2,2) or (4,4,4)",
-    )
-    general_parser.add_argument(
-        "--do_resize",
-        action="store_true",
-        help="Resize images to 192x192x192 cubes (use this in combination with lung crops)",
-    )
-    general_parser.add_argument(
-        "--do_transforms",
-        action="store_true",
-        help="If true, we do nnUNetv2 image augmentation.",
-    )
-    general_parser.add_argument(
-        "--local_files_only",
-        action="store_true",
-        help="If true, only use local files for qwen from_pretrained method.",
+        nargs="+",
+        default=[],
+        help="Optional list of base config files"
     )
 
-    # First parse just the config argument to load the file
-    general_args, _ = general_parser.parse_known_args()
+    args, _ = args_parser.parse_known_args()
 
-    sft_trainer_parser = argparse.ArgumentParser(
-        description="SFTTrainer args which overwrite the train_config file."
-    )
+    train_config_path = Path(VLM_CONFIG_DIR, args.train_config)
+    if not train_config_path.exists():
+        raise ValueError(f"The provided config file does not exist: {train_config_path}")
 
-    # Load config file if provided
-    if general_args.train_config and os.path.exists(general_args.train_config):
-        file_ext = os.path.splitext(general_args.train_config)[1].lower()
-        with open(general_args.train_config, "r") as file:
-            if file_ext == ".yaml" or file_ext == ".yml":
-                file_config = yaml.safe_load(file)
-            elif file_ext == ".json":
-                file_config = json.load(file)
-            else:
-                raise ValueError(f"Unsupported config file format: {file_ext}")
+    cfg_dict = load_config_file(train_config_path)
 
-            # Update config with values from file
-            default_config.update(file_config)
+    if args.add_base_configs:
+        # Give base configs that are passed via CLI higher prio
+        cfg_dict["base_configs"] = args.add_base_configs + cfg_dict.get("base_configs", [])
 
-    # Add arguments for each config value with the default from config
-    for key, value in default_config.items():
-        arg_type = type(value)
-        if arg_type == bool:
-            # Handle boolean values with store_true/store_false
-            if value:
-                sft_trainer_parser.add_argument(
-                    f"--no-{key}",
-                    action="store_false",
-                    dest=key,
-                    help=f"Disable {key} (default: enabled)",
-                )
-            else:
-                sft_trainer_parser.add_argument(
-                    f"--{key}",
-                    action="store_true",
-                    help=f"Enable {key} (default: disabled)",
-                )
-        else:
-            sft_trainer_parser.add_argument(
-                f"--{key}",
-                type=arg_type,
-                default=value,
-                help=f"Set {key} (default: {value})",
-            )
+    # Merge base configs into cfg_dict
+    cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
 
-    sft_trainer_parsed, _ = sft_trainer_parser.parse_known_args()
+    # Parse all args into their respective Pydantic models/configs
+    cfg = RunConfig.model_validate(cfg_dict)
 
-    if general_args.embedding_constant is not None:
-        try:
-            general_args.embedding_constant = float(general_args.embedding_constant)
-        except ValueError:
-            pass
+    cfg.general.train_config = str(train_config_path)
+    cfg.resolve_run_name()
+    cfg.resolve_output_dir()
 
-    return general_args, sft_trainer_parsed
+    # Setup output directory and log file
+    if is_main_process():
+        os.makedirs(cfg.general.output_dir, exist_ok=True)
+        log_file_path = os.path.join(cfg.general.output_dir, "train.log")
+        logger.add(log_file_path)
+        logger.info(f"Successfully set up output directory at {cfg.general.output_dir}")
+        print(f"Successfully set up output directory at {cfg.general.output_dir}")
+
+        shutil.copyfile(cfg.general.train_config, os.path.join(cfg.general.output_dir, "input_config.yml"))
+
+    # Reset some args in case the vision input are embedding (instead of images)
+    cfg.maybe_reset_vision_encoder_specific_args(logger=logger)
+
+    # Apply CLI argument overrides to configs (intended for testing/debugging only)
+    cfg.general = merge_config_with_cli_args(cfg.general, ignore_keys="train_config")
+    cfg.model = merge_config_with_cli_args(cfg.model)
+    cfg.trainer = merge_config_with_cli_args(cfg.trainer)
+    cfg.data = merge_config_with_cli_args(cfg.data)
+
+    # Resolve model_id if not provided
+    if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:
+        raise ValueError(f"Unknown model type: {cfg.model.model_type}")
+    cfg.model.model_id = cfg.model.model_id or vlm_registry[cfg.model.model_type].model_id
+
+    # Log the final configuration
+    if is_main_process():
+        final_config_path = os.path.join(cfg.general.output_dir, "final_config.yml")
+        save_yaml(
+            {
+                "command": " ".join(sys.argv),
+                "run": cfg.model_dump()
+            },
+            final_config_path,
+            sort_keys=False
+        )
+
+    return cfg
 
 
 def ensure_wandb_config_logging():
@@ -473,10 +364,7 @@ def ensure_wandb_config_logging():
                 if hasattr(wandb.run, "dir") and wandb.run.dir:
                     config_backup_path = os.path.join(wandb.run.dir, "config_backup.json")
                     try:
-                        import json
-
-                        with open(config_backup_path, "w") as f:
-                            json.dump(config_dict, f, indent=2, default=str)
+                        save_json(config_dict, config_backup_path, default=str)
                         logger.info(f"Config backup saved to: {config_backup_path}")
                     except Exception as e:
                         logger.warning(f"Could not save config backup: {e}")
@@ -490,7 +378,10 @@ def ensure_wandb_config_logging():
 
 
 def create_comprehensive_wandb_config(
-    vlm_model, sft_trainer_config, general_args=None, dataset_info=None, world_size=1, rank=0
+        vlm_model: AbstractVLMModel,
+        cfg: RunConfig,
+        world_size: int = 1,
+        rank: int = 0
 ):
     """
     Create a comprehensive configuration dictionary for WandB logging.
@@ -503,8 +394,7 @@ def create_comprehensive_wandb_config(
     config_dict = {
         "model_name": type(vlm_model).__name__,
         "model_id": getattr(vlm_model, "model_id", "unknown"),
-        "trainable_params": vlm_model.get_trainable_params(),
-        "training_args": sft_trainer_config,
+        "run_config": cfg.model_dump(),
         "slurm_job_id": slurm_job_id,
         "username": username,
         "timestamp": datetime.now().isoformat(),
@@ -515,19 +405,6 @@ def create_comprehensive_wandb_config(
             "is_distributed": world_size > 1,
         }
     }
-
-    # Add general args if available
-    if general_args is not None:
-        config_dict.update({"general_args": general_args})
-
-    # Add dataset info if available
-    if dataset_info is not None:
-        config_dict.update({"dataset_info": dataset_info})
-
-    # Add model-specific config if available
-    if hasattr(vlm_model, "get_config_dict"):
-        model_config = vlm_model.get_config_dict()
-        config_dict.update({"model_config": model_config})
 
     # Add environment information
     env_config = {
@@ -550,153 +427,95 @@ def create_comprehensive_wandb_config(
 
     return config_dict
 
-
+@logger.catch(reraise=True)
 def main():
-    default_sft_trainer_config = {
-        "num_train_epochs": 5,
-        "per_device_train_batch_size": 4,
-        "per_device_eval_batch_size": 1,
-        "gradient_accumulation_steps": 1,
-        "gradient_checkpointing": True,
-        "optim": "adamw_torch_fused",
-        "learning_rate": 2e-4,
-        "lr_scheduler_type": "cosine",
-        "logging_steps": 10,
-        "eval_steps": 250,
-        "eval_strategy": "steps",
-        # "save_strategy": "best",
-        "save_strategy": "steps",
-        "save_steps": 250,
-        "save_total_limit": 2,
-        "greater_is_better": True,
-        "load_best_model_at_end": True,
-        "max_grad_norm": 0.3,
-        "warmup_ratio": 0.03,
-        "gradient_checkpointing_kwargs": {"use_reentrant": False},
-        "dataset_kwargs": {"skip_prepare_dataset": True},
-        "remove_unused_columns": False,
-        "report_to": ["wandb"],
-        # Memory management settings
-        "torch_empty_cache_steps": 10,  # Clear cache every 10 steps
-        "metric_for_best_model": "eval_loss", # changed to loss because other metrics are computed to rarely TODO fix this problem.. (quick fix beucase challenge deadline)
-        "greater_is_better": False,
-        # Distributed training specific settings
-        "ddp_find_unused_parameters": False,
-        "ddp_bucket_cap_mb": 25,
-    }   
-    general_args, sft_trainer_args = parse_args(default_sft_trainer_config)
-    sft_trainer_config = vars(sft_trainer_args)
+    cfg = setup_config_and_logging()
 
-    # Log file setup (only on main process)
-    if is_main_process():
-        log_file = os.path.join(
-            general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}.log")
-        )
-        logger.add(log_file)
-
-        output_dir = os.path.join(
-            general_args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_train_{uuid4()}")
-        )
-        os.makedirs(output_dir, exist_ok=True)
-        general_args.output_dir = output_dir
-
-    if general_args.model_id is None:
-        if general_args.model_type == "owl":
-            general_args.model_id = "mPLUG/mPLUG-Owl3-1B-241014"
-        elif general_args.model_type == "qwen":
-            general_args.model_id = "Qwen/Qwen2.5-VL-3B-Instruct"
-
-    # Create the appropriate VLM model based on model_type
-    if general_args.model_type == "owl":
-        vlm_model_class = OwlVLModel
-    elif general_args.model_type == "qwen":
-        vlm_model_class = QwenVLModel
-    else:
-        raise ValueError(f"Unknown model type: {general_args.model_type}")
-    # TODO: could add it as an arguement
+    # TODO: could add it as an argument
     seed_everything(42)  # Set a random seed for reproducibility
 
+    try:
+        vlm_model_class = vlm_registry[cfg.model.model_type].model_class
+    except KeyError:
+        raise ValueError(f"Unknown model type: {cfg.general.model_type}")
+
     vlm_model = vlm_model_class(
-        model_id=general_args.model_id,
-        output_dir=general_args.output_dir,
-        train_only_vision_adapter=general_args.train_only_vision_adapter,
-        reduce_block=general_args.reduce_block,
-        train_vision_encoder=general_args.train_vision_encoder,
-        vision_encoder_path=general_args.vision_encoder_path,
-        local_files_only=general_args.local_files_only
+        model_cfg=cfg.model,
+        vision_input_type=cfg.data.vision_input_type,
+        local_files_only=cfg.general.local_files_only
     )
 
-    vision_input_type = VisionInputType.IMAGE if general_args.vision_encoder_path else VisionInputType.EMBEDDING
-    if vision_input_type == VisionInputType.IMAGE:
-        with open(Path(general_args.vision_encoder_path) / "plans.json", "r") as f:
-            ve_plans = json.load(f)
-            vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+    if cfg.data.vision_input_type == VisionInputType.IMAGE:
+        ve_plans = load_json(Path(cfg.model.vision_encoder.vision_encoder_path, "plans.json"))
+        vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
     else:
         vision_encoder_patch_size = None
 
     # Create datasets
-    if general_args.dataset_name == "amosmm":
+    if cfg.data.dataset_name == "amosmm":
         # Use AMOSMM dataset
         train_dataset = AMOSMMDataset(
-            dataset_json_path=general_args.train_dataset_json_path,
-            model_name=general_args.model_type,
+            dataset_json_path=cfg.data.train_dataset_json_path,
+            model_name=cfg.model.model_type,
             split="train",
-            vision_input_path=general_args.vision_input_path,
-            vision_input_type=vision_input_type,
-            n_samples=general_args.n_train_samples,
-            do_resize=general_args.do_resize,
-            do_transforms=general_args.do_transforms,
-            embedding_constant=general_args.embedding_constant,
+            vision_input_path=cfg.data.vision_input_path,
+            vision_input_type=cfg.data.vision_input_type,
+            answer_types=cfg.data.answer_types,
+            n_samples=cfg.data.n_train_samples,
+            do_resize=cfg.data.do_resize,
+            do_transforms=cfg.data.do_transforms,
+            embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size
         )
 
         val_dataset = AMOSMMDataset(
-            dataset_json_path=general_args.val_dataset_json_path,
-            model_name=general_args.model_type,
+            dataset_json_path=cfg.data.val_dataset_json_path,
+            model_name=cfg.model.model_type,
             split="val",
-            vision_input_path=general_args.vision_input_path,
-            vision_input_type=vision_input_type,
-            n_samples=general_args.n_val_samples,  # Limit the validation set size
-            do_resize=general_args.do_resize,
-            do_transforms=general_args.do_transforms,
-            embedding_constant=general_args.embedding_constant,
-            vision_encoder_patch_size=vision_encoder_patch_size
+            vision_input_path=cfg.data.vision_input_path,
+            vision_input_type=cfg.data.vision_input_type,
+            n_samples=cfg.data.n_val_samples,  # Limit the validation set size
+            answer_types=cfg.data.answer_types,
+            do_resize=cfg.data.do_resize,
+            do_transforms=cfg.data.do_transforms,
+            embedding_constant=cfg.data.embedding_constant,
+            vision_encoder_patch_size=vision_encoder_patch_size,
         )
-    elif general_args.dataset_name == "ctrate":
+    elif cfg.data.dataset_name == "ctrate":
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
-            dataset_json_path=general_args.train_dataset_json_path,
-            model_name=general_args.model_type,
-            split="train" if general_args.split_idx is None else f"train_{general_args.split_idx}",
-            vision_input_path=general_args.vision_input_path,
-            vision_input_type=vision_input_type,
-            n_samples=general_args.n_train_samples,
-            split_files=general_args.split_file,
-            answer_types=[{"TEXT": ["REPORT_DIAGNOSIS"]}],
-            do_resize=general_args.do_resize,
-            do_transforms=general_args.do_transforms,
-            embedding_constant=general_args.embedding_constant,
+            dataset_json_path=cfg.data.train_dataset_json_path,
+            model_name=cfg.model.model_type,
+            split="train",
+            vision_input_path=cfg.data.vision_input_path,
+            vision_input_type=cfg.data.vision_input_type,
+            n_samples=cfg.data.n_train_samples,
+            answer_types=cfg.data.answer_types,
+            do_resize=cfg.data.do_resize,
+            do_transforms=cfg.data.do_transforms,
+            embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size
         )
 
         val_dataset = CTRATEDataset(
-            dataset_json_path=general_args.val_dataset_json_path,
-            model_name=general_args.model_type,
-            split="val" if general_args.split_idx is None else f"val_{general_args.split_idx}",
-            vision_input_path=general_args.vision_input_path,
-            vision_input_type=vision_input_type,
-            n_samples=general_args.n_val_samples,  # Limit the validation set size
-            split_files=general_args.split_file,
-            answer_types=[{"TEXT": ["REPORT_DIAGNOSIS"]}],
-            do_resize=general_args.do_resize,
-            embedding_constant=general_args.embedding_constant,
+            dataset_json_path=cfg.data.val_dataset_json_path,
+            model_name=cfg.model.model_type,
+            split="val",
+            vision_input_path=cfg.data.vision_input_path,
+            vision_input_type=cfg.data.vision_input_type,
+            n_samples=cfg.data.n_val_samples,  # Limit the validation set size
+            answer_types=cfg.data.answer_types,
+            do_resize=cfg.data.do_resize,
+            embedding_constant=cfg.data.embedding_constant,
             # no transforms for val dataset
             vision_encoder_patch_size=vision_encoder_patch_size
         )
+    else:
+        raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
 
-    if general_args.embedding_constant is not None and is_main_process():
-        logger.info(f"Using embedding constant: {general_args.embedding_constant}")
-        print(f"Using embedding constant: {general_args.embedding_constant}")
+    if cfg.data.embedding_constant is not None and is_main_process():
+        logger.info(f"Using embedding constant: {cfg.data.embedding_constant}")
+        print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     if is_main_process():
         logger.info(
@@ -705,24 +524,14 @@ def main():
         print(
             f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
         )
-        logger.info(f"Using train batch size: {sft_trainer_config['per_device_train_batch_size']}")
-        logger.info(f"Using eval batch size: {sft_trainer_config['per_device_eval_batch_size']}")
+        logger.info(f"Using train batch size: {cfg.trainer.per_device_train_batch_size}")
+        logger.info(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
 
     # Create the trainer and train the model
     trainer = UnifiedVLMTrainer(
-        vlm_model,
-        output_dir=general_args.output_dir,
-        sft_trainer_config=sft_trainer_config,
-        wandb_project=general_args.wandb_project,
+        vlm_model=vlm_model,
+        cfg=cfg
     )
-
-    # Update trainer with additional config for wandb logging
-    trainer.general_args = vars(general_args)
-    trainer.dataset_info = {
-        "dataset_name": general_args.dataset_name,
-        "train_size": len(train_dataset),
-        "val_size": len(val_dataset),
-    }
 
     trainer.train(train_dataset, val_dataset)
 

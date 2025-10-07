@@ -1,11 +1,8 @@
 import os
-from pathlib import Path
-
-import numpy as np
 import torch
 import transformers
-from peft import LoraConfig
 
+from configs.model.model_config import ModelConfig
 from qwenvl.processing_3d import QwenVLProcessor3D
 from qwenvl.Qwen3D import QwenVLForConditionalGeneration3D
 from utils import logger
@@ -18,100 +15,52 @@ from .abstract_vlm import AbstractVLMModel
 class QwenVLModel(AbstractVLMModel):
     def __init__(
         self,
-        model_id,
-        output_dir="qwen25-vlm",
-        train_only_vision_adapter=False,
-        train_vision_encoder=True,
-        vision_encoder_path=None,
-        reduce_block=[2,2,2],
-        checkpoint_path=None,
-        local_files_only=False
+        model_cfg: ModelConfig,
+        vision_input_type: str,
+        local_files_only=False,
     ):
-        super().__init__(model_id=model_id, train_only_vision_adapter=train_only_vision_adapter, train_vision_encoder=train_vision_encoder, vision_encoder_path=vision_encoder_path, local_files_only=local_files_only)
+        super().__init__(model_cfg=model_cfg,
+                         vision_input_type=vision_input_type,
+                         local_files_only=local_files_only)
         self._model_str = "qwen"
-        self.output_dir = output_dir
         self.batch_count = 0
-        self.reduce_block = reduce_block
 
-        self.checkpoint_path = checkpoint_path
+    @property
+    def module_attr_map(self) -> dict[str, str]:
+        return {
+            "vision_encoder": "model.vision_encoder",
+            "adapter": "model.vision_adapter",
+            "language_model": "model.language_model",
+            "lm_head": "lm_head",
+        }
 
     def setup_model(self, bnb_config=None):
         """Initialize model, processor and PEFT configuration"""
-        
-        vision_input_type = VisionInputType.IMAGE if self.vision_encoder_path is not None else VisionInputType.EMBEDDING
+
+        if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
+            cache_dir = os.getenv("HF_HUB_CACHE")
+        else:
+            cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+
         self.processor = QwenVLProcessor3D.from_pretrained(
-            self.model_id,
-            cache_dir=os.path.expanduser("~/.cache/huggingface/hub"),
+            self.model_cfg.model_id,
+            cache_dir=cache_dir,
             local_files_only=self.local_files_only,
-            reduce_block=self.reduce_block,
-            vision_input_type=vision_input_type
+            reduce_block=self.model_cfg.adapter.reduce_block,
+            vision_input_type=self.vision_input_type
         )
         self.tokenizer = self.processor.tokenizer
 
-        if self.checkpoint_path:
-            # If a checkpoint path is provided, load the model from the checkpoint
-            logger.info(f"Loading model from checkpoint: {self.checkpoint_path}")
-            self.model = QwenVLForConditionalGeneration3D.from_pretrained(
-                self.model_id,
-                torch_dtype=torch.bfloat16,
-                quantization_config=bnb_config,
-                reduce_block=self.reduce_block,
-                vision_encoder_path=self.vision_encoder_path
-            )
-
-        elif bnb_config and not self.train_only_vision_adapter:
-            self.model = QwenVLForConditionalGeneration3D.from_pretrained(
-                self.model_id,
-                torch_dtype=torch.bfloat16,
-                quantization_config=bnb_config,
-                reduce_block=self.reduce_block,
-                vision_encoder_path=self.vision_encoder_path
-            )
-        else:
-            self.model = QwenVLForConditionalGeneration3D.from_pretrained(
-                self.model_id, 
-                torch_dtype=torch.bfloat16,
-                reduce_block=self.reduce_block,
-                vision_encoder_path=self.vision_encoder_path
-            )
+        self.model = QwenVLForConditionalGeneration3D.from_pretrained(
+            self.model_cfg.model_id,
+            model_cfg=self.model_cfg.model_dump(),
+            torch_dtype=torch.bfloat16
+        )
         
-        if self.vision_encoder_path is not None:
+        if self.vision_input_type == VisionInputType.IMAGE:
             self.model.model.setup_vision_encoder()
 
-        if not self.train_vision_encoder:
-            # Freeze vision encoder if not training it
-            if self.vision_encoder_path is not None:
-                for param in self.model.model.vision_encoder.parameters():
-                        param.requires_grad = False
-
-        if self.train_only_vision_adapter:
-            # For adapter-only training, don't use quantization for the adapter
-            # Freeze all parameters except vision adapter
-            self._set_trainable_params()
-
-        if self.checkpoint_path and (Path(self.checkpoint_path) / "adapter_config.json").exists():
-            # this is the peft adapter, not the adapter between vision encoder and language model
-            self.model.load_adapter(self.checkpoint_path)
-
         return self.model
-
-    def _set_trainable_params(self):
-        """Set which parameters are trainable based on configuration"""
-        if self.train_only_vision_adapter:
-            # Freeze all parameters
-            for name, param in self.model.named_parameters():
-                if "vision_adapter" not in name:  # Freeze everything except vision adapter
-                    param.requires_grad = False
-                else:
-                    param.requires_grad = True
-                    logger.debug(f"Unfreezing: {name}")
-
-            # Print trainable parameters
-            total_params = sum(p.numel() for p in self.model.parameters())
-            trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-            logger.info(f"Total parameters: {total_params:,}")
-            logger.info(f"Trainable parameters: {trainable_params:,}")
-            logger.info(f"Percentage of trainable parameters: {100 * trainable_params / total_params:.2f}%")
 
     def collate_fn(self, examples):
         """Custom collate function for Qwen model"""
@@ -150,11 +99,11 @@ class QwenVLModel(AbstractVLMModel):
             labels[labels == image_token_id] = -100
 
         # Only keep the model's final assistant response as the prediction target.
-        # Everything before and including the last "<|im_start|>assistant\n" is ignored (-100).
+        # Everything before the last "<|im_start|>assistant\n" is ignored (-100).
         im_start_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
         for i in range(labels.shape[0]):
             last_im_start_pos = (labels[i] == im_start_token_id).nonzero(as_tuple=True)[0][-1]
-            labels[i, :last_im_start_pos + 3] = -100
+            labels[i, :last_im_start_pos] = -100
 
         raw_samples = extract_raw_samples_from_batch(examples)
         batch_out = {
@@ -172,50 +121,50 @@ class QwenVLModel(AbstractVLMModel):
         self.batch_count += 1
         return batch_out
 
-    def get_trainable_params(self):
-        """Return information about trainable parameters"""
-        if self.train_only_vision_adapter:
-            return {"peft_config": None, "train_only_vision_adapter": True}
-        else:
-            if self.train_vision_encoder:
-                # Train both language model and vision encoder
-                peft_config = LoraConfig(
-                    task_type="CAUSAL_LM",
-                    r=8,
-                    lora_alpha=32,
-                    target_modules=[
-                        "q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj",
-                        "lm_head"
-                    ],
-                    modules_to_save=["vision_adapter"],
-                    lora_dropout=0.1,
-                    bias="none"
-                )
-            else:
-                # Only train language model, exclude vision encoder modules
-                peft_config = LoraConfig(
-                    task_type="CAUSAL_LM",
-                    r=8,
-                    lora_alpha=32,
-                    # Use specific module paths to target only language model components
-                    # TODO use exclude_modules (only available in newest transformers dev right now)
-                    target_modules=[
-                        "model.language_model.layers.*.self_attn.q_proj",
-                        "model.language_model.layers.*.self_attn.k_proj", 
-                        "model.language_model.layers.*.self_attn.v_proj",
-                        "model.language_model.layers.*.self_attn.o_proj",
-                        "model.language_model.layers.*.mlp.gate_proj",
-                        "model.language_model.layers.*.mlp.up_proj",
-                        "model.language_model.layers.*.mlp.down_proj",
-                        "lm_head"
-                    ],
-                    modules_to_save=["vision_adapter"],
-                    lora_dropout=0.1,
-                    bias="none"
-                )
-
-            return {"peft_config": peft_config, "train_only_vision_adapter": False}
+    # def get_trainable_params(self):
+    #     """Return information about trainable parameters"""
+    #     if self.train_only_vision_adapter:
+    #         return {"peft_config": None, "train_only_vision_adapter": True}
+    #     else:
+    #         if self.train_vision_encoder:
+    #             # Train both language model and vision encoder
+    #             peft_config = LoraConfig(
+    #                 task_type="CAUSAL_LM",
+    #                 r=8,
+    #                 lora_alpha=32,
+    #                 target_modules=[
+    #                     "q_proj", "k_proj", "v_proj", "o_proj",
+    #                     "gate_proj", "up_proj", "down_proj",
+    #                     "lm_head"
+    #                 ],
+    #                 modules_to_save=["vision_adapter"],
+    #                 lora_dropout=0.1,
+    #                 bias="none"
+    #             )
+    #         else:
+    #             # Only train language model, exclude vision encoder modules
+    #             peft_config = LoraConfig(
+    #                 task_type="CAUSAL_LM",
+    #                 r=8,
+    #                 lora_alpha=32,
+    #                 # Use specific module paths to target only language model components
+    #                 # TODO use exclude_modules (only available in newest transformers dev right now)
+    #                 target_modules=[
+    #                     "model.language_model.layers.*.self_attn.q_proj",
+    #                     "model.language_model.layers.*.self_attn.k_proj",
+    #                     "model.language_model.layers.*.self_attn.v_proj",
+    #                     "model.language_model.layers.*.self_attn.o_proj",
+    #                     "model.language_model.layers.*.mlp.gate_proj",
+    #                     "model.language_model.layers.*.mlp.up_proj",
+    #                     "model.language_model.layers.*.mlp.down_proj",
+    #                     "lm_head"
+    #                 ],
+    #                 modules_to_save=["vision_adapter"],
+    #                 lora_dropout=0.1,
+    #                 bias="none"
+    #             )
+    #
+    #         return {"peft_config": peft_config, "train_only_vision_adapter": False}
 
     def get_model_specific_training_args(self):
         """Return model-specific training arguments"""
