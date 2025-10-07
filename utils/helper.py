@@ -142,9 +142,13 @@ def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "bes
     if mode == "final":
         ckpt_dir = final_ckpt_dir
     elif mode == "best":
-        final_trainer_state = load_json(final_ckpt_dir / TRAINER_STATE_NAME)
-        best_ckpt_dir = Path(final_trainer_state["best_model_checkpoint"])
-        ckpt_dir = best_ckpt_dir
+        # distinguish between our best model (NLP metrics) and transformers' best model (eval mean token accuracy)
+        if (out_best_ckpt_dir := Path(run_dir, "best_model")).exists():
+            ckpt_dir = out_best_ckpt_dir
+        else:
+            final_trainer_state = load_json(final_ckpt_dir / TRAINER_STATE_NAME)
+            best_ckpt_dir = Path(final_trainer_state["best_model_checkpoint"])
+            ckpt_dir = best_ckpt_dir
     else:
         raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
 

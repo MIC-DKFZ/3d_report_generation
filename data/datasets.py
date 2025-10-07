@@ -4,7 +4,7 @@ import os
 from abc import ABC, abstractmethod
 from numbers import Number
 from pathlib import Path
-from typing import Type
+from typing import Type, Literal
 
 import blosc2
 import nrrd
@@ -91,7 +91,7 @@ class MedicalImageDataset(Dataset, ABC):
         self,
         dataset_json_path,
         model_name,
-        split="train",
+        split: Literal["train", "val", "test"] = "train",
         vision_input_path=None,
         vision_input_type=VisionInputType.EMBEDDING,
         n_samples=None,
@@ -291,8 +291,13 @@ class AMOSMMDataset(MedicalImageDataset):
         """Load vision input path for a given image ID"""
         if self.split == "train":
             image_name = f"{image_id.split("./")[-1].split(".")[0]}_0000"
-        else:
+        elif self.split == "val":
             image_name = f"{image_id.split("./")[-1].split(".")[0]}"
+        elif self.split == "test":
+            raise NotImplementedError()
+        else:
+            raise ValueError(f"Unknown split: {self.split}")
+
         if self.vision_input_type == VisionInputType.EMBEDDING:
             image_name = f"{image_name}_embedding.bl2"
         elif self.vision_input_type == VisionInputType.IMAGE:
@@ -321,7 +326,15 @@ class CTRATEDataset(MedicalImageDataset):
     """
     def _get_vision_input_path(self, image_id):
         """Load vision input path for a given image ID"""
-        split_path = "valid" if self.split == "val" else self.split
+        if self.split == "train":
+            split_path = "train"
+        elif self.split == "val":
+            split_path = "valid"
+        elif self.split == "test":
+            raise NotImplementedError()
+        else:
+            raise ValueError(f"Unknown split: {self.split}")
+
         if self.vision_input_type == VisionInputType.EMBEDDING:
             return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}_embedding.bl2")
         if self.vision_input_type == VisionInputType.IMAGE:

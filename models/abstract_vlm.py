@@ -150,7 +150,7 @@ class AbstractVLMModel(ABC):
                 raise ValueError(f"Unknown mode in {TrainableModuleConfig.__name__}: {mode}")
 
     @staticmethod
-    def load_from_run_dir(run_dir: str | Path, mode: Literal["best", "final"] = "best") -> AbstractVLMModel:
+    def load_from_run_dir(run_dir: str | Path, mode: Literal["best", "final"] = "best") -> tuple[AbstractVLMModel, RunConfig, Path]:
         """
         Load a trained VLM model from a run directory.
 
@@ -166,10 +166,10 @@ class AbstractVLMModel(ABC):
         ckpt_dir = resolve_ckpt_dir_in_run_dir(run_dir=run_dir, mode=mode)
         logger.info(f"Loading {mode} model from {str(run_dir)}")
 
-        return AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
+        return AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir) + (ckpt_dir,)
 
     @staticmethod
-    def load_from_checkpoint_dir(ckpt_dir: str | Path, strict=True) -> AbstractVLMModel:
+    def load_from_checkpoint_dir(ckpt_dir: str | Path, strict=True) -> tuple[AbstractVLMModel, RunConfig]:
         """
         Restore a VLM model from a checkpoint directory.
 
@@ -218,13 +218,13 @@ class AbstractVLMModel(ABC):
 
             vlm_model.model.load_state_dict(state_dict, strict=False)
 
-            return vlm_model
+            return vlm_model, cfg
 
         if index_path.exists():
             load_sharded_checkpoint(model=vlm_model.model, folder=ckpt_dir, strict=strict,
                                     key_mapping=checkpoint_conversion_mapping,
                                     keys_to_ignore=keys_to_ignore)
-            return vlm_model
+            return vlm_model, cfg
 
         raise FileNotFoundError(
             f"Neither {SAFE_WEIGHTS_NAME!r} nor {SAFE_WEIGHTS_INDEX_NAME!r} found in {ckpt_dir}"

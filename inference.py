@@ -1,9 +1,7 @@
 import argparse
 import os
-import re
-from datetime import datetime
+from argparse import Namespace
 from pathlib import Path
-from uuid import uuid4
 
 import torch
 import torch.distributed as dist
@@ -11,35 +9,33 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
+from configs.run_config import RunConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
 from eval_ctrate import main as eval_ctrate
 from evaluation.metrics import bleu_score, meteor_score, rouge_score
-from models.owl_vlm import OwlVLModel
-from models.qwen_vlm import QwenVLModel
+from models.abstract_vlm import AbstractVLMModel
 from utils import logger, rank_zero_filter
 from utils.filter_batch import extract_batch_prompt_only
-from utils.helper import load_config_file
+from utils.helper import add_datetime_tag, is_main_process
 from utils.load_and_save_files import load_json, save_json
 from utils.vision_input_type import VisionInputType
 
 
 class UnifiedVLMInference:
-    def __init__(self, vlm_model, output_dir="vlm_inference", config_file_path: str = None):
+    def __init__(self, vlm_model: AbstractVLMModel, cfg: RunConfig, output_dir: str | Path):
         """
-        Initialize the unified VLM inference."
+        Initialize the unified VLM inference.
         Args:
             vlm_model: An instance of a class derived from AbstractVLMModel
+            cfg: The RunConfig instance from the training run
             output_dir: Directory to save inference outputs
         """
         self.vlm_model = vlm_model
-        self.output_dir = output_dir
-        self.config_file_path = config_file_path
-
-        # self.model_str = self.vlm_model._model_str  # e.g., "owl" or "qwen"
-        self.model_str = "owl" if isinstance(self.vlm_model, OwlVLModel) else "qwen"
+        self.cfg = cfg
+        self.output_dir = Path(output_dir)
 
         # Create output directory if it doesn't exist
-        os.makedirs(output_dir, exist_ok=True)
+        self.output_dir.mkdir(exist_ok=True)
 
         # TODO optionally load those member variables from config file
         self.num_dataloader_workers = 4
@@ -66,7 +62,7 @@ class UnifiedVLMInference:
             test_dataset: Test dataset
         """
         logger.info("Running inference...")
-        model = self.vlm_model.setup_model()
+        model = self.vlm_model.model
         model.eval().cuda()
 
         if self.ddp_available:
@@ -180,8 +176,6 @@ class UnifiedVLMInference:
                 outputs_text = outputs_text.split("assistant\n")[-1].strip()
             if "system\n" in outputs_text:
                 outputs_text = outputs_text.split("system\n")[-1].strip()
-            if self.model_str == "owl" and "'text':" in outputs_text:
-                outputs_text = re.search(r"'text':\s*'([^']*)'", outputs_text).group(1)
             result["output_text_clean"] = outputs_text
 
         results_filename = "inference_results.json"
@@ -189,183 +183,144 @@ class UnifiedVLMInference:
         save_json(results, Path(self.output_dir, results_filename))
 
         logger.info(
-            f"Saved inference results to {os.path.join(self.output_dir, results_filename)}"
+            f"Saved inference results to {str(Path(self.output_dir, results_filename))}"
         )
 
 
-def parse_args(default_config=None):
-    if default_config is None:
-        default_config = {}
-    general_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
-    general_parser.add_argument(
-        "--model_type",
+def parse_args() -> Namespace:
+    parser = argparse.ArgumentParser(description="Vision Language Model Inference")
+    group = parser.add_mutually_exclusive_group()
+
+    group.add_argument(
+        "--checkpoint_dir",
         type=str,
-        choices=["owl", "qwen"],
+        default=None,
+        help="Path to a specific checkpoint directory to load."
+    )
+
+    group.add_argument(
+        "--run_dir",
+        type=str,
+        default=None,
+        help="Path to a run directory containing checkpoint subdirectories "
+             "(requires --mode to select which checkpoint to load)."
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["best", "final"],
+        default="best",
+        help="When using --run_dir, choose which checkpoint to load: 'best' or 'final'."
+    )
+    parser.add_argument(
+        "--test_dataset_json",
+        type=str,
         required=True,
-        help="Type of VLM model to train (owl or qwen)",
+        help="Path to the testset dataset JSON file."
     )
-    general_parser.add_argument("--model_id", type=str, required=False, help="Model ID or path")
-    general_parser.add_argument(
-        "--dataset_json_path", type=str, required=True, help="Path to the dataset JSON file"
-    )
-    general_parser.add_argument(
-        "--output_dir",
+
+    parser.add_argument(
+        "--vision_encoder_path",
         type=str,
-        default="output/vlm_inference",
-        help="Directory to save model outputs",
+        default=None,
+        help="Path to the vision encoder checkpoint."
     )
-    general_parser.add_argument(
+    parser.add_argument(
         "--vision_input_path",
         type=str,
-        required=True,
-        help="Path to the vision input (either embeddings or images)",
-    )
-    general_parser.add_argument(
-        "--embedding_constant",
-        # type=float,
         default=None,
-        help="Constant value for training language only baseline (! Do not set this when training a VLM !). Can either be a float to set the whole embedding to a constant value or 'random' to set the embedding to a random values.",
+        help="Path to the vision input directory."
     )
-    general_parser.add_argument(
-        "--vision_encoder_path", type=str, required=False, help="Path to the dataset JSON file"
-    )
-    general_parser.add_argument(
-        "--inference_config", type=str, help="Path to config file (YAML or JSON)"
-    )
-    general_parser.add_argument(
-        "--num_gpus", type=str, help="Number of GPUs to use for inference", default=1
-    )
-    general_parser.add_argument(
-        "--checkpoint_path", type=str, default=None, help="Path to a model checkpoint to load"
-    )
-    general_parser.add_argument(
-        "--dataset_name", type=str, default="ctrate", help="Name of the dataset"
-    )
-    general_parser.add_argument(
+    parser.add_argument(
         "--n_samples",
         type=int,
         default=None,
-        help="Number of samples to use (for quick testing). Default: None (use all samples)",
-    )
-    general_parser.add_argument(
-        "--do_resize",
-        action="store_true",
-        help="Resize the input image to 192x192x192",
-    )
-    # TODO: Do we need this argument?
-    general_parser.add_argument(
-        "--do_training_transforms",
-        action="store_true",
-        help="Wheather or not to do data augmentation to the image during training",
-    )
-    general_parser.add_argument(
-        "--do_validation_transforms",
-        action="store_true",
-        help="Wheather or not to do data augmentation to the image during training",
+        help="Number of samples. Run all if 'None'."
     )
 
     # First parse just the config argument to load the file
-    general_args, _ = general_parser.parse_known_args()
-
-    # Load config file if provided
-    if general_args.inference_config and os.path.exists(general_args.inference_config):
-        file_config = load_config_file(general_args.inference_config)
-
-        # Update config with values from file
-        default_config.update(file_config)
-    if general_args.embedding_constant is not None:
-        try:
-            general_args.embedding_constant = float(general_args.embedding_constant)
-        except ValueError:
-            pass
-
-    return general_args
+    args, _ = parser.parse_known_args()
+    return args
 
 
 def main():
     args = parse_args()
 
+    test_dataset_json_path = Path(args.test_dataset_json)
+    if not test_dataset_json_path.exists():
+        raise FileNotFoundError(f"Test dataset JSON not found: {str(test_dataset_json_path)}")
+
+    if args.run_dir:
+        vlm_model, cfg, ckpt_dir = AbstractVLMModel.load_from_run_dir(args.run_dir, args.mode)
+    else:  # if args.checkpoint_dir
+        ckpt_dir = args.checkpoint_dir
+        vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
+
+    if args.vision_encoder_path:
+        cfg.model.vision_encoder.vision_encoder_path = args.vision_encoder_path
+    if args.vision_input_path:
+        cfg.data.vision_input_path = args.vision_input_path
+
+    inference_output_dir = ckpt_dir / "inference"
+
     local_rank = 0
-    if int(args.num_gpus) > 1:
+    if "LOCAL_RANK" in os.environ and "WORLD_SIZE" in os.environ:
         local_rank = int(os.environ["LOCAL_RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
         dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
 
-    slurm_job_id = os.environ.get("SLURM_JOB_ID", None)
-    unique_id = str(uuid4()) if not slurm_job_id else slurm_job_id
-    log_file_name = datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_inference_{unique_id}.log")
-    log_file = os.path.join(args.output_dir, log_file_name)
+    log_file_name = add_datetime_tag("inference.log")
+    log_file = Path(inference_output_dir, log_file_name)
     if local_rank == 0:
         logger.add(log_file, filter=rank_zero_filter)
-    if args.model_id is None:
-        if args.model_type == "owl":
-            args.model_id = "mPLUG/mPLUG-Owl3-1B-241014"
-        elif args.model_type == "qwen":
-            args.model_id = "Qwen/Qwen2.5-VL-3B-Instruct"
 
-    # Create the appropriate VLM model based on the model type
-    model_specific_args = {}
-    if args.model_type == "owl":
-        vlm_model_class = OwlVLModel
-        model_specific_args = {"checkpoint_path": args.checkpoint_path}
-    elif args.model_type == "qwen":
-        vlm_model_class = QwenVLModel
-        model_specific_args = {"checkpoint_path": args.checkpoint_path, "vision_encoder_path": args.vision_encoder_path}
-    else:
-        raise ValueError(f"Unsupported model type: {args.model_type}")
-
-    vlm_model = vlm_model_class(
-        model_id=args.model_id,
-        output_dir=args.output_dir,
-        train_only_vision_adapter=False,
-        **model_specific_args,
-    )
-    vision_input_type = VisionInputType.IMAGE if args.vision_encoder_path else VisionInputType.EMBEDDING
-    if vision_input_type == VisionInputType.IMAGE:
-        ve_plans = load_json(Path(args.vision_encoder_path, "plans.json"))
+    if cfg.data.vision_input_type == VisionInputType.IMAGE:
+        ve_plans = load_json(Path(cfg.model.vision_encoder.vision_encoder_path, "plans.json"))
         vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
     else:
         vision_encoder_patch_size = None
-    if args.dataset_name == "amosmm":
+
+    if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
-            dataset_json_path=args.dataset_json_path,
-            model_name=args.model_type,
-            split="val",
-            vision_input_path=args.vision_input_path,
-            vision_input_type=vision_input_type,
+            dataset_json_path=str(test_dataset_json_path),
+            model_name=cfg.model.model_type,
+            split="test",
+            vision_input_path=cfg.data.vision_input_path,
+            vision_input_type=cfg.data.vision_input_type,
+            answer_types=cfg.data.answer_types,
             n_samples=args.n_samples,  # Limit the validation set size
-            do_resize=args.do_resize,
-            do_transforms=args.do_validation_transforms,
-            embedding_constant=args.embedding_constant,
+            do_resize=cfg.data.do_resize,
+            do_transforms=cfg.data.do_transforms,
+            embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size
         )
-        logger.info(f"Loaded {len(test_dataset)} test samples")
-    elif args.dataset_name == "ctrate":
+    elif cfg.data.dataset_name == "ctrate":
         test_dataset = CTRATEDataset(
-            dataset_json_path=args.dataset_json_path,
-            model_name=args.model_type,
-            split="val",
-            vision_input_path=args.vision_input_path,
-            vision_input_type=vision_input_type,
+            dataset_json_path=str(test_dataset_json_path),
+            model_name=cfg.model.model_type,
+            split="test",
+            vision_input_path=cfg.data.vision_input_path,
+            vision_input_type=cfg.data.vision_input_type,
+            answer_types=cfg.data.answer_types,
             n_samples=args.n_samples,  # Limit the validation set size
-            # split_files=args.split_file,
-            answer_types=("TEXT",),
-            do_resize=args.do_resize,
-            do_transforms=args.do_validation_transforms,
-            embedding_constant=args.embedding_constant,
+            do_resize=cfg.data.do_resize,
+            do_transforms=cfg.data.do_transforms,
+            embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size
         )
     else:
-        raise ValueError(f"Unsupported dataset name: {args.dataset_name}")
-    if args.embedding_constant is not None:
-        logger.info(f"Setting embedding constant to {args.embedding_constant}")
-        print(f"Setting embedding constant to {args.embedding_constant}")
-        test_dataset.embedding_constant = args.embedding_constant
+        raise ValueError(f"Unsupported dataset name: {cfg.data.dataset_name}")
+
+    logger.info(f"Loaded {len(test_dataset)} test samples")
+
+    if cfg.data.embedding_constant is not None and is_main_process():
+        logger.info(f"Using embedding constant: {cfg.data.embedding_constant}")
+        print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     # Create inference object and run inference
-    inference = UnifiedVLMInference(vlm_model, output_dir=args.output_dir)
+    inference = UnifiedVLMInference(vlm_model, cfg=cfg, output_dir=inference_output_dir)
     # calculate_metrics = not args.no_calculate_metrics
     inference.inference(test_dataset)
+
 
 if __name__ == "__main__":
     main()
