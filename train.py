@@ -74,7 +74,6 @@ class UnifiedVLMTrainer:
         self.vlm_model: AbstractVLMModel = vlm_model
         self.trainer: SFTTrainer | None = None
         self.cfg: RunConfig = cfg
-        self.wandb_run_name = str(Path(self.cfg.general.output_dir).relative_to(VLM_OUTPUT_DIR))
 
         # Setup distributed training
         (self.is_distributed,
@@ -102,7 +101,7 @@ class UnifiedVLMTrainer:
 
         return SFTConfig(**self.cfg.trainer.model_dump(),
                          **model_args,
-                         run_name=self.wandb_run_name,
+                         run_name=self.cfg.general.run_name,
                          output_dir=self.cfg.general.output_dir)
 
     def get_quantization_config(self):
@@ -162,11 +161,11 @@ class UnifiedVLMTrainer:
             wandb.init(
                 entity="mic-rocket-vlm",
                 project=self.cfg.general.wandb_project,
-                name=self.wandb_run_name,
+                name=self.cfg.general.run_name,
                 reinit=True,
                 group=f"{type(self.vlm_model).__name__}_run",
                 config=config_dict,
-                id=self.wandb_run_name.replace("/", "--")
+                id=str(Path(self.cfg.general.output_dir).relative_to(VLM_OUTPUT_DIR)).replace("/", "--")
             )
 
             # Ensure wandb properly logs hyperparameters in offline mode
