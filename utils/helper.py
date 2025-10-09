@@ -1,16 +1,17 @@
 import argparse
+import os
 import random
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Literal, TypeVar
 
-import torch.nn as nn
 import numpy as np
 import torch
-import os
+import torch.nn as nn
 from pydantic import BaseModel
-from typing import TypeVar, Any, Literal
 from transformers.trainer import TRAINER_STATE_NAME
-from utils.load_and_save_files import load_yaml, load_json
+
+from utils.load_and_save_files import load_json, load_yaml
 
 
 def seed_everything(seed: int):
@@ -59,7 +60,7 @@ def add_datetime_tag(s: str, sep: str = "__") -> str:
 
 
 ConfigT = TypeVar("ConfigT", bound=BaseModel)
-def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[str] | None = None) -> ConfigT:
+def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[str] | None = None, parent_key:str="") -> ConfigT:
     """
     Update a Pydantic BaseModel with matching CLI arguments.
 
@@ -74,6 +75,9 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
         ignore_keys = []
     elif isinstance(ignore_keys, str):
         ignore_keys = [ignore_keys]
+
+    if parent_key != "":
+        parent_key = parent_key + "."
 
     parser = argparse.ArgumentParser()
     for key, field in default_model.model_fields.items():
@@ -93,20 +97,20 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
             # Handle boolean values with store_true/store_false
             if value:
                 parser.add_argument(
-                    f"--no-{key}",
+                    f"--{parent_key}no-{key}",
                     action="store_false",
                     dest=key,
                     help=f"Disable {key} (default: enabled)",
                 )
             else:
                 parser.add_argument(
-                    f"--{key}",
+                    f"--{parent_key}{key}",
                     action="store_true",
                     help=f"Enable {key} (default: disabled)",
                 )
         else:
             parser.add_argument(
-                f"--{key}",
+                f"--{parent_key}{key}",
                 type=str,           # force CLI args to be parsed as strings; Pydantic will handle casting/validation.
                                     # prevents argparse from using type=NoneType when the default value is None
                 default=value,
@@ -114,8 +118,9 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
             )
 
     args_parsed, _ = parser.parse_known_args()
+    args_parsed = {k.removeprefix(parent_key): v for k, v in vars(args_parsed).items()}
     return default_model.__class__.model_validate(
-        {**default_model.model_dump(), **vars(args_parsed)}
+        {**default_model.model_dump(), **args_parsed}
     )
 
 
