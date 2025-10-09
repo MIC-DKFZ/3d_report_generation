@@ -13,15 +13,14 @@ from utils import logger
 
 class PrintEvalBatchCallback(TrainerCallback):
     def __init__(
-        self, tokenizer=None, processor=None, sample_count=50, eval_every_n_epochs=0.2, print_first_sample=True
+        self, tokenizer=None, processor=None, sample_count=250, eval_every_n_epochs=0.25, print_first_sample=True
     ):
         self.tokenizer = tokenizer
         self.printed = False
         self.sample_count = sample_count
 
-        self.last_epoch = -1
-
-        self.max_diff = eval_every_n_epochs
+        self.last_epoch = 0
+        self.eval_every_n_epochs = eval_every_n_epochs
 
         self.print_first_sample = print_first_sample
 
@@ -54,18 +53,13 @@ class PrintEvalBatchCallback(TrainerCallback):
         **kwargs,
     ):
 
-        if metrics is not None:
-            metrics["eval_rouge_score"] = -1  # Initialize to -1 in case of failure
+        # if metrics is not None:
+        #     metrics["eval_rouge_score"] = -1  # Initialize to -1 in case of failure
 
-        # return
-
-        # for DDP check something like trainer.is_world_process_zero() here
-        if not state.is_world_process_zero:
+        if (not state.is_world_process_zero
+                or state.epoch - self.last_epoch < self.eval_every_n_epochs):
             return
 
-        # TODO: for DDP check something like trainer.is_world_process_zero() here
-        if state.epoch - self.last_epoch < self.max_diff:
-           return
         self.last_epoch = state.epoch
         logger.info(f"Output samples from validation dataset after epoch {state.epoch}:")
         logger.info(f"Epoch {state.epoch} reached")

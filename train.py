@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 from transformers import BitsAndBytesConfig
-from trl import SFTConfig, SFTTrainer
+from trl import SFTConfig
 
 import wandb
 from configs.run_config import RunConfig
@@ -16,6 +16,7 @@ from data.datasets import AMOSMMDataset, CTRATEDataset
 from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
+from trainers.VLMSFTTrainer import VLMSFTTrainer
 from utils import logger
 from utils.helper import (
     is_main_process,
@@ -77,7 +78,7 @@ class UnifiedVLMTrainer:
             cfg: The RunConfig of the experiment
         """
         self.vlm_model: AbstractVLMModel = vlm_model
-        self.trainer: SFTTrainer | None = None
+        self.trainer: VLMSFTTrainer | None = None
         self.cfg: RunConfig = cfg
 
         # Setup distributed training
@@ -198,11 +199,12 @@ class UnifiedVLMTrainer:
                     tokenizer=self.vlm_model.tokenizer,
                     processor=self.vlm_model.processor,
                     sample_count=len(val_dataset),
+                    eval_every_n_epochs=0.25
                 )
             )
 
         # Initialize SFT trainer
-        self.trainer = SFTTrainer(
+        self.trainer = VLMSFTTrainer(
             model=model,
             args=training_args,
             train_dataset=train_dataset,
@@ -307,7 +309,7 @@ def setup_config_and_logging() -> RunConfig:
     cfg.maybe_reset_vision_encoder_specific_args(logger=logger)
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
-    cfg.general = merge_config_with_cli_args(cfg.general, ignore_keys="train_config", parent_key="general")
+    cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")
     cfg.model = merge_config_with_cli_args(cfg.model, parent_key="model")
     cfg.trainer = merge_config_with_cli_args(cfg.trainer, parent_key="trainer")
     cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")

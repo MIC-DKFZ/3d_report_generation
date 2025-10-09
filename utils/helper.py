@@ -60,13 +60,14 @@ def add_datetime_tag(s: str, sep: str = "__") -> str:
 
 
 ConfigT = TypeVar("ConfigT", bound=BaseModel)
-def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[str] | None = None, parent_key:str="") -> ConfigT:
+def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[str] | None = None, parent_key: str = "") -> ConfigT:
     """
     Update a Pydantic BaseModel with matching CLI arguments.
 
     Args:
         default_model: A Pydantic model (e.g. GeneralConfig, ModelConfig, ...).
         ignore_keys: A list of keys for values that should not be merged even if provided via CLI.
+        parent_key: The subconfiguration that is to be overwritten by the CLI arguments.
 
     Returns:
         A new instance of the same model type with updated fields.
@@ -147,9 +148,13 @@ def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "bes
     if mode == "final":
         ckpt_dir = final_ckpt_dir
     elif mode == "best":
-        final_trainer_state = load_json(final_ckpt_dir / TRAINER_STATE_NAME)
-        best_ckpt_dir = Path(final_trainer_state["best_model_checkpoint"])
-        ckpt_dir = best_ckpt_dir
+        # distinguish between our best model (NLP metrics) and transformers' best model (eval mean token accuracy)
+        if (out_best_ckpt_dir := Path(run_dir, "best_model")).exists():
+            ckpt_dir = out_best_ckpt_dir
+        else:
+            final_trainer_state = load_json(final_ckpt_dir / TRAINER_STATE_NAME)
+            best_ckpt_dir = Path(final_trainer_state["best_model_checkpoint"])
+            ckpt_dir = best_ckpt_dir
     else:
         raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
 
