@@ -17,9 +17,14 @@ from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
 from utils import logger
-from utils.helper import seed_everything, load_config_file, merge_config_with_cli_args, is_main_process, \
-    print_model_parameters
-from utils.load_and_save_files import save_json, load_json, save_yaml
+from utils.helper import (
+    is_main_process,
+    load_config_file,
+    merge_config_with_cli_args,
+    print_model_parameters,
+    seed_everything,
+)
+from utils.load_and_save_files import load_json, save_json, save_yaml
 from utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
@@ -302,10 +307,10 @@ def setup_config_and_logging() -> RunConfig:
     cfg.maybe_reset_vision_encoder_specific_args(logger=logger)
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
-    cfg.general = merge_config_with_cli_args(cfg.general, ignore_keys="train_config")
-    cfg.model = merge_config_with_cli_args(cfg.model)
-    cfg.trainer = merge_config_with_cli_args(cfg.trainer)
-    cfg.data = merge_config_with_cli_args(cfg.data)
+    cfg.general = merge_config_with_cli_args(cfg.general, ignore_keys="train_config", parent_key="general")
+    cfg.model = merge_config_with_cli_args(cfg.model, parent_key="model")
+    cfg.trainer = merge_config_with_cli_args(cfg.trainer, parent_key="trainer")
+    cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
 
     # Resolve model_id if not provided
     if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:
