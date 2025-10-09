@@ -42,7 +42,7 @@ class PrintEvalBatchCallback(TrainerCallback):
         # Track best rouge score for model saving
         self.best_rouge_score = -1.0
 
-    def on_step_end(
+    def on_evaluate(
         self,
         args,
         state,

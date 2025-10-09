@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 from transformers import BitsAndBytesConfig
-from trl import SFTConfig, SFTTrainer
+from trl import SFTConfig
 
 import wandb
 from configs.run_config import RunConfig
@@ -16,6 +16,7 @@ from data.datasets import AMOSMMDataset, CTRATEDataset
 from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
+from trainers.VLMSFTTrainer import VLMSFTTrainer
 from utils import logger
 from utils.helper import (
     is_main_process,
@@ -77,7 +78,7 @@ class UnifiedVLMTrainer:
             cfg: The RunConfig of the experiment
         """
         self.vlm_model: AbstractVLMModel = vlm_model
-        self.trainer: SFTTrainer | None = None
+        self.trainer: VLMSFTTrainer | None = None
         self.cfg: RunConfig = cfg
 
         # Setup distributed training
@@ -203,7 +204,7 @@ class UnifiedVLMTrainer:
             )
 
         # Initialize SFT trainer
-        self.trainer = SFTTrainer(
+        self.trainer = VLMSFTTrainer(
             model=model,
             args=training_args,
             train_dataset=train_dataset,
