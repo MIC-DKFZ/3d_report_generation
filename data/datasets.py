@@ -292,9 +292,9 @@ class AMOSMMDataset(MedicalImageDataset):
         if self.split == "train":
             image_name = f"{image_id.split("./")[-1].split(".")[0]}_0000"
         elif self.split == "val":
-            image_name = f"{image_id.split("./")[-1].split(".")[0]}"
+            image_name = f"{image_id.split("./")[-1].split(".")[0]}_0000"
         elif self.split == "test":
-            raise NotImplementedError()
+            image_name = f"{image_id.split("./")[-1].split(".")[0]}"
         else:
             raise ValueError(f"Unknown split: {self.split}")
 
@@ -329,9 +329,9 @@ class CTRATEDataset(MedicalImageDataset):
         if self.split == "train":
             split_path = "train"
         elif self.split == "val":
-            split_path = "valid"
+            split_path = "train"
         elif self.split == "test":
-            raise NotImplementedError()
+            split_path = "valid"
         else:
             raise ValueError(f"Unknown split: {self.split}")
 
