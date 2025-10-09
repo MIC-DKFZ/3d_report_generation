@@ -60,13 +60,14 @@ def add_datetime_tag(s: str, sep: str = "__") -> str:
 
 
 ConfigT = TypeVar("ConfigT", bound=BaseModel)
-def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[str] | None = None, parent_key:str="") -> ConfigT:
+def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[str] | None = None, parent_key: str = "") -> ConfigT:
     """
     Update a Pydantic BaseModel with matching CLI arguments.
 
     Args:
         default_model: A Pydantic model (e.g. GeneralConfig, ModelConfig, ...).
         ignore_keys: A list of keys for values that should not be merged even if provided via CLI.
+        parent_key: The subconfiguration that is to be overwritten by the CLI arguments.
 
     Returns:
         A new instance of the same model type with updated fields.

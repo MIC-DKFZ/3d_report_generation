@@ -307,7 +307,7 @@ def setup_config_and_logging() -> RunConfig:
     cfg.maybe_reset_vision_encoder_specific_args(logger=logger)
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
-    cfg.general = merge_config_with_cli_args(cfg.general, ignore_keys="train_config", parent_key="general")
+    cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")
     cfg.model = merge_config_with_cli_args(cfg.model, parent_key="model")
     cfg.trainer = merge_config_with_cli_args(cfg.trainer, parent_key="trainer")
     cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
