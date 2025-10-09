@@ -198,6 +198,7 @@ class UnifiedVLMTrainer:
                     tokenizer=self.vlm_model.tokenizer,
                     processor=self.vlm_model.processor,
                     sample_count=len(val_dataset),
+                    eval_every_n_epochs=0.25
                 )
             )
 
