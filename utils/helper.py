@@ -197,6 +197,13 @@ def print_model_parameters(model: nn.Module, file=None, width=120, **kwargs):
     print("=" * width + "\n")
 
 
+def get_trainable_state_dict(model: nn.Module):
+    """Return a state dict containing only parameters with requires_grad=True."""
+    trainable_names = {name for name, p in model.named_parameters() if p.requires_grad}
+    state_dict = {name: p for name, p in model.state_dict().items() if name in trainable_names}
+
+    return state_dict
+
 def is_main_process():
     """
     Check if this is the main process (rank 0).

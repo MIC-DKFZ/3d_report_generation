@@ -5,10 +5,13 @@ import torch
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
 import wandb
+from transformers.modeling_utils import unwrap_model
+
 from evaluation.metrics import bleu_score, rouge_score, meteor_score
 from owl.model import OwnOwlModel
 from utils.filter_batch import extract_batch_prompt_only
 from utils import logger
+from utils.helper import get_trainable_state_dict
 
 
 class PrintEvalBatchCallback(TrainerCallback):
@@ -245,8 +248,12 @@ class PrintEvalBatchCallback(TrainerCallback):
             best_model_dir = os.path.join(args.output_dir, "best_model")
             os.makedirs(best_model_dir, exist_ok=True)
 
+            # Save only the trainable state_dict
+            model_to_save = unwrap_model(model)
+            trainable_state_dict = get_trainable_state_dict(model_to_save)
+
             # Save the model
-            model.save_pretrained(best_model_dir)
+            model.save_pretrained(best_model_dir, state_dict=trainable_state_dict)
             if hasattr(self.tokenizer, "save_pretrained"):
                 self.tokenizer.save_pretrained(best_model_dir)
             if hasattr(self.processor, "save_pretrained"):
