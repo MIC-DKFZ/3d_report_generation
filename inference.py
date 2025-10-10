@@ -236,6 +236,11 @@ def parse_args() -> Namespace:
         default=None,
         help="Number of samples. Run all if 'None'."
     )
+    parser.add_argument(
+        "--final_test",
+        action="store_true",
+        help="If set, set split to test instead of val."
+    )
 
     # First parse just the config argument to load the file
     args, _ = parser.parse_known_args()
@@ -279,11 +284,13 @@ def main():
     else:
         vision_encoder_patch_size = None
 
+    split = "test" if args.final_test else "val"
+    logger.info(f"Using {split} split for inference.")
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
             dataset_json_path=str(test_dataset_json_path),
             model_name=cfg.model.model_type,
-            split="test",
+            split=split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             answer_types=cfg.data.answer_types,
@@ -297,7 +304,7 @@ def main():
         test_dataset = CTRATEDataset(
             dataset_json_path=str(test_dataset_json_path),
             model_name=cfg.model.model_type,
-            split="test",
+            split=split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             answer_types=cfg.data.answer_types,
