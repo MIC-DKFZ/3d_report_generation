@@ -22,7 +22,8 @@ from utils.vision_input_type import VisionInputType
 
 
 class UnifiedVLMInference:
-    def __init__(self, vlm_model: AbstractVLMModel, cfg: RunConfig, output_dir: str | Path):
+    def __init__(self, vlm_model: AbstractVLMModel, cfg: RunConfig, output_dir: str | Path, per_device_batch_size: int,
+                 num_dataloader_workers: int):
         """
         Initialize the unified VLM inference.
         Args:
@@ -37,9 +38,8 @@ class UnifiedVLMInference:
         # Create output directory if it doesn't exist
         self.output_dir.mkdir(exist_ok=True)
 
-        # TODO optionally load those member variables from config file
-        self.num_dataloader_workers = 4
-        self.per_device_eval_batch_size = 1
+        self.per_device_batch_size = per_device_batch_size
+        self.num_dataloader_workers = num_dataloader_workers
 
         self.ddp_available = dist.is_available() and dist.is_initialized()
         if self.ddp_available:
@@ -87,9 +87,9 @@ class UnifiedVLMInference:
         # Create dataloader
         test_loader = torch.utils.data.DataLoader(
             test_dataset,
-            batch_size=1,
+            batch_size=self.per_device_batch_size,
             shuffle=False,
-            num_workers=0,
+            num_workers=self.num_dataloader_workers,
             sampler=sampler,
             collate_fn=self.vlm_model.collate_fn,
         )
@@ -207,15 +207,33 @@ def parse_args() -> Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["best", "final"],
-        default="best",
-        help="When using --run_dir, choose which checkpoint to load: 'best' or 'final'."
+        choices=["best_nlp", "best", "final"],
+        default="best_nlp",
+        help="When using --run_dir, choose which checkpoint to load: 'best_nlp', 'best' or 'final'."
     )
     parser.add_argument(
         "--test_dataset_json",
         type=str,
         required=True,
         help="Path to the testset dataset JSON file."
+    )
+    parser.add_argument(
+        "--n_samples",
+        type=int,
+        default=None,
+        help="Number of samples. Run all if 'None'."
+    )
+    parser.add_argument(
+        "--per_device_batch_size",
+        type=int,
+        default=12,
+        help="The batch size per device to run inference with."
+    )
+    parser.add_argument(
+        "--num_dataloader_workers",
+        type=int,
+        default=4,
+        help="Number of subprocesses per device to use for data loading."
     )
 
     parser.add_argument(
@@ -229,12 +247,6 @@ def parse_args() -> Namespace:
         type=str,
         default=None,
         help="Path to the vision input directory."
-    )
-    parser.add_argument(
-        "--n_samples",
-        type=int,
-        default=None,
-        help="Number of samples. Run all if 'None'."
     )
 
     # First parse just the config argument to load the file
@@ -268,7 +280,7 @@ def main():
         world_size = int(os.environ["WORLD_SIZE"])
         dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
 
-    log_file_name = add_datetime_tag("inference.log")
+    log_file_name = add_datetime_tag("inference") + ".log"
     log_file = Path(inference_output_dir, log_file_name)
     if local_rank == 0:
         logger.add(log_file, filter=rank_zero_filter)
@@ -317,7 +329,9 @@ def main():
         print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     # Create inference object and run inference
-    inference = UnifiedVLMInference(vlm_model, cfg=cfg, output_dir=inference_output_dir)
+    inference = UnifiedVLMInference(vlm_model, cfg=cfg, output_dir=inference_output_dir,
+                                    per_device_batch_size=args.per_device_batch_size,
+                                    num_dataloader_workers=args.num_dataloader_workers)
     # calculate_metrics = not args.no_calculate_metrics
     inference.inference(test_dataset)
 
