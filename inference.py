@@ -260,7 +260,7 @@ def main():
     if args.vision_input_path:
         cfg.data.vision_input_path = args.vision_input_path
 
-    inference_output_dir = ckpt_dir / "inference"
+    inference_output_dir = Path(ckpt_dir, "inference")
 
     local_rank = 0
     if "LOCAL_RANK" in os.environ and "WORLD_SIZE" in os.environ:
