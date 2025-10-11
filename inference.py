@@ -8,6 +8,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
+from typing import Literal
 
 from configs.run_config import RunConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
@@ -235,6 +236,11 @@ def parse_args() -> Namespace:
         default=4,
         help="Number of subprocesses per device to use for data loading."
     )
+    parser.add_argument(
+        "--final_test",
+        action="store_true",
+        help="If set, set split to test instead of val."
+    )
 
     parser.add_argument(
         "--vision_encoder_path",
@@ -291,11 +297,13 @@ def main():
     else:
         vision_encoder_patch_size = None
 
+    split: Literal["val", "test"] = "test" if args.final_test else "val"
+    logger.info(f"Using {split} split for inference.")
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
             dataset_json_path=str(test_dataset_json_path),
             model_name=cfg.model.model_type,
-            split="test",
+            split=split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             answer_types=cfg.data.answer_types,
@@ -309,7 +317,7 @@ def main():
         test_dataset = CTRATEDataset(
             dataset_json_path=str(test_dataset_json_path),
             model_name=cfg.model.model_type,
-            split="test",
+            split=split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             answer_types=cfg.data.answer_types,
