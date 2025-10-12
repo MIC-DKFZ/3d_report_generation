@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from transformers.trainer import TRAINER_STATE_NAME
 
 from utils.load_and_save_files import load_json, load_yaml
+from utils.paths import VLM_OUTPUT_DIR
 
 
 def seed_everything(seed: int):
@@ -207,6 +208,16 @@ def get_trainable_state_dict(model: nn.Module):
     state_dict = {name: p for name, p in model.state_dict().items() if name in trainable_names}
 
     return state_dict
+
+
+def find_run_dir_in_output_dir(run_dir: str):
+    matches = list(Path(VLM_OUTPUT_DIR).rglob(run_dir))
+    if len(matches) > 1:
+        raise ValueError(f"Multiple matches found for run_dir '{run_dir}': {matches}")
+    elif not matches:
+        raise FileNotFoundError(f"No directory named '{run_dir}' found under {VLM_OUTPUT_DIR}")
+    return matches[0]
+
 
 def is_main_process():
     """

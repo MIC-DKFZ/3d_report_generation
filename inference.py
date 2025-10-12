@@ -17,7 +17,7 @@ from evaluation.metrics import bleu_score, meteor_score, rouge_score
 from models.abstract_vlm import AbstractVLMModel
 from utils import logger, rank_zero_filter
 from utils.filter_batch import extract_batch_prompt_only
-from utils.helper import add_datetime_tag, is_main_process
+from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir
 from utils.load_and_save_files import load_json, save_json
 from utils.vision_input_type import VisionInputType
 
@@ -111,35 +111,17 @@ class UnifiedVLMInference:
                 if "batch_count" in inputs:
                     del inputs["batch_count"]
 
-                # image_embeds is only in inputs for owl model due to cross attn
-                if "image_embeds" in inputs:
-                    if self.ddp_available:
-                        inputs["image_embeds"] = model.module.vision2text_model(
-                            inputs["image_embeds"]
-                        )
-                        outputs = model.module.language_model.generate(
-                            **inputs,
-                            max_new_tokens=1024,  # Adjust max_new_tokens as needed
-                        )
-                    else:
-                        inputs["image_embeds"] = model.vision2text_model(inputs["image_embeds"])
-                        outputs = model.language_model.generate(
-                            **inputs,
-                            max_new_tokens=1024,  # Adjust max_new_tokens as needed
-                        )
-
-                # otherwise, image embeddings are already contained in input_ids
+                if self.ddp_available:
+                    outputs = model.module.generate(
+                        **inputs,
+                        max_new_tokens=1024,  # Adjust max_new_tokens as needed
+                    )
                 else:
-                    if self.ddp_available:
-                        outputs = model.module.generate(
-                            **inputs,
-                            max_new_tokens=1024,  # Adjust max_new_tokens as needed
-                        )
-                    else:
-                        outputs = model.generate(
-                            **inputs,
-                            max_new_tokens=1024,  # Adjust max_new_tokens as needed
-                        )
+                    outputs = model.generate(
+                        **inputs,
+                        max_new_tokens=1024,  # Adjust max_new_tokens as needed
+                    )
+
                 trimmed_generated_ids = [
                     out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], outputs)
                 ]
@@ -147,14 +129,12 @@ class UnifiedVLMInference:
                     trimmed_generated_ids, skip_special_tokens=True
                 )
 
-                # raw_input
-
                 # Log the first sample output
-                if i == 0:
-                    logger.info(f"First sample input: {raw_samples['answer'][0]}")
-                    logger.info(f"First sample output: {decoded_output[0]}")
+                # if i == 0:
+                #     logger.info(f"First sample input: {raw_samples['answer'][0]}")
+                #     logger.info(f"First sample output: {decoded_output[0]}")
 
-                logger.info(f"Sample {i + 1}/{len(test_loader)}: {decoded_output}")
+                logger.info(f"First Sample from Batch {i + 1}/{len(test_loader)}: {decoded_output[0]}")
 
                 results.extend(
                     [
@@ -215,7 +195,7 @@ def parse_args() -> Namespace:
     parser.add_argument(
         "--test_dataset_json",
         type=str,
-        required=True,
+        default=None,
         help="Path to the testset dataset JSON file."
     )
     parser.add_argument(
@@ -227,19 +207,14 @@ def parse_args() -> Namespace:
     parser.add_argument(
         "--per_device_batch_size",
         type=int,
-        default=12,
-        help="The batch size per device to run inference with."
+        default=64,
+        help="The batch size per device to run inference with. Default: 64"
     )
     parser.add_argument(
         "--num_dataloader_workers",
         type=int,
         default=4,
         help="Number of subprocesses per device to use for data loading."
-    )
-    parser.add_argument(
-        "--final_test",
-        action="store_true",
-        help="If set, set split to test instead of val."
     )
 
     parser.add_argument(
@@ -263,15 +238,29 @@ def parse_args() -> Namespace:
 def main():
     args = parse_args()
 
-    test_dataset_json_path = Path(args.test_dataset_json)
-    if not test_dataset_json_path.exists():
-        raise FileNotFoundError(f"Test dataset JSON not found: {str(test_dataset_json_path)}")
-
     if args.run_dir:
-        vlm_model, cfg, ckpt_dir = AbstractVLMModel.load_from_run_dir(args.run_dir, args.mode)
+        run_dir = Path(args.run_dir)
+
+        # If 'run_dir' does not exit, search for it in the output directory.
+        if not run_dir.is_dir():
+            run_dir = find_run_dir_in_output_dir(str(run_dir))
+
+        vlm_model, cfg, ckpt_dir = AbstractVLMModel.load_from_run_dir(run_dir, args.mode)
     else:  # if args.checkpoint_dir
         ckpt_dir = args.checkpoint_dir
         vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
+
+    split: Literal["val", "test"]
+    # If 'test_dataset_json' is provided, assume that this is the test set and set 'split = test'.
+    # Otherwise we run inference on the validation set specified in the 'final_config.json'.
+    if args.test_dataset_json is not None:
+        dataset_json_path = Path(args.test_dataset_json)
+        if not dataset_json_path.is_file():
+            raise FileNotFoundError(f"The specified test dataset JSON file does not exist: {str(dataset_json_path)}")
+        split = "test"
+    else:
+        dataset_json_path = cfg.data.val_dataset_json_path
+        split = "val"
 
     if args.vision_encoder_path:
         cfg.model.vision_encoder.vision_encoder_path = args.vision_encoder_path
@@ -297,11 +286,10 @@ def main():
     else:
         vision_encoder_patch_size = None
 
-    split: Literal["val", "test"] = "test" if args.final_test else "val"
     logger.info(f"Using {split} split for inference.")
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
-            dataset_json_path=str(test_dataset_json_path),
+            dataset_json_path=str(dataset_json_path),
             model_name=cfg.model.model_type,
             split=split,
             vision_input_path=cfg.data.vision_input_path,
@@ -315,7 +303,7 @@ def main():
         )
     elif cfg.data.dataset_name == "ctrate":
         test_dataset = CTRATEDataset(
-            dataset_json_path=str(test_dataset_json_path),
+            dataset_json_path=str(dataset_json_path),
             model_name=cfg.model.model_type,
             split=split,
             vision_input_path=cfg.data.vision_input_path,
