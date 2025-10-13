@@ -5,7 +5,8 @@ from abc import ABC, abstractmethod
 from numbers import Number
 from pathlib import Path
 from typing import Type, Literal
-
+import re
+import random
 import blosc2
 import nrrd
 import numpy as np
@@ -54,11 +55,6 @@ def format_into_message(
                 {"type": "text", "text": question},
             ],
         }
-    elif model_name == "owl":
-        user_message = {
-            "role": "user",
-            "content": [{"type": "text", "text": f"<|image|>\n{question}"}],
-        }
     else:
         raise ValueError(f"Unsupported model name: {model_name}")
 
@@ -100,6 +96,7 @@ class MedicalImageDataset(Dataset, ABC):
         do_resize=False,
         do_transforms=False,
         vision_encoder_patch_size=None,
+        do_sentence_shuffle=False
     ):
         super().__init__()
 
@@ -113,6 +110,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.do_resize = do_resize
         self.do_transforms = do_transforms
         self.vision_encoder_patch_size = vision_encoder_patch_size
+        self.do_sentence_shuffle = do_sentence_shuffle
 
         if isinstance(answer_types, str):
             answer_types = [
@@ -228,6 +226,11 @@ class MedicalImageDataset(Dataset, ABC):
         # Create a new dictionary instead of modifying the stored one
         result = dict(sample)
 
+        if self.do_sentence_shuffle:
+            result["question"], result["full_answer"] = self.shuffle_sentences(result["question"], result["full_answer"])
+        else:
+            result["full_answer"] = result["full_answer"]
+
         formatted_qa, formatted_qa_prompt_only = format_into_message(
                 result["question"],
                 result["full_answer"],
@@ -269,6 +272,10 @@ class MedicalImageDataset(Dataset, ABC):
             logger.info(f"Answer Type: {sample['answer_type']}")
             logger.info(f"Answer Subtype: {sample['answer_subtype']}")
 
+    def shuffle_sentences(self, question, answer):
+        # Needs to be implemented for each dataset
+        return question, answer
+
 
 class AMOSMMDataset(MedicalImageDataset):
     """
@@ -306,6 +313,51 @@ class AMOSMMDataset(MedicalImageDataset):
             raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
         return str(self.vision_input_path / image_name)
 
+    def shuffle_sentences(self, question, answer) -> tuple[str, str]:
+        # Extract options with their content
+        option_pattern = r'^([A-D])\.\s*(.+)$'
+        lines = question.split('\n')
+        
+        options = {}
+        other_lines = []
+        
+        for line in lines:
+            match = re.match(option_pattern, line)
+            if match:
+                options[match.group(1)] = match.group(2)
+            else:
+                other_lines.append(line)
+        
+        if len(options) != 4:
+            return question, answer
+        
+        # Find current correct answer letter
+        answer_match = re.search(r'(?:The answer is )?([A-D])\.?', answer, re.IGNORECASE)
+        if not answer_match:
+            return question, answer
+        
+        old_letter = answer_match.group(1)
+        correct_content = options[old_letter]
+        
+        # Shuffle the content
+        contents = list(options.values())
+        random.shuffle(contents)
+        
+        # Rebuild options A, B, C, D with shuffled content
+        new_options = {chr(ord('A') + i): contents[i] for i in range(4)}
+        
+        # Find new letter for correct content
+        new_letter = [k for k, v in new_options.items() if v == correct_content][0]
+        
+        # Rebuild question
+        option_lines = [f"{letter}. {new_options[letter]}" for letter in ['A', 'B', 'C', 'D']]
+        new_question = '\n'.join(other_lines + option_lines)
+        
+        # Update answer letter
+        new_answer = answer.replace(old_letter, new_letter)
+        
+        return new_question, new_answer
+
 
 class CTRATEDataset(MedicalImageDataset):
     """
@@ -342,3 +394,32 @@ class CTRATEDataset(MedicalImageDataset):
         else:
             raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
         
+    def shuffle_sentences(self, question: str, answer: str, p: float = 0.5) -> tuple[str, str]:
+        """
+        Randomly shuffle sentences within Findings and Impression sections separately
+        """
+        if answer is None or not str(answer).strip():
+            return question, ""
+        
+        answer_str = str(answer).strip()
+        if not self.shuffle_sentences:
+            return question, answer_str
+        
+        # Split by headers, keeping them in the result
+        sections = re.split(r'(Findings:|Impression:)', answer_str)
+        
+        result = []
+        for part in sections:
+            # Keep headers as-is
+            if part in ['Findings:', 'Impression:']:
+                result.append(part)
+            # Shuffle sentences in content sections
+            elif part.strip():
+                sentences = re.split(r'(?<=[.!?])\s+', part.strip())
+                if len(sentences) > 1 and random.uniform(0, 1) < p:
+                    random.shuffle(sentences)
+                    result.append(' ' + ' '.join(sentences))
+                else:
+                    result.append(part)
+
+        return question, ''.join(result)
