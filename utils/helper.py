@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from transformers.trainer import TRAINER_STATE_NAME
 
 from utils.load_and_save_files import load_json, load_yaml
+from utils.paths import VLM_OUTPUT_DIR
 
 
 def seed_everything(seed: int):
@@ -125,7 +126,7 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
     )
 
 
-def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "best"]) -> Path:
+def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "best", "best_nlp"]) -> Path:
     """
     Determine the checkpoint directory within a run directory.
 
@@ -138,25 +139,29 @@ def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "bes
     """
     run_dir = Path(run_dir)
     if not run_dir.exists():
-        raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
-    ckpt_dirs = [d for d in run_dir.glob("checkpoint-*") if d.is_dir()]
-    if not ckpt_dirs:
-        raise FileNotFoundError(f"No checkpoint directories found in {run_dir}")
-    ckpt_dirs_sorted = sorted(ckpt_dirs, key=lambda d: int(d.name.split("-")[-1]))
+        raise FileNotFoundError(f"The specified run directory does not exist: {run_dir}")
+    if mode == "best_nlp":
+        our_best_ckpt_dir = Path(run_dir, "best_model")
+        if not our_best_ckpt_dir.is_dir():
+            raise FileNotFoundError(f"No 'best_model' directory found in {run_dir}")
+        ckpt_dir = our_best_ckpt_dir
+    else:
+        ckpt_dirs = [d for d in run_dir.glob("checkpoint-*") if d.is_dir()]
+        if not ckpt_dirs:
+            raise FileNotFoundError(f"No HF trainer checkpoint directories found in {run_dir}")
+        ckpt_dirs_sorted = sorted(ckpt_dirs, key=lambda d: int(d.name.split("-")[-1]))
 
-    final_ckpt_dir = ckpt_dirs_sorted[-1]
-    if mode == "final":
-        ckpt_dir = final_ckpt_dir
-    elif mode == "best":
-        # distinguish between our best model (NLP metrics) and transformers' best model (eval mean token accuracy)
-        if (out_best_ckpt_dir := Path(run_dir, "best_model")).exists():
-            ckpt_dir = out_best_ckpt_dir
-        else:
+        final_ckpt_dir = ckpt_dirs_sorted[-1]
+        if mode == "final":
+            ckpt_dir = final_ckpt_dir
+        elif mode == "best":
             final_trainer_state = load_json(final_ckpt_dir / TRAINER_STATE_NAME)
             best_ckpt_dir = Path(final_trainer_state["best_model_checkpoint"])
+            if not best_ckpt_dir.is_dir():
+                raise FileNotFoundError(f"The HF trainer 'best_model_checkpoint' directory does not exist in {run_dir}")
             ckpt_dir = best_ckpt_dir
-    else:
-        raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
+        else:
+            raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
 
     return ckpt_dir
 
@@ -195,6 +200,23 @@ def print_model_parameters(model: nn.Module, file=None, width=120, **kwargs):
     print("\n" + "=" * width)
     print(f"{'End of model parameter listing':^{width}}")
     print("=" * width + "\n")
+
+
+def get_trainable_state_dict(model: nn.Module):
+    """Return a state dict containing only parameters with requires_grad=True."""
+    trainable_names = {name for name, p in model.named_parameters() if p.requires_grad}
+    state_dict = {name: p for name, p in model.state_dict().items() if name in trainable_names}
+
+    return state_dict
+
+
+def find_run_dir_in_output_dir(run_dir: str):
+    matches = list(Path(VLM_OUTPUT_DIR).rglob(run_dir))
+    if len(matches) > 1:
+        raise ValueError(f"Multiple matches found for run_dir '{run_dir}': {matches}")
+    elif not matches:
+        raise FileNotFoundError(f"No directory named '{run_dir}' found under {VLM_OUTPUT_DIR}")
+    return matches[0]
 
 
 def is_main_process():

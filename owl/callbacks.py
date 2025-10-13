@@ -5,10 +5,13 @@ import torch
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
 import wandb
+from transformers.modeling_utils import unwrap_model
+
 from evaluation.metrics import bleu_score, rouge_score, meteor_score
 from owl.model import OwnOwlModel
 from utils.filter_batch import extract_batch_prompt_only
 from utils import logger
+from utils.helper import get_trainable_state_dict
 
 
 class PrintEvalBatchCallback(TrainerCallback):
@@ -53,9 +56,6 @@ class PrintEvalBatchCallback(TrainerCallback):
         **kwargs,
     ):
 
-        # if metrics is not None:
-        #     metrics["eval_rouge_score"] = -1  # Initialize to -1 in case of failure
-
         if (not state.is_world_process_zero
                 or state.epoch - self.last_epoch < self.eval_every_n_epochs):
             return
@@ -66,7 +66,8 @@ class PrintEvalBatchCallback(TrainerCallback):
 
         n_correct_qa = 0
 
-        model_str = "owl" if isinstance(model, OwnOwlModel) else "qwen"
+        if metrics is not None:
+            metrics["eval_rouge_score"] = -1  # Initialize to -1 in case of failure
 
         # metrics_dict = defaultdict(list)
         preds = []
@@ -88,7 +89,7 @@ class PrintEvalBatchCallback(TrainerCallback):
             self.eval_table = None
         model.eval()  # Ensure model is in evaluation mode
         with torch.no_grad():  # Disable gradient calculations
-            for i, inputs in enumerate(tqdm(eval_dataloader, total=self.sample_count)):
+            for i, inputs in enumerate(tqdm(eval_dataloader, desc="Calculating NLP metrics")):
                 if i >= self.sample_count:  # Limit the number of samples to print
                     break
                 inputs_prompt_only = extract_batch_prompt_only(inputs)
@@ -96,21 +97,10 @@ class PrintEvalBatchCallback(TrainerCallback):
                 del inputs_prompt_only["raw_samples"]
                 del inputs_prompt_only["batch_count"]
 
-                if model_str == "owl":
-                    # Process embeddings with explicit memory management
-                    embeddings = model.vision2text_model(inputs_prompt_only["image_embeds"])
-                    inputs_prompt_only["image_embeds"] = embeddings.to(torch.float16)
-                    del embeddings  # Explicitly delete intermediate tensor
-
-                    outputs = model.language_model.generate(
-                        **inputs_prompt_only,
-                        max_new_tokens=640,  # Adjust max_new_tokens as needed
-                    )
-                else:
-                    outputs = model.generate(
-                        **inputs_prompt_only,
-                        max_new_tokens=640,  # Adjust max_new_tokens as needed
-                    )
+                outputs = model.generate(
+                    **inputs_prompt_only,
+                    max_new_tokens=640,  # Adjust max_new_tokens as needed
+                )
 
                 # Decode input and generated output
                 decoded_output = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
@@ -128,21 +118,10 @@ class PrintEvalBatchCallback(TrainerCallback):
                 decoded_gt_assistant_answer = (
                     decoded_gt[0].split("assistant\n")[-1].strip().split("assistant\n")[0].strip()
                 )
-                if model_str == "owl":
-                    try:
-                        decoded_gt_assistant_answer = re.search(
-                            r"'text':\s*'([^']*)'", decoded_gt_assistant_answer
-                        ).group(1)
-                    except Exception:
-                        pass
 
                 decoded_pred_assistant_answer = ""
                 try:
                     decoded_pred_assistant_answer = decoded_output[0].split("assistant\n")[-1].strip()
-                    if model_str == "owl":
-                        decoded_pred_assistant_answer = re.search(
-                            r"'text':\s*'([^']*)'", decoded_pred_assistant_answer
-                        ).group(1)
                 except Exception:
                     pass
 
@@ -245,8 +224,12 @@ class PrintEvalBatchCallback(TrainerCallback):
             best_model_dir = os.path.join(args.output_dir, "best_model")
             os.makedirs(best_model_dir, exist_ok=True)
 
+            # Save only the trainable state_dict
+            model_to_save = unwrap_model(model)
+            trainable_state_dict = get_trainable_state_dict(model_to_save)
+
             # Save the model
-            model.save_pretrained(best_model_dir)
+            model.save_pretrained(best_model_dir, state_dict=trainable_state_dict)
             if hasattr(self.tokenizer, "save_pretrained"):
                 self.tokenizer.save_pretrained(best_model_dir)
             if hasattr(self.processor, "save_pretrained"):
