@@ -188,15 +188,23 @@ def parse_args() -> Namespace:
     )
     parser.add_argument(
         "--mode",
+        type=str,
         choices=["best_nlp", "best", "final"],
         default="best_nlp",
         help="When using --run_dir, choose which checkpoint to load: 'best_nlp', 'best' or 'final'."
     )
     parser.add_argument(
-        "--test_dataset_json",
+        "--dataset_json",
         type=str,
         default=None,
-        help="Path to the testset dataset JSON file."
+        help="Path to the dataset JSON file to run inference on."
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        choices=["val", "test"],
+        default="val",
+        help="The split to run inference on."
     )
     parser.add_argument(
         "--n_samples",
@@ -250,17 +258,16 @@ def main():
         ckpt_dir = args.checkpoint_dir
         vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
 
-    split: Literal["val", "test"]
-    # If 'test_dataset_json' is provided, assume that this is the test set and set 'split = test'.
-    # Otherwise we run inference on the validation set specified in the 'final_config.json'.
-    if args.test_dataset_json is not None:
-        dataset_json_path = Path(args.test_dataset_json)
+    if args.dataset_json is not None:
+        dataset_json_path = Path(args.dataset_json)
         if not dataset_json_path.is_file():
-            raise FileNotFoundError(f"The specified test dataset JSON file does not exist: {str(dataset_json_path)}")
-        split = "test"
+            raise FileNotFoundError(f"The specified dataset JSON file does not exist: {str(dataset_json_path)}")
     else:
-        dataset_json_path = cfg.data.val_dataset_json_path
-        split = "val"
+        if args.split == "test":
+            raise ValueError("The 'dataset_json' has to be specified if 'split=test'")
+        else:   # if args.split == "val"
+            # fall back to the val dataset JSON from the config_file if none is provided
+            dataset_json_path = cfg.data.val_dataset_json_path
 
     if args.vision_encoder_path:
         cfg.model.vision_encoder.vision_encoder_path = args.vision_encoder_path
@@ -286,12 +293,12 @@ def main():
     else:
         vision_encoder_patch_size = None
 
-    logger.info(f"Using {split} split for inference.")
+    logger.info(f"Using {args.split} split for inference.")
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
             dataset_json_path=str(dataset_json_path),
             model_name=cfg.model.model_type,
-            split=split,
+            split=args.split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             answer_types=cfg.data.answer_types,
@@ -305,7 +312,7 @@ def main():
         test_dataset = CTRATEDataset(
             dataset_json_path=str(dataset_json_path),
             model_name=cfg.model.model_type,
-            split=split,
+            split=args.split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             answer_types=cfg.data.answer_types,
