@@ -354,7 +354,13 @@ class AMOSMMDataset(MedicalImageDataset):
         new_question = '\n'.join(other_lines + option_lines)
         
         # Update answer letter
-        new_answer = answer.replace(old_letter, new_letter)
+        new_answer = re.sub(
+            r'((?:The answer is )?)([A-D])(\.?)',
+            lambda m: m.group(1) + new_letter + m.group(3),
+            answer,
+            count=1,  # only replace the first match
+            flags=re.IGNORECASE
+        )
         
         return new_question, new_answer
 
