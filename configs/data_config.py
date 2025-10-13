@@ -26,3 +26,4 @@ class DataConfig(ConfigBase):
 
     do_resize: bool = Field(False, description="Resize images to 192x192x192 cubes (with lung crops).")
     do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
+    do_sentence_shuffle: bool = Field(True, description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.")

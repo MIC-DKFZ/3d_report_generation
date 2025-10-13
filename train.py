@@ -472,7 +472,8 @@ def main():
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
-            vision_encoder_patch_size=vision_encoder_patch_size
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            do_sentence_shuffle=cfg.data.do_sentence_shuffle
         )
 
         val_dataset = AMOSMMDataset(
@@ -501,7 +502,8 @@ def main():
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
-            vision_encoder_patch_size=vision_encoder_patch_size
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            do_sentence_shuffle=cfg.data.do_sentence_shuffle
         )
 
         val_dataset = CTRATEDataset(
