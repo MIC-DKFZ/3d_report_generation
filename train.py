@@ -7,7 +7,6 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
-from transformers import BitsAndBytesConfig
 from trl import SFTConfig
 
 import wandb
@@ -110,15 +109,6 @@ class UnifiedVLMTrainer:
                          run_name=self.cfg.general.run_name,
                          output_dir=self.cfg.general.output_dir)
 
-    def get_quantization_config(self):
-        """Create and return the BitsAndBytes quantization config"""
-        return BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-        )
-
     def train(self, train_dataset, val_dataset):
         """
         Main training function that trains the VLM model.
@@ -132,17 +122,8 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training Setup")
 
-
-        # Create quantization config if needed
-        bnb_config = None
-        # Uncomment if you want to use quantization
-        # if trainable_params.get("train_only_vision_adapter", False) == True:
-        #     bnb_config = self.get_quantization_config()
-        # else:
-        #     bnb_config = None
-
         # Setup base model with quantization config if applicable
-        model = self.vlm_model.setup_model(bnb_config=bnb_config)
+        model = self.vlm_model.setup_model()
 
         # Apply trainable parameter configs and possibly add PEFT adapter layers
         self.vlm_model.apply_trainable_config()

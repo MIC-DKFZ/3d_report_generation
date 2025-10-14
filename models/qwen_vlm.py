@@ -34,7 +34,7 @@ class QwenVLModel(AbstractVLMModel):
             "lm_head": "lm_head",
         }
 
-    def setup_model(self, bnb_config=None):
+    def setup_model(self):
         """Initialize model, processor and PEFT configuration"""
 
         if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
@@ -125,51 +125,6 @@ class QwenVLModel(AbstractVLMModel):
         batch_out = transformers.BatchFeature(batch_out)
         self.batch_count += 1
         return batch_out
-
-    # def get_trainable_params(self):
-    #     """Return information about trainable parameters"""
-    #     if self.train_only_vision_adapter:
-    #         return {"peft_config": None, "train_only_vision_adapter": True}
-    #     else:
-    #         if self.train_vision_encoder:
-    #             # Train both language model and vision encoder
-    #             peft_config = LoraConfig(
-    #                 task_type="CAUSAL_LM",
-    #                 r=8,
-    #                 lora_alpha=32,
-    #                 target_modules=[
-    #                     "q_proj", "k_proj", "v_proj", "o_proj",
-    #                     "gate_proj", "up_proj", "down_proj",
-    #                     "lm_head"
-    #                 ],
-    #                 modules_to_save=["vision_adapter"],
-    #                 lora_dropout=0.1,
-    #                 bias="none"
-    #             )
-    #         else:
-    #             # Only train language model, exclude vision encoder modules
-    #             peft_config = LoraConfig(
-    #                 task_type="CAUSAL_LM",
-    #                 r=8,
-    #                 lora_alpha=32,
-    #                 # Use specific module paths to target only language model components
-    #                 # TODO use exclude_modules (only available in newest transformers dev right now)
-    #                 target_modules=[
-    #                     "model.language_model.layers.*.self_attn.q_proj",
-    #                     "model.language_model.layers.*.self_attn.k_proj",
-    #                     "model.language_model.layers.*.self_attn.v_proj",
-    #                     "model.language_model.layers.*.self_attn.o_proj",
-    #                     "model.language_model.layers.*.mlp.gate_proj",
-    #                     "model.language_model.layers.*.mlp.up_proj",
-    #                     "model.language_model.layers.*.mlp.down_proj",
-    #                     "lm_head"
-    #                 ],
-    #                 modules_to_save=["vision_adapter"],
-    #                 lora_dropout=0.1,
-    #                 bias="none"
-    #             )
-    #
-    #         return {"peft_config": peft_config, "train_only_vision_adapter": False}
 
     def get_model_specific_training_args(self):
         """Return model-specific training arguments"""

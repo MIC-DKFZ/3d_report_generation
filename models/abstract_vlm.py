@@ -36,12 +36,9 @@ class AbstractVLMModel(ABC):
         self.model_cfg = model_cfg
 
     @abstractmethod
-    def setup_model(self, bnb_config=None):
+    def setup_model(self):
         """
         Initialize the model, tokenizer, and processor.
-
-        Args:
-            bnb_config: Optional BitsAndBytesConfig for quantization
         """
         pass
 
