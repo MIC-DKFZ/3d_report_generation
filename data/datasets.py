@@ -16,6 +16,7 @@ from torch.utils.data import Dataset
 
 from utils import logger
 from utils.dataset_utils import get_training_image_transforms, preprocess_3d_image
+from utils.regex_patterns import VQA_ANSWER_PATTERN, VQA_OPTION_PATTERN
 from utils.vision_input_type import VisionInputType
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
@@ -315,14 +316,13 @@ class AMOSMMDataset(MedicalImageDataset):
 
     def shuffle_sentences(self, question, answer) -> tuple[str, str]:
         # Extract options with their content
-        option_pattern = r'^([A-D])\.\s*(.+)$'
         lines = question.split('\n')
         
         options = {}
         other_lines = []
         
         for line in lines:
-            match = re.match(option_pattern, line)
+            match = re.match(VQA_OPTION_PATTERN, line)
             if match:
                 options[match.group(1)] = match.group(2)
             else:
@@ -332,11 +332,11 @@ class AMOSMMDataset(MedicalImageDataset):
             return question, answer
         
         # Find current correct answer letter
-        answer_match = re.search(r'(?:The answer is )?([A-D])\.?', answer, re.IGNORECASE)
+        answer_match = re.search(VQA_ANSWER_PATTERN, answer, re.IGNORECASE)
         if not answer_match:
             return question, answer
         
-        old_letter = answer_match.group(1)
+        old_letter = answer_match.group(2)
         correct_content = options[old_letter]
         
         # Shuffle the content
@@ -355,7 +355,7 @@ class AMOSMMDataset(MedicalImageDataset):
         
         # Update answer letter
         new_answer = re.sub(
-            r'((?:The answer is )?)([A-D])(\.?)',
+            VQA_ANSWER_PATTERN,
             lambda m: m.group(1) + new_letter + m.group(3),
             answer,
             count=1,  # only replace the first match
