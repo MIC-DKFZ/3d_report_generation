@@ -16,7 +16,7 @@ from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
 from trainers.VLMSFTTrainer import VLMSFTTrainer
-from utils import logger
+from utils import logger, rank_zero_filter, filter_evaluate_loading
 from utils.helper import (
     is_main_process,
     load_config_file,
@@ -280,7 +280,7 @@ def setup_config_and_logging() -> RunConfig:
     if is_main_process():
         os.makedirs(cfg.general.output_dir, exist_ok=True)
         log_file_path = os.path.join(cfg.general.output_dir, "train.log")
-        logger.add(log_file_path)
+        logger.add(log_file_path, filter=lambda record: rank_zero_filter(record) and filter_evaluate_loading(record))
         logger.info(f"Successfully set up output directory at {cfg.general.output_dir}")
         print(f"Successfully set up output directory at {cfg.general.output_dir}")
 

@@ -19,6 +19,10 @@ def rank_zero_filter(record):
     except Exception: # Fallback for non-DDP or uninitialized DDP
         return True
 
+def filter_evaluate_loading(record):
+    """Remove unnecessary warnings from evaluate.loading"""
+    return not record["name"].startswith("evaluate.loading")
+
 
 logger.level(
     "LOSS",
