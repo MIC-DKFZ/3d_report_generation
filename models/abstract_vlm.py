@@ -169,7 +169,7 @@ class AbstractVLMModel(ABC):
         return AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir) + (ckpt_dir,)
 
     @staticmethod
-    def load_from_checkpoint_dir(ckpt_dir: str | Path, strict=True) -> tuple[AbstractVLMModel, RunConfig]:
+    def load_from_checkpoint_dir(ckpt_dir: str | Path, allow_unexpected_keys=False) -> tuple[AbstractVLMModel, RunConfig]:
         """
         Restore a VLM model from a checkpoint directory.
 
@@ -177,8 +177,8 @@ class AbstractVLMModel(ABC):
             ckpt_dir: Path to the checkpoint directory.
                 Must contain either a single 'model.safetensors' file or a sharded
                 'model.safetensors.index.json' with corresponding shard files.
-            strict: Whether to strictly enforce that the keys in the checkpoint
-                match the model’s architecture when loading the state dict.
+            allow_unexpected_keys: If 'False', strictly enforce that all keys in the checkpoint
+                exist in the model’s architecture. If 'True', allow unexpected keys.
 
         Returns:
             An instance of the model with weights restored.
@@ -196,7 +196,7 @@ class AbstractVLMModel(ABC):
                                 local_files_only=cfg.general.local_files_only)
         vlm_model.setup_model()
         vlm_model.apply_trainable_config()
-        keys_to_ignore = vlm_model.model._tied_weights_keys
+        # keys_to_ignore = vlm_model.model._tied_weights_keys
 
         # Try to restore model weights from the checkpoint directory:
         # 1. If a single safetensors file exists (model.safetensors), load it directly.
@@ -211,19 +211,15 @@ class AbstractVLMModel(ABC):
             state_dict = safetensors.torch.load_file(single_path)
             state_dict = apply_regex_subs(state_dict, checkpoint_conversion_mapping)
 
-            if strict:
-                loaded_keys = state_dict.keys()
-                model_keys = vlm_model.model.state_dict().keys()
-                assert_keys_equality(loaded_keys, model_keys, keys_to_ignore)
-
-            vlm_model.model.load_state_dict(state_dict, strict=False)
+            missing_keys, unexpected_keys = vlm_model.model.load_state_dict(state_dict, strict=False)
+            if unexpected_keys and not allow_unexpected_keys:
+                raise KeyError(f"Unexpected keys in loaded checkpoint: {unexpected_keys}")
 
             return vlm_model, cfg
 
         if index_path.exists():
-            load_sharded_checkpoint(model=vlm_model.model, folder=ckpt_dir, strict=strict,
-                                    key_mapping=checkpoint_conversion_mapping,
-                                    keys_to_ignore=keys_to_ignore)
+            load_sharded_checkpoint(model=vlm_model.model, folder=ckpt_dir, allow_unexpected_keys=allow_unexpected_keys,
+                                    key_mapping=checkpoint_conversion_mapping)
             return vlm_model, cfg
 
         raise FileNotFoundError(

@@ -55,12 +55,10 @@ def assert_keys_equality(loaded_keys: Iterable[str], model_keys: Iterable[str], 
         raise RuntimeError(error_message)
 
 
-def load_sharded_checkpoint(model, folder, strict=True, prefer_safe=True,
-                            key_mapping: dict | None = None,
-                            keys_to_ignore: list | None = None) -> None:
+def load_sharded_checkpoint(model, folder, allow_unexpected_keys=True, prefer_safe=True,
+                            key_mapping: dict | None = None) -> None:
     """
-    Adapted from 'transformers.modeling_utils.load_sharded_checkpoint()',
-    with optional key remapping (e.g. from '_checkpoint_conversion_mapping') and keys to ignore.
+    Adapted from 'transformers.modeling_utils.load_sharded_checkpoint()'.
     """
     # Load the index
     index_file = os.path.join(folder, WEIGHTS_INDEX_NAME)
@@ -94,14 +92,6 @@ def load_sharded_checkpoint(model, folder, strict=True, prefer_safe=True,
 
     shard_files = list(set(index["weight_map"].values()))
 
-    # If strict=True, error before loading any of the state dicts.
-    loaded_keys = index["weight_map"].keys()
-
-    loaded_keys = apply_regex_subs(list(loaded_keys), key_mapping)  # added line
-    model_keys = model.state_dict().keys()
-    if strict:
-        assert_keys_equality(loaded_keys, model_keys, keys_to_ignore)   # outsourced to assert_keys_equality()
-
     if load_safe:
         loader = safe_load_file
     else:
@@ -110,8 +100,11 @@ def load_sharded_checkpoint(model, folder, strict=True, prefer_safe=True,
 
     for shard_file in shard_files:
         state_dict = loader(os.path.join(folder, shard_file))
-        state_dict = apply_regex_subs(state_dict, key_mapping)  # added line
-        model.load_state_dict(state_dict, strict=False)
+        state_dict = apply_regex_subs(state_dict, key_mapping)
+
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        if unexpected_keys and not allow_unexpected_keys:
+            raise KeyError(f"Unexpected keys in loaded checkpoint: {unexpected_keys}")
 
         # Make sure memory is freed before we load the next state dict.
         del state_dict
