@@ -7,6 +7,7 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
+from torch.utils.data import DataLoader
 from trl import SFTConfig
 
 import wandb
@@ -171,18 +172,24 @@ class UnifiedVLMTrainer:
         # Configure training arguments
         training_args = self.get_training_args()
 
-        # Create callbacks (only add print callback on main process)
-        callbacks = [LossLoggingCallback()]
-        
+        callbacks = []
         if is_main_process():
-            callbacks.append(
+            eval_dataloader = DataLoader(val_dataset, batch_size=self.cfg.eval.batch_size, shuffle=False,
+                                         collate_fn=self.vlm_model.collate_fn,
+                                         num_workers=4)
+            callbacks.extend([
+                LossLoggingCallback(),
                 PrintEvalBatchCallback(
+                    eval_dataloader=eval_dataloader,
+                    task_type= "RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",    # TODO: temporary hardcode
+                    max_new_tokens=self.cfg.eval.max_new_tokens,
+                    eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
                     tokenizer=self.vlm_model.tokenizer,
                     processor=self.vlm_model.processor,
                     sample_count=len(val_dataset),
-                    eval_every_n_epochs=0.25
                 )
-            )
+            ])
+
 
         # Initialize SFT trainer
         self.trainer = VLMSFTTrainer(
@@ -294,6 +301,7 @@ def setup_config_and_logging() -> RunConfig:
     cfg.model = merge_config_with_cli_args(cfg.model, parent_key="model")
     cfg.trainer = merge_config_with_cli_args(cfg.trainer, parent_key="trainer")
     cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
+    cfg.eval = merge_config_with_cli_args(cfg.eval, parent_key="eval")
 
     # Resolve model_id if not provided
     if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:

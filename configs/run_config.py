@@ -4,6 +4,7 @@ from typing import Any
 from pydantic import Field
 from configs.base import ConfigBase
 from configs.data_config import DataConfig
+from configs.evaluation_config import EvaluationConfig
 from configs.general_config import GeneralConfig
 from configs.model.model_config import ModelConfig
 from configs.trainer_config import SFTTrainerConfig
@@ -21,6 +22,7 @@ class RunConfig(ConfigBase):
             - model: model configs, trainable parameters
             - data: dataset, images/embeddings, data augs, number of samples
             - trainer: SFTTrainer hyperparameters
+            - eval: evaluation parameters
     """
     base_configs: list[str] | None = Field(
         None,
@@ -30,6 +32,7 @@ class RunConfig(ConfigBase):
     model: ModelConfig
     data: DataConfig
     trainer: SFTTrainerConfig
+    eval: EvaluationConfig
 
     def maybe_reset_vision_encoder_specific_args(self, logger=None):
         """
