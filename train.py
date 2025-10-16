@@ -13,6 +13,7 @@ from trl import SFTConfig
 import wandb
 from configs.run_config import RunConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
+from inference import main as inference_main
 from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
@@ -543,6 +544,22 @@ def main():
     )
 
     trainer.train(train_dataset, val_dataset)
+    
+    if cfg.general.run_inference_eval:
+        if cfg.model.vision_encoder:
+            ve_path = cfg.model.vision_encoder.vision_encoder_path
+        else:
+            ve_path = None
+        inference_args = argparse.Namespace(
+            run_dir=cfg.general.output_dir,
+            mode="final",
+            test_dataset_json=cfg.data.val_dataset_json_path,
+            vision_encoder_path=ve_path,
+            vision_input_path=cfg.data.vision_input_path,
+            n_samples=None,
+            final_test=False
+        )
+        inference_main(inference_args)
 
 
 if __name__ == "__main__":

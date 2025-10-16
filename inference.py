@@ -243,8 +243,15 @@ def parse_args() -> Namespace:
     return args
 
 
-def main():
+def main_cli():
     args = parse_args()
+    main(args)
+
+
+def main(args):
+    test_dataset_json_path = Path(args.test_dataset_json)
+    if not test_dataset_json_path.exists():
+        raise FileNotFoundError(f"Test dataset JSON not found: {str(test_dataset_json_path)}")
 
     if args.run_dir:
         run_dir = Path(args.run_dir)
@@ -340,4 +347,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main_cli()
