@@ -5,7 +5,6 @@ import transformers
 from configs.model.model_config import ModelConfig
 from qwenvl.processing_3d import QwenVLProcessor3D
 from qwenvl.Qwen3D import QwenVLForConditionalGeneration3D
-from utils import logger
 from utils.filter_batch import extract_raw_samples_from_batch
 from utils.vision_input_type import VisionInputType
 
@@ -79,13 +78,20 @@ class QwenVLModel(AbstractVLMModel):
             if "vision_input" in example and example["vision_input"] is not None
         ]
 
-        batch = self.processor(text=texts, vision_inputs=vision_inputs, return_tensors="pt", padding=True)
+        batch = self.processor(
+            text=texts,
+            vision_inputs=vision_inputs,
+            return_tensors="pt",
+            padding=True,
+            padding_side="right"
+        )
 
         batch_prompt_only = self.processor(
             text=texts_prompt_only,
             vision_inputs=vision_inputs,
             return_tensors="pt",
             padding=True,
+            padding_side="left"
         )
 
         labels = batch["input_ids"].clone()
@@ -100,7 +106,8 @@ class QwenVLModel(AbstractVLMModel):
             labels[labels == image_token_id] = -100
 
         # Only keep the model's final assistant response as the prediction target.
-        # Everything before and including the last "<|im_start|>assistant\n" is ignored (-100).
+        # Everything before and including the last "<|im_start|>assistant\n"
+        # as well as after the last "<|im_end|> (e.g. pad tokens) is ignored (-100).
         im_start_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
         im_end_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_end|>")
 
