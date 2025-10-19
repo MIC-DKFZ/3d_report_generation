@@ -91,6 +91,9 @@ class UnifiedVLMTrainer:
             train_dataset: Training dataset
             val_dataset: Validation dataset
         """
+        if self.is_distributed:
+            dist.barrier()
+
         # Setup memory efficient training
         setup_memory_efficient_training()
         if is_main_process():
@@ -136,11 +139,7 @@ class UnifiedVLMTrainer:
             if os.getenv("WANDB_MODE", "online").lower() == "offline":
                 # Re-update config one more time to ensure persistence
                 wandb.config.update(config_dict, allow_val_change=True)
-                logger.info("Offline mode: Config explicitly updated after init")
-        else:
-            logger.info(
-                f"Skipping wandb init on rank {self.rank}/{self.local_rank}"
-            )
+                logger.info_main("Offline mode: Config explicitly updated after init")
 
         # Configure training arguments
         training_args = self.get_training_args()
@@ -183,6 +182,9 @@ class UnifiedVLMTrainer:
             callbacks=callbacks
         )
 
+        if self.is_distributed:
+            dist.barrier()
+
         # Train model
         if is_main_process():
             log_memory_usage("Before Training")
@@ -215,9 +217,9 @@ class UnifiedVLMTrainer:
         # Final config validation for offline mode
         if os.getenv("WANDB_MODE", "online").lower() == "offline" and wandb.run is not None:
             final_config = dict(wandb.config)
-            logger.info(f"Final config verification - Total keys: {len(final_config)}")
+            logger.info_main(f"Final config verification - Total keys: {len(final_config)}")
             if len(final_config) < 5:  # Arbitrary threshold - expect at least some config
-                logger.warning(
+                logger.warning_main(
                     "Suspiciously few config keys logged - may indicate config persistence issue"
                 )
 
@@ -271,9 +273,8 @@ def setup_config_and_logging() -> RunConfig:
     log_file_path = os.path.join(cfg.general.output_dir, "train.log")
     setup_logger(log_file_path)  # Setup logger on every rank
 
-    if is_main_process():
-        logger.info(f"Successfully set up output directory at {cfg.general.output_dir}")
-        print(f"Successfully set up output directory at {cfg.general.output_dir}")
+    logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
+    print(f"Successfully set up output directory at {cfg.general.output_dir}")
 
     # Reset some args in case the vision input are embedding (instead of images)
     cfg.maybe_reset_vision_encoder_specific_args()
@@ -331,7 +332,7 @@ def ensure_wandb_config_logging():
                 config_dict = dict(wandb.config)
 
                 # Log a summary of the configuration
-                logger.info(
+                logger.info_main(
                     f"Offline mode - ensuring config persistence. Total config keys: {len(config_dict)}"
                 )
 
@@ -343,16 +344,16 @@ def ensure_wandb_config_logging():
                     config_backup_path = os.path.join(wandb.run.dir, "config_backup.json")
                     try:
                         save_json(config_dict, config_backup_path, default=str)
-                        logger.info(f"Config backup saved to: {config_backup_path}")
+                        logger.info_main(f"Config backup saved to: {config_backup_path}")
                     except Exception as e:
-                        logger.warning(f"Could not save config backup: {e}")
+                        logger.warning_main(f"Could not save config backup: {e}")
 
             except Exception as e:
-                logger.warning(f"Error in offline config handling: {e}")
+                logger.warning_main(f"Error in offline config handling: {e}")
 
         # Log the configuration to ensure it's saved
-        logger.info(f"Updated wandb config with environment variables: {env_config}")
-        logger.info(f"Total config keys logged: {len(dict(wandb.config))}")
+        logger.info_main(f"Updated wandb config with environment variables: {env_config}")
+        logger.info_main(f"Total config keys logged: {len(dict(wandb.config))}")
 
 
 def create_comprehensive_wandb_config(
@@ -493,19 +494,18 @@ def main():
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
 
-    if cfg.data.embedding_constant is not None and is_main_process():
-        logger.info(f"Using embedding constant: {cfg.data.embedding_constant}")
+    if cfg.data.embedding_constant is not None:
+        logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
         print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
-    if is_main_process():
-        logger.info(
-            f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
-        )
-        print(
-            f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
-        )
-        logger.info(f"Using train batch size: {cfg.trainer.per_device_train_batch_size}")
-        logger.info(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
+    logger.info_main(
+        f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
+    )
+    print(
+        f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
+    )
+    logger.info_main(f"Using train batch size: {cfg.trainer.per_device_train_batch_size}")
+    logger.info_main(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
 
     # Create the trainer and train the model
     trainer = UnifiedVLMTrainer(

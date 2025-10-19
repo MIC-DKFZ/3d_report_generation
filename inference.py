@@ -11,7 +11,7 @@ from data.datasets import AMOSMMDataset, CTRATEDataset
 from evaluation.eval_distributed_sampler import EvalDistributedSampler
 from models.abstract_vlm import AbstractVLMModel
 from utils import logger
-from utils.ddp_utils import setup_ddp
+from utils.ddp_utils import setup_ddp, gather_inference_outputs
 from utils.filter_batch import extract_batch_prompt_only
 from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir
 from utils.load_and_save_files import load_json, save_json
@@ -52,7 +52,7 @@ class UnifiedVLMInference:
         Args:
             test_dataset: Test dataset
         """
-        logger.info("Running inference...")
+        logger.info_main("Running inference...")
         model = self.vlm_model.model
         model.eval().cuda()
 
@@ -119,7 +119,7 @@ class UnifiedVLMInference:
                     trimmed_generated_ids, skip_special_tokens=True
                 )
 
-                logger.info(f"First batch sample {i + 1}/{len(test_loader)}: {decoded_output[0]}")
+                logger.info_main(f"First batch sample {i + 1}/{len(test_loader)}: {decoded_output[0]}")
 
                 results.extend(
                     [
@@ -150,7 +150,7 @@ class UnifiedVLMInference:
 
             save_json(all_results, Path(self.output_dir, results_filename))
 
-            logger.info(
+            logger.info_main(
                 f"Saved inference results to {str(Path(self.output_dir, results_filename))}"
             )
 
@@ -287,7 +287,7 @@ def main(args):
     else:
         vision_encoder_patch_size = None
 
-    logger.info(f"Using {args.split} split for inference.")
+    logger.info_main(f"Using {args.split} split for inference.")
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
             dataset_json_path=dataset_json_path,
@@ -319,10 +319,10 @@ def main(args):
     else:
         raise ValueError(f"Unsupported dataset name: {cfg.data.dataset_name}")
 
-    logger.info(f"Loaded {len(test_dataset)} test samples")
+    logger.info_main(f"Loaded {len(test_dataset)} inference samples")
 
-    if cfg.data.embedding_constant is not None and is_main_process():
-        logger.info(f"Using embedding constant: {cfg.data.embedding_constant}")
+    if cfg.data.embedding_constant is not None:
+        logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
         print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     # Create inference object and run inference

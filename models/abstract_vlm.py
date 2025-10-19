@@ -97,7 +97,7 @@ class AbstractVLMModel(ABC):
 
         The 'self.module_attr_map' property must be defined in the subclass before calling this function.
         """
-        logger.info("[Trainable Parameters] Setting trainable parameters and/or adding PEFT layers according to input config:")
+        logger.info_main("[Trainable Parameters] Setting trainable parameters and/or adding PEFT layers according to input config:")
         for module_name, module_attr_path in self.module_attr_map.items():
             trainable_component_cfg: TrainableModuleConfig | TrainableLinearConfig = getattr(
                 self.model_cfg.trainable_params, module_name)
@@ -112,12 +112,12 @@ class AbstractVLMModel(ABC):
                 module: torch.nn.Module = getattr_nested(self.model, module_attr_path)
                 for name, param in module.named_parameters():
                     param.requires_grad = False
-                logger.info(f"  > {module_name}: frozen")
+                logger.info_main(f"  > {module_name}: frozen")
             elif mode == "full":
                 module: torch.nn.Module = getattr_nested(self.model, module_attr_path)
                 for name, param in module.named_parameters():
                     param.requires_grad = True
-                logger.info(f"  > {module_name}: full finetuning")
+                logger.info_main(f"  > {module_name}: full finetuning")
             elif mode == "peft":
                 original = getattr_nested(self.model, module_attr_path)
 
@@ -137,12 +137,12 @@ class AbstractVLMModel(ABC):
                     if (module_name == "lm_head"
                             and getattr(self.model.config.get_text_config(decoder=True), "tie_word_embeddings", True)):
                         self.model._tied_weights_keys = ["lm_head.base_layer.weight"]
-                        logger.info("    > Updated '_tied_weights_keys' from ['lm_head.weight'] to ['lm_head.base_layer.weight']")
+                        logger.info_main("    > Updated '_tied_weights_keys' from ['lm_head.weight'] to ['lm_head.base_layer.weight']")
                 else:
                     raise ValueError(f"Unknown class: {type(trainable_component_cfg).__name__}")
 
                 setattr_nested(self.model, module_attr_path, wrapped)
-                logger.info(f"  > {module_name}: PEFT ({trainable_component_cfg.peft.type.upper()})")
+                logger.info_main(f"  > {module_name}: PEFT ({trainable_component_cfg.peft.type.upper()})")
             else:
                 raise ValueError(f"Unknown mode in {TrainableModuleConfig.__name__}: {mode}")
 
@@ -161,7 +161,7 @@ class AbstractVLMModel(ABC):
             An instance of the model with weights restored.
         """
         ckpt_dir = resolve_ckpt_dir_in_run_dir(run_dir=run_dir, mode=mode)
-        logger.info(f"Loading {mode} model from {str(run_dir)}")
+        logger.info_main(f"Loading {mode} model from {str(run_dir)}")
 
         return AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir) + (ckpt_dir,)
 
@@ -184,7 +184,7 @@ class AbstractVLMModel(ABC):
         cfg_dict = load_yaml(ckpt_dir.parent / "final_config.yml")["run"]
         cfg = RunConfig(**cfg_dict)
 
-        logger.info(f"Loading model from {str(ckpt_dir)}")
+        logger.info_main(f"Loading model from {str(ckpt_dir)}")
 
         from registries.vlm_registry import vlm_registry
         vlm_model_class = vlm_registry[cfg.model.model_type].model_class
@@ -234,5 +234,5 @@ class AbstractVLMModel(ABC):
 
         torch.cuda.empty_cache()
         gc.collect()
-        logger.info(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
-        logger.info(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+        logger.info_main(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+        logger.info_main(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")

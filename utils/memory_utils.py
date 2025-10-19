@@ -12,11 +12,11 @@ def log_memory_usage(stage=""):
         reserved = torch.cuda.memory_reserved() / 1024**3  # GB
         free = (torch.cuda.get_device_properties(0).total_memory / 1024**3) - reserved
 
-        logger.info(
+        logger.info_main(
             f"[{stage}] GPU Memory - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB, Free: {free:.2f}GB"
         )
     else:
-        logger.info(f"[{stage}] CUDA not available")
+        logger.info_main(f"[{stage}] CUDA not available")
 
 
 def aggressive_cleanup():
@@ -47,7 +47,7 @@ def monitor_memory_during_training():
         def __exit__(self, exc_type, exc_val, exc_tb):
             log_memory_usage("After Training Step")
             if exc_type is not None:
-                logger.error(f"Exception during training: {exc_val}")
+                logger.error_main(f"Exception during training: {exc_val}")
                 aggressive_cleanup()
 
     return MemoryMonitor()
@@ -69,4 +69,4 @@ def setup_memory_efficient_training():
         except AttributeError:
             pass
 
-        logger.info("Memory efficient training settings enabled")
+        logger.info_main("Memory efficient training settings enabled")

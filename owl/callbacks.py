@@ -51,7 +51,7 @@ class PrintEvalBatchCallback(TrainerCallback):
                     "Answer GT"
                 ]
             self.eval_table = wandb.Table(columns=columns, log_mode="MUTABLE")
-            logger.info(f"Created an eval table with the following columns: {columns}")
+            logger.info_main(f"Created an eval table with the following columns: {columns}")
 
         self.processor = processor
 
@@ -81,9 +81,8 @@ class PrintEvalBatchCallback(TrainerCallback):
 
         self.last_epoch = state.epoch
 
-        if state.is_world_process_zero:
-            logger.info(f"Output samples from validation dataset after epoch {state.epoch}:")
-            logger.info(f"Epoch {state.epoch} reached")
+        logger.info_main(f"Starting Evaluation Callback...")
+        logger.info_main(f"Epoch {state.epoch} reached")
 
         # Store local results; if using DDP, all processes will merge into 'all_results' on the main rank.
         results = {}
@@ -113,9 +112,9 @@ class PrintEvalBatchCallback(TrainerCallback):
                 del outputs
                 torch.cuda.empty_cache()  # Clear CUDA cache periodically
 
-                if self.print_first_sample and state.is_world_process_zero:
-                    logger.error(f"First batch sample GROUNDTRUTH:\n{decoded_gts[0]}")
-                    logger.error(f"First batch sample PREDICTION:\n{decoded_preds[0]}")
+                if self.print_first_sample:
+                    logger.error_main(f"First batch sample GROUNDTRUTH:\n{decoded_gts[0]}")
+                    logger.error_main(f"First batch sample PREDICTION:\n{decoded_preds[0]}")
 
                 decoded_gt_assistant_answers = [decoded_gt.split("assistant\n")[-1].strip() for decoded_gt in decoded_gts]
                 decoded_pred_assistant_answers = [decoded_output.split("assistant\n")[-1].strip() for decoded_output in decoded_preds]
@@ -123,6 +122,10 @@ class PrintEvalBatchCallback(TrainerCallback):
                 # store predictions and ground truths
                 preds.extend(decoded_pred_assistant_answers)
                 gts.extend(decoded_gt_assistant_answers)
+
+        # Synchronize all distributed processes to keep logging output aligned
+        if self.is_distributed:
+            dist.barrier()
 
         # === Calculate pairwise scores/metrics on local validation subset ===
         if self.task_type == "VQA":
@@ -150,11 +153,11 @@ class PrintEvalBatchCallback(TrainerCallback):
                 answer_preds.append(answer_pred)
                 answer_gts.append(answer_gt)
 
-            logger.info(f"Correct partial QA: {n_correct_qa}/{self.num_samples}")  # log on every rank
+            logger.info(f"Local Correct QA: {n_correct_qa}/{self.num_samples}")  # log on every rank
 
             results["answer_preds"] = answer_preds
             results["answer_gts"] = answer_gts
-            results["n_correct_qa"] = n_correct_qa
+            results["n_correct_qa"] = [n_correct_qa]
 
         elif self.task_type == "RG":
             # === BLEU ===
@@ -188,15 +191,20 @@ class PrintEvalBatchCallback(TrainerCallback):
         # === Gather results from other ranks at main rank process (DDP) ===
         if self.is_distributed:
             all_results = gather_inference_outputs(local_results=results, main_rank=0)
+            logger.info_main("Successfully gathered inference results at main rank.")
+            if is_main_process():
+                _lengths = {k: len(lis) for k, lis in all_results.items()}
+                logger.info_main(f"Lengths: {_lengths}")
         else:
             all_results = results
 
         # === Calculate final scores/metrics and log to WandB ===
-        if is_main_process():
+        if state.is_world_process_zero:
             if self.task_type == "VQA":
                 n_correct_qa = sum(all_results["n_correct_qa"])
                 accuracy = n_correct_qa / self.total_size
 
+                logger.info_main(f"Total Correct QA: {n_correct_qa}/{self.total_size}")
                 wandb.log({
                     "correct_qa": n_correct_qa,
                     "accuracy": accuracy
@@ -205,7 +213,7 @@ class PrintEvalBatchCallback(TrainerCallback):
                 # === Log and optionally save best model ===
                 if accuracy > self.best_accuracy:
                     self.best_accuracy = accuracy
-                    logger.info(f"New best ACCURACY: {self.best_accuracy:.4f} - Saving model checkpoint")
+                    logger.info_main(f"New best ACCURACY: {self.best_accuracy:.4f} - Saving model checkpoint")
                     self.save_checkpoint(model, args.output_dir)
 
                 # Always log best, even if there is no improvement
@@ -214,23 +222,23 @@ class PrintEvalBatchCallback(TrainerCallback):
                 # Log the BLEU scores
                 for order in self.bleu_orders:
                     bleu_score = np.mean(all_results[f"bleu_score_{order}"]).item()
-                    logger.info(f"bleu_score_{order}: {bleu_score:.4f}")
+                    logger.info_main(f"bleu_score_{order}: {bleu_score:.4f}")
                     wandb.log({f"bleu_score_{order}": bleu_score})
 
                 # Log the METEOR score
                 meteor_score = np.mean(all_results["meteor_score"]).item()
-                logger.info(f"METEOR score: {meteor_score}")
+                logger.info_main(f"METEOR score: {meteor_score}")
                 wandb.log({"meteor_score": meteor_score})
 
                 # Log the ROUGE score
                 rougel_score = np.mean(all_results["rougel_score"]).item()
-                logger.info(f"ROUGE-L score: {rougel_score}")
+                logger.info_main(f"ROUGE-L score: {rougel_score}")
                 wandb.log({"rougel_score": rougel_score})
 
                 # === Log and optionally save best model ===
                 if rougel_score > self.best_rougel_score:
                     self.best_rougel_score = rougel_score
-                    logger.info(f"New best ROUGE-L score: {self.best_rougel_score:.4f} - Saving model checkpoint")
+                    logger.info_main(f"New best ROUGE-L score: {self.best_rougel_score:.4f} - Saving model checkpoint")
                     self.save_checkpoint(model, args.output_dir)
 
                 # Always log best, even if there is no improvement
@@ -261,6 +269,8 @@ class PrintEvalBatchCallback(TrainerCallback):
 
         model.train()  # Ensure model is back in training mode
 
+        logger.info_main(f"Finished Evaluation Callback...")
+
 
     def save_checkpoint(self, model, output_dir):
         best_model_dir = os.path.join(output_dir, "best_model")
@@ -276,7 +286,7 @@ class PrintEvalBatchCallback(TrainerCallback):
             self.tokenizer.save_pretrained(best_model_dir)
         if hasattr(self.processor, "save_pretrained"):
             self.processor.save_pretrained(best_model_dir)
-        logger.info(f"Model saved to: {best_model_dir}")
+        logger.info_main(f"Model saved to: {best_model_dir}")
 
 
 

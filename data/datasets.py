@@ -212,7 +212,7 @@ class MedicalImageDataset(Dataset, ABC):
         """Convert embedding to tensor"""
         # TODO check if we can remove this function!
         if embedding is None:
-            logger.error("Embedding is None, cannot convert to tensor.")
+            logger.error_main("Embedding is None, cannot convert to tensor.")
             return None
 
         np_img_flat = embedding.reshape(embedding.shape[0], embedding.shape[1], -1)
@@ -263,15 +263,15 @@ class MedicalImageDataset(Dataset, ABC):
 
     def verify(self):
         """Test function to verify dataset loading"""
-        logger.info(f"\nTotal number of samples: {len(self)}")
-        logger.info("\nExample question:")
+        logger.info_main(f"\nTotal number of samples: {len(self)}")
+        logger.info_main("\nExample question:")
         if len(self.samples) > 0:
             sample = self.samples[0]
-            logger.info(f"Image ID: {sample['image_id']}")
-            logger.info(f"Question: {sample['question']}")
-            logger.info(f"Answer: {sample['full_answer']}")
-            logger.info(f"Answer Type: {sample['answer_type']}")
-            logger.info(f"Answer Subtype: {sample['answer_subtype']}")
+            logger.info_main(f"Image ID: {sample['image_id']}")
+            logger.info_main(f"Question: {sample['question']}")
+            logger.info_main(f"Answer: {sample['full_answer']}")
+            logger.info_main(f"Answer Type: {sample['answer_type']}")
+            logger.info_main(f"Answer Subtype: {sample['answer_subtype']}")
 
     def shuffle_sentences(self, question, answer):
         # Needs to be implemented for each dataset

@@ -8,7 +8,7 @@ def get_env_var(name: str, required: bool = True, default: str | None = None) ->
         msg = f"[Environment Variables] {name} is not defined!"
         if required:
             raise EnvironmentError(msg)
-        logger.warning(msg)
+        logger.warning_main(msg)
     return value
 
 

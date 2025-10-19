@@ -33,7 +33,7 @@ class BLEUScorer(BaseScorer):
         """
         scores = []
         for pred, gt in zip(preds, gts):
-            score = self.metric.compute(pred, gt, max_order=max_order)
+            score = self.metric.compute(predictions=[pred], references=[gt], max_order=max_order)["bleu"]
             scores.append(score)
         return scores
 
