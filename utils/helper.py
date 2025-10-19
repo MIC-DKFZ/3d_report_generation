@@ -126,7 +126,7 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
     )
 
 
-def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "best", "best_nlp"]) -> Path:
+def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "best", "best_metric"]) -> Path:
     """
     Determine the checkpoint directory within a run directory.
 
@@ -140,7 +140,7 @@ def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "bes
     run_dir = Path(run_dir)
     if not run_dir.exists():
         raise FileNotFoundError(f"The specified run directory does not exist: {run_dir}")
-    if mode == "best_nlp":
+    if mode == "best_metric":
         our_best_ckpt_dir = Path(run_dir, "best_model")
         if not our_best_ckpt_dir.is_dir():
             raise FileNotFoundError(f"No 'best_model' directory found in {run_dir}")

@@ -5,7 +5,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 from trl import SFTConfig
@@ -13,6 +12,7 @@ from trl import SFTConfig
 import wandb
 from configs.run_config import RunConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
+from evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
 from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
@@ -36,35 +36,6 @@ from utils.memory_utils import (
 )
 from utils.paths import VLM_CONFIG_DIR, VLM_OUTPUT_DIR
 from utils.vision_input_type import VisionInputType
-
-
-def setup_distributed_training():
-    """
-    Set up distributed training environment.
-    This function handles the distributed training initialization as recommended in the JSC tutorial.
-    """
-    # Check if we're in a distributed environment
-    if int(os.environ.get("WORLD_SIZE", 1)) > 1:
-        rank = int(os.environ["RANK"])
-        world_size = int(os.environ["WORLD_SIZE"])
-        local_rank = int(os.environ.get("LOCAL_RANK"))
-        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE"))
-
-        logger.info(f"Distributed training detected: rank={rank}, world_size={world_size}, "
-                    f"local_rank={local_rank}, local_world_size={local_world_size}")
-
-        # Set the device for this process
-        torch.cuda.set_device(local_rank)
-        
-        # Initialize the process group
-        if not dist.is_initialized():
-            dist.init_process_group(backend="nccl")
-            logger.info(f"Process group initialized on rank {rank}")
-        
-        return True, rank, world_size, local_rank, local_world_size
-    else:
-        logger.info("Single GPU/CPU training detected")
-        return False, 0, 1, 0, 1
 
 
 class UnifiedVLMTrainer:
@@ -174,24 +145,33 @@ class UnifiedVLMTrainer:
         # Configure training arguments
         training_args = self.get_training_args()
 
-        callbacks = []
-        if is_main_process():
-            eval_dataloader = DataLoader(val_dataset, batch_size=self.cfg.eval.batch_size, shuffle=False,
-                                         collate_fn=self.vlm_model.collate_fn,
-                                         num_workers=4)
-            callbacks.extend([
-                LossLoggingCallback(),
-                PrintEvalBatchCallback(
-                    eval_dataloader=eval_dataloader,
-                    task_type= "RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",    # TODO: temporary hardcode
-                    max_new_tokens=self.cfg.eval.max_new_tokens,
-                    eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
-                    tokenizer=self.vlm_model.tokenizer,
-                    processor=self.vlm_model.processor,
-                    sample_count=len(val_dataset),
-                )
-            ])
+        if self.is_distributed:
+            sampler = EvalDistributedSampler(
+                val_dataset,
+                num_replicas=self.world_size,
+                rank=self.rank,
+                shuffle=False
+            )
+        else:
+            sampler = None
 
+        eval_dataloader = DataLoader(val_dataset, batch_size=self.cfg.eval.per_device_batch_size, shuffle=False,
+                                     sampler=sampler,
+                                     collate_fn=self.vlm_model.collate_fn,
+                                     num_workers=self.cfg.eval.num_dataloader_workers)
+
+        callbacks = [
+            LossLoggingCallback(),
+            PrintEvalBatchCallback(
+                eval_dataloader=eval_dataloader,
+                task_type="RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
+                max_new_tokens=self.cfg.eval.max_new_tokens,
+                eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
+                tokenizer=self.vlm_model.tokenizer,
+                processor=self.vlm_model.processor,
+                is_distributed=self.is_distributed
+            )
+        ]
 
         # Initialize SFT trainer
         self.trainer = VLMSFTTrainer(
@@ -233,9 +213,7 @@ class UnifiedVLMTrainer:
             log_memory_usage("After Cleanup")
 
         # Final config validation for offline mode
-        if (is_main_process() and 
-            os.getenv("WANDB_MODE", "online").lower() == "offline" and 
-            wandb.run is not None):
+        if os.getenv("WANDB_MODE", "online").lower() == "offline" and wandb.run is not None:
             final_config = dict(wandb.config)
             logger.info(f"Final config verification - Total keys: {len(final_config)}")
             if len(final_config) < 5:  # Arbitrary threshold - expect at least some config
@@ -537,21 +515,21 @@ def main():
 
     trainer.train(train_dataset, val_dataset)
     
-    if cfg.general.run_inference_eval:
-        if cfg.model.vision_encoder:
-            ve_path = cfg.model.vision_encoder.vision_encoder_path
-        else:
-            ve_path = None
+    if cfg.eval.run_inference:
         inference_args = argparse.Namespace(
             run_dir=cfg.general.output_dir,
             mode="final",
-            test_dataset_json=cfg.data.val_dataset_json_path,
-            vision_encoder_path=ve_path,
-            vision_input_path=cfg.data.vision_input_path,
-            n_samples=None,
-            final_test=False
+            dataset_json=cfg.eval.dataset_json_path,    # if none is provided and split='val'
+            split=cfg.eval.inference_split,             # the validation set is used, refer to
+                                                        # 'RunConfig.set_default_eval_dataset_json_path()'
+            n_samples=cfg.eval.n_samples,
+            per_device_batch_size = cfg.eval.per_device_batch_size,
+            num_dataloader_workers = cfg.eval.num_dataloader_workers
         )
         inference_main(inference_args)
+
+        if cfg.eval.run_eval:
+            raise NotImplementedError()
 
 
 if __name__ == "__main__":

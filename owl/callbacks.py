@@ -2,16 +2,17 @@ import os
 import re
 from typing import Literal
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+import torch.distributed as dist
 import torch
 import numpy as np
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 import wandb
 from transformers.modeling_utils import unwrap_model
-from evaluation.metrics import bleu_score, rouge_score, meteor_score
+from evaluation.metrics import BLEUScorer, ROUGELScorer, METEORScorer
+from utils.ddp_utils import gather_inference_outputs
 from utils.filter_batch import extract_batch_prompt_only
 from utils import logger
-from utils.helper import get_trainable_state_dict
+from utils.helper import get_trainable_state_dict, is_main_process
 from utils.regex_patterns import VQA_ANSWER_PATTERN
 
 
@@ -25,17 +26,19 @@ class PrintEvalBatchCallback(TrainerCallback):
         self.task_type = task_type
         self.max_new_tokens = max_new_tokens
         self.tokenizer = tokenizer
-        self.sample_count = sample_count
+
+        self.num_samples = len(eval_dataloader.sampler)  # type: ignore[arg-type]
+        self.total_size = len(eval_dataloader.dataset)  # type: ignore[arg-type]
 
         self.last_epoch = 0
         self.eval_every_n_epochs = eval_every_n_epochs
 
         self.print_first_sample = print_first_sample
-        self.log_n_per_callback = min(self.sample_count, log_n_per_callback)
+        self.log_n_per_callback = min(self.total_size, log_n_per_callback)
         self.is_distributed = is_distributed
 
         # Only create wandb table if wandb is initialized (i.e., on main process)
-        if wandb.run is not None:
+        if wandb.run is not None and is_main_process():
             columns = [
                 "Epoch",
                 "Sample Index",
@@ -48,13 +51,20 @@ class PrintEvalBatchCallback(TrainerCallback):
                     "Answer GT"
                 ]
             self.eval_table = wandb.Table(columns=columns, log_mode="MUTABLE")
-
             logger.info(f"Created an eval table with the following columns: {columns}")
+
         self.processor = processor
 
         # Track best metrics for model saving
-        self.best_rouge_score = -1.0    # RG
+        self.best_rougel_score = -1.0    # RG
         self.best_accuracy = -1.0       # VQA
+
+        # RG Metric Scorers
+        self.bleu_scorer = BLEUScorer()
+        self.rougel_scorer = ROUGELScorer()
+        self.meteor_scorer = METEORScorer()
+
+        self.bleu_orders = [1, 2, 3, 4]
 
     def on_evaluate(
         self,
@@ -66,21 +76,24 @@ class PrintEvalBatchCallback(TrainerCallback):
         metrics=None,
         **kwargs,
     ):
-
-        if (not state.is_world_process_zero
-                or state.epoch - self.last_epoch < self.eval_every_n_epochs):
+        if state.epoch - self.last_epoch < self.eval_every_n_epochs:
             return
 
         self.last_epoch = state.epoch
-        logger.info(f"Output samples from validation dataset after epoch {state.epoch}:")
-        logger.info(f"Epoch {state.epoch} reached")
 
+        if state.is_world_process_zero:
+            logger.info(f"Output samples from validation dataset after epoch {state.epoch}:")
+            logger.info(f"Epoch {state.epoch} reached")
+
+        # Store local results; if using DDP, all processes will merge into 'all_results' on the main rank.
+        results = {}
+
+        # === Run inference ===
         preds = []
         gts = []
-
         model.eval()  # Ensure model is in evaluation mode
         with torch.no_grad():  # Disable gradient calculations
-            for i, inputs in enumerate(tqdm(self.eval_dataloader, desc="Inference")):
+            for inputs in self.eval_dataloader:
                 inputs_prompt_only = extract_batch_prompt_only(inputs)
                 inputs_prompt_only = inputs_prompt_only.to(args.device)
                 del inputs_prompt_only["raw_samples"]
@@ -88,7 +101,7 @@ class PrintEvalBatchCallback(TrainerCallback):
 
                 outputs = model.generate(
                     **inputs_prompt_only,
-                    max_new_tokens=self.max_new_tokens,  # Adjust max_new_tokens as needed
+                    max_new_tokens=self.max_new_tokens,
                 )
 
                 # Decode input and generated output
@@ -100,7 +113,7 @@ class PrintEvalBatchCallback(TrainerCallback):
                 del outputs
                 torch.cuda.empty_cache()  # Clear CUDA cache periodically
 
-                if self.print_first_sample and i == 0:
+                if self.print_first_sample and state.is_world_process_zero:
                     logger.error(f"First batch sample GROUNDTRUTH:\n{decoded_gts[0]}")
                     logger.error(f"First batch sample PREDICTION:\n{decoded_preds[0]}")
 
@@ -111,12 +124,13 @@ class PrintEvalBatchCallback(TrainerCallback):
                 preds.extend(decoded_pred_assistant_answers)
                 gts.extend(decoded_gt_assistant_answers)
 
-        answer_preds = []
-        answer_gts = []
-
+        # === Calculate pairwise scores/metrics on local validation subset ===
         if self.task_type == "VQA":
             # === Count correct QA ===
+            answer_preds = []
+            answer_gts = []
             n_correct_qa = 0
+
             for pred, gt in zip(preds, gts):
                 m = re.search(VQA_ANSWER_PATTERN, pred)
                 if m:
@@ -136,96 +150,117 @@ class PrintEvalBatchCallback(TrainerCallback):
                 answer_preds.append(answer_pred)
                 answer_gts.append(answer_gt)
 
-            logger.info(f"Correct QA: {n_correct_qa}/{self.sample_count}")
-            accuracy = n_correct_qa / self.sample_count
-            wandb.log({
-                "correct_qa": n_correct_qa,
-                "accuracy": accuracy
-            })
+            logger.info(f"Correct partial QA: {n_correct_qa}/{self.num_samples}")  # log on every rank
 
-            # === Log and optionally save best model ===
-            if accuracy > self.best_accuracy:
-                self.best_accuracy = accuracy
-                logger.info(f"New best ACCURACY: {self.best_accuracy:.4f} - Saving model checkpoint")
-                self.save_checkpoint(model, args.output_dir)
-
-            # Always log best, even if it did not improve
-            wandb.log({"best_accuracy": self.best_accuracy})
+            results["answer_preds"] = answer_preds
+            results["answer_gts"] = answer_gts
+            results["n_correct_qa"] = n_correct_qa
 
         elif self.task_type == "RG":
             # === BLEU ===
-            max_orders = [1, 2, 3, 4]
             try:
-                bleu_scores = {order: [] for order in max_orders}
-
-                for pred, gt in zip(decoded_pred_assistant_answers, decoded_gt_assistant_answers):
-                    for order in max_orders:
-                        score = bleu_score(pred=[pred], gt=[gt], max_order=order)["bleu"]
-                        bleu_scores[order].append(score)
-
-                # Compute average per BLEU-n
-                bleu_averages = {order: np.mean(scores).item() for order, scores in bleu_scores.items()}
-
+                for order in self.bleu_orders:
+                    results[f"bleu_score_{order}"] = self.bleu_scorer(preds=preds, gts=gts, max_order=order)
             except Exception as e:
-                logger.error(f"Bleu score calculation failed: {e}")
-                bleu_averages = {order: -1 for order in max_orders}
-
-            # Log the BLEU scores
-            for order, score in bleu_averages.items():
-                logger.info(f"bleu_score_{order}: {score:.4f}")
-                wandb.log({f"bleu_score_{order}": score})
+                logger.error(f"BLEU score calculation failed: {e}")
+                for order in self.bleu_orders:
+                    results[f"bleu_score_{order}"] = [-1]  # use -1 to indicate error
 
             # === METEOR ===
             try:
-                meteor_score_val = meteor_score(preds, gts)["meteor"]
+                results["meteor_score"] = self.meteor_scorer(preds=preds, gts=gts)
             except Exception as e:
                 logger.error(f"METEOR score calculation failed: {e}")
-                meteor_score_val = -1  # Use -1 to indicate failure in logging
-
-            # Log the METEOR score
-            logger.info(f"METEOR score: {meteor_score_val}")
-            wandb.log({"meteor_score": meteor_score_val})
+                results["meteor"] = [-1]  # use -1 to indicate error
 
             # === ROUGE ===
             try:
-                rouge_score_val = rouge_score(preds, gts)["rougeL"]
+                results["rougel_score"] = self.rougel_scorer(preds=preds, gts=gts)
             except Exception as e:
-                logger.error(f"ROUGE score calculation failed: {e}")
-                rouge_score_val = -1
-
-            # Log the ROUGE score
-            logger.info(f"ROUGE score: {rouge_score_val}")
-            wandb.log({"rouge_score": rouge_score_val})
-
-            # === Log and optionally save best model ===
-            if rouge_score_val > self.best_rouge_score:
-                self.best_rouge_score = rouge_score_val
-                logger.info(f"New best ROUGE score: {self.best_rouge_score:.4f} - Saving model checkpoint")
-                self.save_checkpoint(model, args.output_dir)
-
-            # Always log best, even if it did not improve
-            wandb.log({"best_rouge_score": self.best_rouge_score})
+                logger.error(f"ROUGE-L score calculation failed: {e}")
+                results["rougel"] = [-1]  # use -1 to indicate error
         else:
             raise ValueError(f"Unsupported task_type: {self.task_type}")
 
-        # Only log 'self.log_n_per_callback' number of cases to the WandB eval table
-        for idx in range(0, self.sample_count, self.sample_count // self.log_n_per_callback):
-            table_data = [
-                state.epoch,
-                idx,
-                preds[idx],
-                gts[idx]
-            ]
-            if self.task_type == "VQA":
-                table_data += [
-                    answer_preds[idx],
-                    answer_gts[idx]
-                ]
-            self.eval_table.add_data(*table_data)
+        results["preds"] = preds
+        results["gts"] = gts
 
-        wandb.log({"eval_table": self.eval_table})
+        # === Gather results from other ranks at main rank process (DDP) ===
+        if self.is_distributed:
+            all_results = gather_inference_outputs(local_results=results, main_rank=0)
+        else:
+            all_results = results
+
+        # === Calculate final scores/metrics and log to WandB ===
+        if is_main_process():
+            if self.task_type == "VQA":
+                n_correct_qa = sum(all_results["n_correct_qa"])
+                accuracy = n_correct_qa / self.total_size
+
+                wandb.log({
+                    "correct_qa": n_correct_qa,
+                    "accuracy": accuracy
+                })
+
+                # === Log and optionally save best model ===
+                if accuracy > self.best_accuracy:
+                    self.best_accuracy = accuracy
+                    logger.info(f"New best ACCURACY: {self.best_accuracy:.4f} - Saving model checkpoint")
+                    self.save_checkpoint(model, args.output_dir)
+
+                # Always log best, even if there is no improvement
+                wandb.log({"best_accuracy": self.best_accuracy})
+            elif self.task_type == "RG":
+                # Log the BLEU scores
+                for order in self.bleu_orders:
+                    bleu_score = np.mean(all_results[f"bleu_score_{order}"]).item()
+                    logger.info(f"bleu_score_{order}: {bleu_score:.4f}")
+                    wandb.log({f"bleu_score_{order}": bleu_score})
+
+                # Log the METEOR score
+                meteor_score = np.mean(all_results["meteor_score"]).item()
+                logger.info(f"METEOR score: {meteor_score}")
+                wandb.log({"meteor_score": meteor_score})
+
+                # Log the ROUGE score
+                rougel_score = np.mean(all_results["rougel_score"]).item()
+                logger.info(f"ROUGE-L score: {rougel_score}")
+                wandb.log({"rougel_score": rougel_score})
+
+                # === Log and optionally save best model ===
+                if rougel_score > self.best_rougel_score:
+                    self.best_rougel_score = rougel_score
+                    logger.info(f"New best ROUGE-L score: {self.best_rougel_score:.4f} - Saving model checkpoint")
+                    self.save_checkpoint(model, args.output_dir)
+
+                # Always log best, even if there is no improvement
+                wandb.log({"best_rouge_score": self.best_rougel_score})
+            else:
+                raise ValueError(f"Unsupported task_type: {self.task_type}")
+
+            # === Log 'self.log_n_per_callback' number of cases to the WandB eval table ===
+            for idx in range(0, self.total_size, self.total_size // self.log_n_per_callback):
+                table_data = [
+                    state.epoch,
+                    idx,
+                    all_results["preds"][idx],
+                    all_results["gts"][idx]
+                ]
+                if self.task_type == "VQA":
+                    table_data += [
+                        all_results["answer_preds"][idx],
+                        all_results["answer_gts"][idx]
+                    ]
+                self.eval_table.add_data(*table_data)
+
+            wandb.log({"eval_table": self.eval_table})
+
+        # Ensure that main process finishes logging before continuing
+        if self.is_distributed:
+            dist.barrier()
 
         model.train()  # Ensure model is back in training mode
+
 
     def save_checkpoint(self, model, output_dir):
         best_model_dir = os.path.join(output_dir, "best_model")
