@@ -18,7 +18,8 @@ from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
 from trainers.VLMSFTTrainer import VLMSFTTrainer
-from utils import logger, rank_zero_filter, filter_evaluate_loading
+from utils import logger
+from utils.ddp_utils import setup_ddp
 from utils.helper import (
     is_main_process,
     load_config_file,
@@ -27,6 +28,7 @@ from utils.helper import (
     seed_everything,
 )
 from utils.load_and_save_files import load_json, save_json, save_yaml
+from utils.logging import setup_logger
 from utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
@@ -82,12 +84,11 @@ class UnifiedVLMTrainer:
         self.trainer: VLMSFTTrainer | None = None
         self.cfg: RunConfig = cfg
 
-        # Setup distributed training
         (self.is_distributed,
          self.rank,
          self.world_size,
          self.local_rank,
-         self.local_world_size) = setup_distributed_training()
+         self.local_world_size) = setup_ddp()
 
     def get_training_args(self):
         """Configure standard training arguments for distributed training"""
@@ -287,15 +288,17 @@ def setup_config_and_logging() -> RunConfig:
     # Setup output directory and log file
     if is_main_process():
         os.makedirs(cfg.general.output_dir, exist_ok=True)
-        log_file_path = os.path.join(cfg.general.output_dir, "train.log")
-        logger.add(log_file_path, filter=lambda record: rank_zero_filter(record) and filter_evaluate_loading(record))
+        shutil.copyfile(cfg.general.train_config, os.path.join(cfg.general.output_dir, "input_config.yml"))
+
+    log_file_path = os.path.join(cfg.general.output_dir, "train.log")
+    setup_logger(log_file_path)  # Setup logger on every rank
+
+    if is_main_process():
         logger.info(f"Successfully set up output directory at {cfg.general.output_dir}")
         print(f"Successfully set up output directory at {cfg.general.output_dir}")
 
-        shutil.copyfile(cfg.general.train_config, os.path.join(cfg.general.output_dir, "input_config.yml"))
-
     # Reset some args in case the vision input are embedding (instead of images)
-    cfg.maybe_reset_vision_encoder_specific_args(logger=logger)
+    cfg.maybe_reset_vision_encoder_specific_args()
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
     cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")

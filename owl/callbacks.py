@@ -17,8 +17,9 @@ from utils.regex_patterns import VQA_ANSWER_PATTERN
 
 class PrintEvalBatchCallback(TrainerCallback):
     def __init__(
-        self, eval_dataloader: DataLoader, task_type: Literal["VQA", "RG"], max_new_tokens: int, sample_count: int,
-            tokenizer=None, processor=None, eval_every_n_epochs=0.25, print_first_sample=True, log_n_per_callback=10
+        self, eval_dataloader: DataLoader, task_type: Literal["VQA", "RG"], max_new_tokens: int,
+            tokenizer=None, processor=None, eval_every_n_epochs=0.25, print_first_sample=True, log_n_per_callback=10,
+            is_distributed=False
     ):
         self.eval_dataloader = eval_dataloader
         self.task_type = task_type
@@ -31,6 +32,7 @@ class PrintEvalBatchCallback(TrainerCallback):
 
         self.print_first_sample = print_first_sample
         self.log_n_per_callback = min(self.sample_count, log_n_per_callback)
+        self.is_distributed = is_distributed
 
         # Only create wandb table if wandb is initialized (i.e., on main process)
         if wandb.run is not None:

@@ -1,5 +1,4 @@
 import argparse
-import os
 from argparse import Namespace
 from pathlib import Path
 
@@ -15,10 +14,12 @@ from data.datasets import AMOSMMDataset, CTRATEDataset
 from eval_ctrate import main as eval_ctrate
 from evaluation.metrics import bleu_score, meteor_score, rouge_score
 from models.abstract_vlm import AbstractVLMModel
-from utils import logger, rank_zero_filter
+from utils import logger
+from utils.ddp_utils import setup_ddp
 from utils.filter_batch import extract_batch_prompt_only
 from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir
 from utils.load_and_save_files import load_json, save_json
+from utils.logging import setup_logger
 from utils.vision_input_type import VisionInputType
 
 
@@ -42,19 +43,11 @@ class UnifiedVLMInference:
         self.per_device_batch_size = per_device_batch_size
         self.num_dataloader_workers = num_dataloader_workers
 
-        self.ddp_available = dist.is_available() and dist.is_initialized()
-        if self.ddp_available:
-            logger.info("Distributed training is available and initialized.")
-            self.local_rank = int(os.environ["LOCAL_RANK"])
-            self.world_size = int(os.environ["WORLD_SIZE"])
-            self.global_rank = int(os.environ["RANK"])
-            torch.cuda.set_device(self.local_rank)
-            self.device = torch.device("cuda", self.local_rank)
-        else:
-            logger.info("Distributed training is not available or not initialized.")
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.local_rank = 0  # or handle as single process
-            self.world_size = 1
+        (self.is_distributed,
+         self.rank,
+         self.world_size,
+         self.local_rank,
+         self.local_world_size) = setup_ddp()
 
     def inference(self, test_dataset):
         """
@@ -66,7 +59,7 @@ class UnifiedVLMInference:
         model = self.vlm_model.model
         model.eval().cuda()
 
-        if self.ddp_available:
+        if self.is_distributed:
             # Wrap the model with DDP
             logger.info(f"Wrapping model with DDP on rank {self.local_rank}")
             model = DDP(
@@ -111,7 +104,7 @@ class UnifiedVLMInference:
                 if "batch_count" in inputs:
                     del inputs["batch_count"]
 
-                if self.ddp_available:
+                if self.is_distributed:
                     outputs = model.module.generate(
                         **inputs,
                         max_new_tokens=1024,  # Adjust max_new_tokens as needed
@@ -283,16 +276,9 @@ def main(args):
 
     inference_output_dir = Path(ckpt_dir, "inference")
 
-    local_rank = 0
-    if "LOCAL_RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        local_rank = int(os.environ["LOCAL_RANK"])
-        world_size = int(os.environ["WORLD_SIZE"])
-        dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
-
     log_file_name = add_datetime_tag("inference") + ".log"
-    log_file = Path(inference_output_dir, log_file_name)
-    if local_rank == 0:
-        logger.add(log_file, filter=rank_zero_filter)
+    log_file_path = Path(inference_output_dir, log_file_name)
+    setup_logger(log_file_path)
 
     if cfg.data.vision_input_type == VisionInputType.IMAGE:
         ve_plans = load_json(Path(cfg.model.vision_encoder.vision_encoder_path, "plans.json"))
