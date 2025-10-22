@@ -319,20 +319,25 @@ class AMOSMMDataset(MedicalImageDataset):
         lines = question.split('\n')
         
         options = {}
-        other_lines = []
-        
+        lines_before = []
+        lines_after = []
+
+        # There are always exactly 4 options
         for line in lines:
-            match = re.match(VQA_OPTION_PATTERN, line)
-            if match:
-                options[match.group(1)] = match.group(2)
+            if len(options) < 4:
+                match = re.match(VQA_OPTION_PATTERN, line)
+                if match:
+                    options[match.group(1)] = match.group(2)
+                else:
+                    lines_before.append(line)
             else:
-                other_lines.append(line)
+                lines_after.append(line)
         
         if len(options) != 4:
             return question, answer
         
         # Find current correct answer letter
-        answer_match = re.search(VQA_ANSWER_PATTERN, answer, re.IGNORECASE)
+        answer_match = re.search(VQA_ANSWER_PATTERN, answer)
         if not answer_match:
             return question, answer
         
@@ -351,15 +356,14 @@ class AMOSMMDataset(MedicalImageDataset):
         
         # Rebuild question
         option_lines = [f"{letter}. {new_options[letter]}" for letter in ['A', 'B', 'C', 'D']]
-        new_question = '\n'.join(other_lines + option_lines)
+        new_question = '\n'.join(lines_before + option_lines + lines_after)
         
         # Update answer letter
         new_answer = re.sub(
             VQA_ANSWER_PATTERN,
-            lambda m: m.group(1) + new_letter + m.group(3),
+            lambda m: (m.group(1) or "") + new_letter + (m.group(3) or ""),
             answer,
-            count=1,  # only replace the first match
-            flags=re.IGNORECASE
+            count=1  # only replace the first match
         )
         
         return new_question, new_answer

@@ -167,21 +167,21 @@ class PrintEvalBatchCallback(TrainerCallback):
             except Exception as e:
                 logger.error(f"BLEU score calculation failed: {e}")
                 for order in self.bleu_orders:
-                    results[f"bleu_score_{order}"] = [-1]  # use -1 to indicate error
+                    results[f"bleu_score_{order}"] = [-1.0]  # use -1 to indicate error
 
             # === METEOR ===
             try:
                 results["meteor_score"] = self.meteor_scorer(preds=preds, gts=gts)
             except Exception as e:
                 logger.error(f"METEOR score calculation failed: {e}")
-                results["meteor"] = [-1]  # use -1 to indicate error
+                results["meteor"] = [-1.0]  # use -1 to indicate error
 
             # === ROUGE ===
             try:
                 results["rougel_score"] = self.rougel_scorer(preds=preds, gts=gts)
             except Exception as e:
                 logger.error(f"ROUGE-L score calculation failed: {e}")
-                results["rougel"] = [-1]  # use -1 to indicate error
+                results["rougel"] = [-1.0]  # use -1 to indicate error
         else:
             raise ValueError(f"Unsupported task_type: {self.task_type}")
 
@@ -197,6 +197,12 @@ class PrintEvalBatchCallback(TrainerCallback):
                 logger.info_main(f"Lengths: {_lengths}")
         else:
             all_results = results
+
+        # Handle numeric metric calculation failures indicated by -1
+        for k, lis in results.items():
+            if isinstance(lis[0], float) and -1.0 in lis:
+                results[k] = [-1.0] * self.total_size
+                logger.error(f"Detected failure in calculating {k!r}, set all values to -1 for this metric")
 
         # === Calculate final scores/metrics and log to WandB ===
         if state.is_world_process_zero:
@@ -263,7 +269,7 @@ class PrintEvalBatchCallback(TrainerCallback):
 
             wandb.log({"eval_table": self.eval_table})
 
-        # Ensure that main process finishes logging before continuing
+        # Ensure that main process finishes writing before continuing
         if self.is_distributed:
             dist.barrier()
 

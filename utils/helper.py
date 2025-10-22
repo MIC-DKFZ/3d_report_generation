@@ -219,6 +219,12 @@ def find_run_dir_in_output_dir(run_dir: str):
     return matches[0]
 
 
+def chunkify(lis: list, num_chunks: int):
+    """Split list into 'num_chunks' roughly equal-sized chunks."""
+    k, m = divmod(len(lis), num_chunks)
+    return [lis[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(num_chunks)]
+
+
 def is_main_process():
     """
     Check if this is the main process (rank 0).

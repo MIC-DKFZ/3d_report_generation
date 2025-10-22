@@ -24,6 +24,11 @@ def filter_evaluate_loading(record):
     return not record["name"].startswith("evaluate.loading")
 
 
+def log_banner(text: str, width: int = 100):
+    line = f" {text} ".center(width, "=")
+    logger.info_main("\n\n" + line + "\n")
+
+
 class InterceptHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         # Get corresponding Loguru level if it exists.
@@ -49,11 +54,13 @@ class InterceptHandler(logging.Handler):
 
 def setup_logger(log_file_path: str | Path | None = None):
     loguru_logger.remove()
-    loguru_logger.level(
-        "LOSS",
-        no=21,
-        color="<magenta><b>",
-    )
+
+    if "LOSS" not in [lvl.name for lvl in loguru_logger._core.levels.values()]:
+        loguru_logger.level(
+            "LOSS",
+            no=21,
+            color="<magenta><b>",
+        )
 
     rank = int(os.getenv("RANK", "0"))
     rank_color = "green" if rank == 0 else "white"
@@ -71,7 +78,9 @@ def setup_logger(log_file_path: str | Path | None = None):
 
     loguru_logger.configure(extra={"rank": rank})
 
-    logging.basicConfig(handlers=[InterceptHandler()], level=logging.WARNING)
+    root_logger = logging.getLogger()
+    if not any(isinstance(h, InterceptHandler) for h in root_logger.handlers):
+        logging.basicConfig(handlers=[InterceptHandler()], level=logging.WARNING)
 
     loguru_logger.info(f"Logger ready on rank {rank}")
 

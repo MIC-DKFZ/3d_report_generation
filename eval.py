@@ -1,162 +1,201 @@
 import argparse
-
-from datetime import datetime
-import os
-import json
+import multiprocessing
+import re
+from collections import defaultdict
 from pathlib import Path
-from uuid import uuid4
-
 from utils import logger
-import yaml
-from tqdm import tqdm
+from evaluation.metrics import BLEUScorer, ROUGELScorer, METEORScorer
+from utils.helper import chunkify, add_datetime_tag
+from utils.load_and_save_files import load_json, save_json
+import numpy as np
+import csv
+
+from utils.logging import setup_logger, log_banner
+from utils.regex_patterns import VQA_ANSWER_PATTERN
 
 
-def get_scores(inference_results_dir, eval_dir):
-    '''
-    This function loads the inference results from a JSON file and calculates various evaluation metrics for each sample and their average.
-    The metrics include RateScore, BLEU score, BERT score, ROUGE score, and METEOR score.
-    The results are saved in a JSON file in the specified directory.
+def eval_report_generation(preds: list, gts: list) -> dict[str, list] | None:
+    assert len(preds) == len(gts)
+    if not preds:
+        raise ValueError("VQA EVALUATION: received empty lists")
 
-    Note:
-        For many scores we could also use the evaluate library directly to calculate the average scores by sending the complete GT and Pred lists.
-        However, this approach calculates the average score by appending all predictions and all references into two long documents and calculating the metric on these two long documents.
-        Since this average score is slightly different from the average of the individual scores (~ the third decimal place), we decided to calculate the average by averaging sample-level scores.
-    
-    Args:
-        inference_results_file (str): Path to the JSON file containing inference results.
-        eval_dir (str): Directory to save evaluation results.
-    '''
-    logger.info("Running evaluation...")
+    results = {}
 
-    # Load inference results from JSON file
-    input_data = []
-    with open(os.path.join(inference_results_dir,'inference_results.json'), 'r') as json_file: # TODO: maybe support other formats later
-        input_data = json.load(json_file)
+    bleu_scorer = BLEUScorer()
+    rougel_scorer = ROUGELScorer()
+    meteor_scorer = METEORScorer()
 
-    results = []
-    average_results = {
-        "average_rate_score" : 0.0,
-        "average_bleu_score_1" : 0.0,
-        "average_bleu_score_2" : 0.0,
-        "average_bleu_score_3" : 0.0,
-        "average_bleu_score_4" : 0.0,
-        "average_bert_score" : 0.0,
-        "average_rouge_score" : 0.0,
-        "average_meteor_score" : 0.0,
-    }
-    for sample in tqdm(input_data):
-        pred = sample['output_text_clean']
-        gt = sample['answer']
+    bleu_orders = [1, 2, 3, 4]
+    try:
+        for order in bleu_orders:
+            results[f"bleu_score_{order}"] = bleu_scorer(preds=preds, gts=gts, max_order=order)
+    except Exception as e:
+        logger.error(f"BLEU score calculation failed: {e}")
+        for order in bleu_orders:
+            results[f"bleu_score_{order}"] = [-1.0]  # use -1 to indicate error
 
-        rate_score = RateScore([pred], [gt])
-        bleu_score_1 = BleuScoreHF([pred], [gt], 1)
-        bleu_score_2 = BleuScoreHF([pred], [gt], 2)
-        bleu_score_3 = BleuScoreHF([pred], [gt], 3)
-        bleu_score_4 = BleuScoreHF([pred], [gt], 4)
-        bert_score = BERTScore([pred], [gt])
-        # green_score = GREENScore([pred], [gt])
-        rouge_score = ROUGEScore([pred], [gt])
-        meteor_score = METEORScore([pred], [gt])
-        results.append(
-            {   
-                'image_id': sample['image_id'],
-                'question': sample['question'],
-                'answer': sample['answer'],
-                'answer_type': sample['answer_type'],
-                'answer_subtype': sample['answer_subtype'],
-                'output_text': sample['output_text'],
-                'rate_score': rate_score[0],
-                "bleu_score_1": bleu_score_1['bleu'],
-                "bleu_score_2": bleu_score_2['bleu'],
-                "bleu_score_3": bleu_score_3['bleu'],
-                "bleu_score_4": bleu_score_4['bleu'],
-                "bert_score": bert_score['f1'][0],
-                # "green_score": green_score,
-                "rouge_score": rouge_score['rougeLsum'],
-                "meteor_score": meteor_score['meteor']
-            }
-        )
-        # accumulate average results
-        average_results['average_rate_score'] += rate_score[0]
-        average_results['average_bleu_score_1'] += bleu_score_1['bleu']
-        average_results['average_bleu_score_2'] += bleu_score_2['bleu']
-        average_results['average_bleu_score_3'] += bleu_score_3['bleu']
-        average_results['average_bleu_score_4'] += bleu_score_4['bleu']
-        average_results['average_bert_score'] += bert_score['f1'][0]
-        average_results['average_rouge_score'] += rouge_score['rougeLsum']
-        average_results['average_meteor_score'] += meteor_score['meteor']
+    # === METEOR ===
+    try:
+        results["meteor_score"] = meteor_scorer(preds=preds, gts=gts)
+    except Exception as e:
+        logger.error(f"METEOR score calculation failed: {e}")
+        results["meteor"] = [-1.0]  # use -1 to indicate error
 
-    # calculate average scores
-    average_results['average_rate_score'] /= len(input_data)
-    average_results['average_bleu_score_1'] /= len(input_data)
-    average_results['average_bleu_score_2'] /= len(input_data)
-    average_results['average_bleu_score_3'] /= len(input_data)
-    average_results['average_bleu_score_4'] /= len(input_data)
-    average_results['average_bert_score'] /= len(input_data)
-    average_results['average_rouge_score'] /= len(input_data)
-    average_results['average_meteor_score'] /= len(input_data)
-    
-    # add the average results to the top of the results list
-    results.insert(0, average_results)
-    logger.info("All scores are calculated.")
+    # === ROUGE ===
+    try:
+        results["rougel_score"] = rougel_scorer(preds=preds, gts=gts)
+    except Exception as e:
+        logger.error(f"ROUGE-L score calculation failed: {e}")
+        results["rougel"] = [-1.0]  # use -1 to indicate error
+    return results
 
-    eval_file = os.path.join(eval_dir, "eval_results.json")
-    if eval_file is not None:
-        logger.info(f"Saving evaluation results to {eval_file}")
-        # save evaluation as JSON
-        if not Path(eval_file).parent.is_dir():
-            os.makedirs(Path(eval_file).parent)
-        with open(eval_file, 'w') as json_file:
-            json.dump(results, json_file, indent=4)
+def eval_vqa(preds: list, gts: list) -> dict[str, list] | None:
+    assert len(preds) == len(gts)
+    if not preds:
+        raise ValueError("VQA EVALUATION: received empty lists")
 
-def parse_args(default_config=None):
-    if default_config is None:
-        default_config = {}
-    general_parser = argparse.ArgumentParser(description="Evaluation pipeline")
-    general_parser.add_argument(
-        "--output_dir",
+    results = {}
+
+    answer_preds = []
+    answer_gts = []
+    matches = []
+
+    for pred, gt in zip(preds, gts):
+        m = re.search(VQA_ANSWER_PATTERN, pred)
+        if m:
+            answer_pred = m.group(2)  # Extract the letter
+        else:
+            answer_pred = "No answer found"
+
+        m = re.search(VQA_ANSWER_PATTERN, gt)
+        if m:
+            answer_gt = m.group(2)
+        else:
+            raise ValueError(f"Could not find answer in groundtruth: {gt}")
+
+        answer_preds.append(answer_pred)
+        answer_gts.append(answer_gt)
+        matches.append(answer_pred == answer_gt)
+
+    results["answer_pred"] = answer_preds
+    results["answer_gt"] = answer_gts
+    results["match"] = matches
+
+    return results
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Vision Language Model Evaluation")
+
+    parser.add_argument(
+        "--task_type",
         type=str,
-        default="output/vlm_eval",
-        help="Directory to save evaluation outputs",
+        choices=["VQA", "RG"],
+        help="Supported task types: Report Generation (RG); Visual Question Answering (VQA)."
     )
-    general_parser.add_argument(
-        "--results_dir",
+    parser.add_argument(
+        "--checkpoint_dir",
         type=str,
-        required=True,
-        help="Path to inference results directory",
+        default=None,
+        help="Path to a specific checkpoint directory where the inference results are located."
+    )
+    parser.add_argument(
+        "--num_processes",
+        type=int,
+        default=None,
+        help="Number of subprocesses to run evaluation in parallel. If None, use half the number of CPUs in the system."
     )
 
-    general_parser.add_argument(
-        "--eval_config", type=str, help="Path to config file (YAML or JSON)"
-    )
-    # First parse just the config argument to load the file
-    general_args, _ = general_parser.parse_known_args()
-
-    # Load config file if provided
-    if general_args.eval_config and os.path.exists(general_args.eval_config):
-        file_ext = os.path.splitext(general_args.eval_config)[1].lower()
-        with open(general_args.eval_config, "r") as file:
-            if file_ext == ".yaml" or file_ext == ".yml":
-                file_config = yaml.safe_load(file)
-            elif file_ext == ".json":
-                file_config = json.load(file)
-            else:
-                raise ValueError(f"Unsupported config file format: {file_ext}")
-
-            # Update config with values from file
-            default_config.update(file_config)
-
-    return general_args
-
-def main():
-    args = parse_args() # TODO: Add loggers
-    log_file = os.path.join(
-        args.output_dir, datetime.now().strftime(f"%Y-%m-%d_%H-%M-%S_evaluation_{uuid4()}.log")
-    )
-    logger.add(log_file)
-
-    get_scores(inference_results_dir=args.results_dir, eval_dir=args.output_dir)
+    args, _ = parser.parse_known_args()
+    return args
 
 
-if __name__ == '__main__':
-    main()
+def main_cli():
+    args = parse_args()
+    main(args)
+
+
+def main(args):
+    ckpt_dir = Path(args.checkpoint_dir)
+    inference_dir = ckpt_dir / "inference"
+    if not inference_dir.exists():
+        raise FileNotFoundError(f"Inference directory not found: {inference_dir}")
+
+    log_file_name = add_datetime_tag("eval") + ".log"
+    log_file_path = Path(inference_dir, log_file_name)
+    setup_logger(log_file_path)
+    
+    task_type = args.task_type
+
+    inference_results_json_path = inference_dir / "inference_results.json"
+    inference_results = load_json(inference_results_json_path)
+    num_samples = len(inference_results)
+    logger.info_main(f"Loaded {num_samples} samples")
+
+    num_processes = args.num_processes
+    if args.num_processes is None:
+        num_processes = min(num_samples, multiprocessing.cpu_count() // 2)
+    logger.info_main(f"Distributing evaluation to {num_processes} subprocesses")
+
+    csv_results = defaultdict(list)
+    for dic in inference_results:
+        csv_results["image_id"].append(dic["image_id"])
+        csv_results["pred"].append(dic["output_text_clean"])
+        csv_results["gt"].append(dic["answer"])
+
+    pred_chunks = chunkify(csv_results["pred"], num_chunks=num_processes)
+    gt_chunks = chunkify(csv_results["gt"], num_chunks=num_processes)
+
+    if task_type == "VQA":
+        eval_func = eval_vqa
+    elif task_type == "RG":
+        eval_func = eval_report_generation
+    else:
+        raise ValueError(f"Unknown task type: {task_type}")
+
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        result_chunks: list[dict[str, list]] = pool.starmap(func=eval_func, iterable=zip(pred_chunks, gt_chunks))
+
+    results: dict[str, list] = defaultdict(list)
+    for d in result_chunks:
+        for k, lis in d.items():
+            results[k].extend(lis)
+
+    # Handle numeric metric calculation failures indicated by -1
+    for k, lis in results.items():
+        if isinstance(lis[0], float) and -1.0 in lis:
+            results[k] = [-1.0] * num_samples
+            logger.error_main(f"Detected failure in calculating {k!r}, set all values to -1 for this metric")
+
+    csv_results.update(results)
+
+    csv_path = inference_dir / "eval_results.csv"
+    fieldnames = tuple(csv_results.keys())
+    with open(csv_path, "w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(fieldnames)
+        writer.writerows(zip(*(csv_results[field] for field in fieldnames)))
+    logger.info_main(f"Saved sample-wise evaluation results to {str(csv_path)}")
+
+    metric_results = {}
+    if task_type == "VQA":
+        metric_results["accuracy"] = np.mean(results["match"])
+    elif task_type == "RG":
+        for nlp_metric_name, values in results.items():
+            metric_results[nlp_metric_name] = np.mean(values).item()
+    else:
+        raise ValueError(f"Unknown task type: {task_type}")
+
+    logger.info_main("[METRICS] Evaluation Summary:")
+    for metric_name, value in metric_results.items():
+        logger.info_main(f"    > {metric_name}: {value:.4f}")
+
+    metrics_path = inference_dir / "metrics.json"
+    save_json(metric_results, metrics_path)
+    logger.info_main(f"Saved metric results to {str(metrics_path)}")
+
+    log_banner("Successfully finished Evaluation")
+
+
+if __name__ == "__main__":
+    main_cli()

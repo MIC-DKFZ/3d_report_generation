@@ -14,6 +14,7 @@ from configs.run_config import RunConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
 from evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
+from eval import main as eval_main
 from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
@@ -28,7 +29,7 @@ from utils.helper import (
     seed_everything,
 )
 from utils.load_and_save_files import load_json, save_json, save_yaml
-from utils.logging import setup_logger
+from utils.logging import setup_logger, log_banner
 from utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
@@ -226,6 +227,11 @@ class UnifiedVLMTrainer:
         if is_main_process():
             wandb.finish()
 
+        if self.is_distributed:
+            dist.barrier()
+
+        log_banner("Successfully finished Training")
+
 
 def setup_config_and_logging() -> RunConfig:
     args_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
@@ -408,6 +414,7 @@ def create_comprehensive_wandb_config(
 
 @logger.catch(reraise=True)
 def main():
+    setup_ddp()  # setup DDP first so we can communicate shared output folder
     cfg = setup_config_and_logging()
 
     # TODO: could add it as an argument
@@ -501,9 +508,6 @@ def main():
     logger.info_main(
         f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
     )
-    print(
-        f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
-    )
     logger.info_main(f"Using train batch size: {cfg.trainer.per_device_train_batch_size}")
     logger.info_main(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
 
@@ -514,22 +518,33 @@ def main():
     )
 
     trainer.train(train_dataset, val_dataset)
+    logger.remove()
     
     if cfg.eval.run_inference:
         inference_args = argparse.Namespace(
             run_dir=cfg.general.output_dir,
             mode="final",
             dataset_json=cfg.eval.dataset_json_path,    # if none is provided and split='val'
-            split=cfg.eval.inference_split,             # the validation set is used, refer to
+            split=cfg.eval.split,                       # the validation set is used, refer to
                                                         # 'RunConfig.set_default_eval_dataset_json_path()'
+                                                        # for more details
             n_samples=cfg.eval.n_samples,
+            max_new_tokens=cfg.eval.max_new_tokens,
             per_device_batch_size = cfg.eval.per_device_batch_size,
-            num_dataloader_workers = cfg.eval.num_dataloader_workers
+            num_dataloader_workers = cfg.eval.num_dataloader_workers,
+            vision_encoder_path = None,
+            vision_input_path = None
         )
-        inference_main(inference_args)
+        ckpt_dir = inference_main(inference_args)
+        logger.remove()
 
-        if cfg.eval.run_eval:
-            raise NotImplementedError()
+        if cfg.eval.run_eval and is_main_process():
+            eval_args = argparse.Namespace(
+                task_type="RG" if cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
+                checkpoint_dir=ckpt_dir,
+                num_processes=cfg.eval.num_eval_processes
+            )
+            eval_main(eval_args)
 
 
 if __name__ == "__main__":

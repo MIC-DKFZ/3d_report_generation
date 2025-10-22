@@ -12,11 +12,11 @@ def log_memory_usage(stage=""):
         reserved = torch.cuda.memory_reserved() / 1024**3  # GB
         free = (torch.cuda.get_device_properties(0).total_memory / 1024**3) - reserved
 
-        logger.info_main(
+        logger.info(
             f"[{stage}] GPU Memory - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB, Free: {free:.2f}GB"
         )
     else:
-        logger.info_main(f"[{stage}] CUDA not available")
+        logger.info(f"[{stage}] CUDA not available")
 
 
 def aggressive_cleanup():

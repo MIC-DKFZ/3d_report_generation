@@ -15,7 +15,7 @@ from utils.ddp_utils import setup_ddp, gather_inference_outputs
 from utils.filter_batch import extract_batch_prompt_only
 from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir
 from utils.load_and_save_files import load_json, save_json
-from utils.logging import setup_logger
+from utils.logging import setup_logger, log_banner
 from utils.vision_input_type import VisionInputType
 
 
@@ -119,7 +119,7 @@ class UnifiedVLMInference:
                     trimmed_generated_ids, skip_special_tokens=True
                 )
 
-                logger.info_main(f"First batch sample {i + 1}/{len(test_loader)}: {decoded_output[0]}")
+                logger.info_main(f"First batch sample {i + 1}/{len(test_loader)}:\n{decoded_output[0]}")
 
                 results.extend(
                     [
@@ -150,13 +150,14 @@ class UnifiedVLMInference:
 
             save_json(all_results, Path(self.output_dir, results_filename))
 
-            logger.info_main(
-                f"Saved inference results to {str(Path(self.output_dir, results_filename))}"
-            )
+            logger.info_main(f"Total number of inference samples: {len(all_results)}")
+            logger.info_main(f"Saved inference results to {str(Path(self.output_dir, results_filename))}")
 
         # Make sure that main process finishes writing before continuing
         if self.is_distributed:
             dist.barrier()
+
+        log_banner("Successfully finished Inference")
 
 
 def parse_args() -> Namespace:
@@ -236,7 +237,6 @@ def parse_args() -> Namespace:
         help="Path to the vision input directory."
     )
 
-    # First parse just the config argument to load the file
     args, _ = parser.parse_known_args()
     return args
 
@@ -259,10 +259,10 @@ def main(args):
         ckpt_dir = args.checkpoint_dir
         vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
 
-    if args.dataset_json_path is not None:
-        dataset_json_path = args.dataset_json_path
-        if not Path(args.dataset_json_path).is_file():
-            raise FileNotFoundError(f"The specified dataset JSON file does not exist: {str(dataset_json_path)}")
+    if args.dataset_json is not None:
+        dataset_json_path = args.dataset_json
+        if not Path(args.dataset_json).is_file():
+            raise FileNotFoundError(f"The specified dataset JSON file does not exist: {dataset_json_path}")
     else:
         if args.split == "test":
             raise ValueError("The 'dataset_json' has to be specified if 'split=test'")
@@ -300,7 +300,8 @@ def main(args):
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
-            vision_encoder_patch_size=vision_encoder_patch_size
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            do_sentence_shuffle=False
         )
     elif cfg.data.dataset_name == "ctrate":
         test_dataset = CTRATEDataset(
@@ -314,7 +315,8 @@ def main(args):
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
-            vision_encoder_patch_size=vision_encoder_patch_size
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            do_sentence_shuffle=False
         )
     else:
         raise ValueError(f"Unsupported dataset name: {cfg.data.dataset_name}")
@@ -328,10 +330,12 @@ def main(args):
     # Create inference object and run inference
     inference = UnifiedVLMInference(vlm_model, cfg=cfg, output_dir=inference_output_dir,
                                     per_device_batch_size=args.per_device_batch_size,
-                                    num_dataloader_workers=args.num_dataloader_workers)
+                                    num_dataloader_workers=args.num_dataloader_workers,
+                                    max_new_tokens=args.max_new_tokens)
 
     inference.inference(test_dataset)
 
+    return ckpt_dir
 
 if __name__ == "__main__":
     main_cli()

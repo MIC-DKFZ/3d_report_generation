@@ -1,7 +1,10 @@
 import os
+import random
+import string
 from pathlib import Path
 from typing import Any
 from pydantic import Field, model_validator
+import torch.distributed as dist
 from configs.base import ConfigBase
 from configs.data_config import DataConfig
 from configs.evaluation_config import EvaluationConfig
@@ -75,9 +78,18 @@ class RunConfig(ConfigBase):
                         logger.info(f"  > cfg.{_module} set to {_val}")
 
     def resolve_run_name(self) -> None:
-        config_name, _ = os.path.splitext(os.path.basename(self.general.train_config))
-        self.general.run_name = add_datetime_tag(config_name)
-        
+        if is_main_process():
+            uid = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+            config_name, _ = os.path.splitext(os.path.basename(self.general.train_config))
+            run_name = [f"{add_datetime_tag(config_name)}__{uid}"]
+        else:
+            run_name = [None]
+
+        if dist.is_available() and dist.is_initialized():
+            dist.broadcast_object_list(run_name, src=0)
+
+        self.general.run_name = run_name[0]
+
     def resolve_output_dir(self) -> None:
         self.general.output_dir = os.path.join(
             VLM_OUTPUT_DIR,
