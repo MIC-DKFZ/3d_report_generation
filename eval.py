@@ -169,7 +169,7 @@ def main(args):
 
     csv_results.update(results)
 
-    csv_path = inference_dir / "eval_results.csv"
+    csv_path = inference_dir / "VLM_eval_results.csv"
     fieldnames = tuple(csv_results.keys())
     with open(csv_path, "w", encoding="utf-8", newline="") as csv_file:
         writer = csv.writer(csv_file)
@@ -190,7 +190,7 @@ def main(args):
     for metric_name, value in metric_results.items():
         logger.info_main(f"    > {metric_name}: {value:.4f}")
 
-    metrics_path = inference_dir / "metrics.json"
+    metrics_path = inference_dir / "VLM_metrics.json"
     save_json(metric_results, metrics_path)
     logger.info_main(f"Saved metric results to {str(metrics_path)}")
 
