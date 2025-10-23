@@ -99,7 +99,9 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
         video_grid_thw = None
 
         if self.vision_input_type == VisionInputType.EMBEDDING:
-            video_grid_thw = torch.tensor([np.array(v_e.shape[-3:]) // np.array(self.reduce_block) for v_e in vision_inputs]).int()
+            video_grid_thw = torch.tensor(
+                np.array([np.array(v_e.shape[-3:]) // np.array(self.reduce_block) for v_e in vision_inputs])
+            ).int()
             list_of_vision_embeddings = [torch.tensor(rearrange(v_e, 'b c h w d -> (b h w d) c')) for v_e in vision_inputs]
             # TODO fix the following padding (makes no sense right now (but works when all images have same size, otherwise crash with video_grid_thw above later))
             videos_input_embeddings = torch.nn.utils.rnn.pad_sequence(

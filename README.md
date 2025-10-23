@@ -5,6 +5,146 @@ For installing the requirements, run
 pip install -e .
 ```
 
+### Local Setup and Environment Variables
+
+1. **Copy the entire folder** located at `$CLUSTER_DATA/j385i/vlm` to your local machine.  
+   *(It might take some time due to the vision encoder and some vision data (10 train and 5 val samples for each preprocessed dataset).)*
+
+2. **Update the paths** in the configuration files located in `./configs/bases` (marked with `<TODO>`) according to the directory where you copied the folder.  
+   Only the configuration files within `./bases/dataset_configs` and `./bases/model_configs` require modification.
+
+3. **Set the following two environment variables:**
+
+   - **`VLM_CONFIG_DIR`**  
+     Should point to `./configs`.  
+     The path/file provided after the `--train_config` flag as well as all base configurations (explained below) will be resolved relative to this directory.  
+
+     **Examples:**  
+     - `run.yml` → `$VLM_CONFIG_DIR/run.yml`  
+     - `lr_ablation/run.yml` → `$VLM_CONFIG_DIR/lr_ablation/run.yml`
+
+   - **`VLM_OUTPUT_DIR`**  
+     Can point to any directory where results will be stored (e.g., `./results`).  
+     The folder structure in the output folder is as follows:  
+     ```
+     $VLM_OUTPUT_DIR/<DATASET_NAME>/<VISION_INPUT_FOLDER_NAME>/(<TRAIN_CONFIG_PATH> + '__' + <DATETIME_TAG> + '__' + <UID>)
+     ```
+
+     **Examples:**  
+     Training with `dataset_name=ctrate` and `vision_input_path=/p/scratch/hai_1021/CTRATEv2_LungCrop_1.0x1.0x1.0`:
+     - `run.yml` → `$VLM_OUTPUT_DIR/ctrate/CTRATEv2_LungCrop_1.0x1.0x1.0/run__2025-10-06_20-56-58__DFJI`
+     - `lr_ablation/run.yml` → `$VLM_OUTPUT_DIR/lr_ablation/ctrate/CTRATEv2_LungCrop_1.0x1.0x1.0/lr_ablation/run__2025-10-06_20-56-58__2RF9`
+    
+## Training, Inference & Evaluation
+
+To run a training, execute
+```
+python train.py --train_config <relative_path_to_config_file>
+```
+* Current supported model types: "owl" and "qwen"
+* Current supported datasets with embeddings: See [Data Location](#data-location)
+
+### Start a Run with Config Files
+
+Three basic example YAML files are provided to start a test training run:
+
+- `Qwen_ADAPTER_Qwen.yml` *(adapter-only)*
+- `Qwen_ADAPTER_Qwen_LM_Lora.yml` *(frozen VE, LM lora, HEAD lora)*
+- `Qwen_VE_Lora_ADAPTER_Qwen_LM_Lora.yml` *(adapter fft, the rest with lora)*
+
+Each final configuration file consists of five main sections and an additional `base_configs` field:
+
+- `base_configs` — list of config file paths to merge into the main config file (earlier configs have higher priority)
+- `general` — *(GeneralConfig)*
+- `model` — *(ModelConfig)*
+- `data` — *(DataConfig)*
+- `trainer` — *(SFTTrainerConfig)*
+- `eval` — *(EvaluationConfig)*
+
+### Base Configurations
+
+The `base_configs` field allows combining multiple configuration files into a single final training configuration.  
+You can also specify extra configurations using the `--add_base_configs` CLI flag.  
+Configurations passed this way are inserted at the beginning of the `base_configs` list, taking precedence.
+
+This can be useful if you want to omit the dataset config in your run configurations (and pass them via `--add_base_configs`) so they can be reused for all datasets (nnUNet-style).  
+This is the case for all three example configurations.
+
+To maximize flexibility, you can create **separate configuration files** for each subdictionary (especially for `model`, `data`, and `trainer`) and use them as base configurations to construct the final training configuration.  
+Each of these components has a dedicated directory:
+
+- `./bases/model_configs`
+- `./bases/dataset_configs`
+- `./bases/trainer_configs`
+
+Files within these directories define parameters specific to their respective sections.
+
+If you would like to understand how configuration files are processed internally, what default values exist, or which arguments are supported, take a look at `vlm/configs/run_config.py`
+
+### The Evaluation Configuration
+The `EvaluationConfig` manages both the validation callback during training and the **automatic inference and evaluation after training**.
+To enable both during training, set `eval.run_inference` and `eval.run_eval` to `True`.
+More parameters and detailed information can be found in the `EvaluationConfig` class definition.
+
+### Overriding specific fields
+
+You can also override individual fields in the training configuration directly from the command line (CLI).
+To do this, add a flag that points to the field you want to modify — relative to RunConfig — followed by the new value.
+
+Example: the following command overrides the number of training epochs and the number of validation samples used during training:
+
+```
+python train.py --train_config Qwen_ADAPTER_Qwen.yml \
+    --add_base_configs bases/dataset_configs/ctrate_lungcrop_embedding.yml --trainer.num_train_epochs 5 --data.n_val_samples 50
+```
+
+**WARNING**: Overriding fields such as `data.dataset_name`, `data.vision_input_path` may result in unexpected behavior, since they are used to determine the output folder even before
+the override process takes place within the train configuration. Some fields such as `run_name` or `output_dir` which are determined internally must not be provided or overwritten as well.
+	 
+
+### The Easy Way to Run Ablations
+
+If you have a working configuration that you want to run ablations with, you can use it as a base config and just override 
+the one value that you want to ablate (and optionally the 'wandb_project' argument). 
+Additionally, if you group the ablation configurations in a seperate folder, this structure will be forwarded to the output folder 
+(as explained above in [Setup for Local Debugging](#local-setup)).
+
+
+### Running Experiments on JSC
+
+Example run commands can be found in `_cluster/sweep_launch.sh`. This script internally submits jobs using the `_cluster/vlm_train.sh` sbatch script.
+Any flags you pass to the sbatch command are forwarded directly to train.py. In the provided examples, this is used to specify the dataset configuration via the `--add_base_configs` flag.
+You can also pass any `general`, `model`, `data`, etc. arguments in the same way, these will override the corresponding values in the final configuration.
+
+The example run commands should work out of the box after you configure the SBATCH parameters and update the necessary variables in the section marked `CONFIGURABLE`.
+
+Default configurations: `/p/scratch/hai_1023/rocket_vlm/configs/rocket_default`
+
+---
+
+### Debug Mode
+
+You can add the `debug.yml` file as a base config, which overrides arguments such as `batch_size` or `save_steps` to debug-friendly values.
+
+**Example run command for debugging:**
+
+```
+python train.py --train_config Qwen_ADAPTER_Qwen.yml \  
+    --add_base_configs debug.yml bases/dataset_configs/ctrate_lungcrop_embedding.yml
+```
+
+---
+
+## Inference
+To run inference, execute
+```
+python inference.py --model_type <model_type> --dataset_path <path_to_dataset> --embeddings_path <path_to_embeddings>
+```
+* Current supported model types: "owl" and "qwen"
+* Current supported datasets with embeddings: See [Data Location](#data-location)
+
+---
+
 ## Data Location
 
 ### AMOS-MM
@@ -36,23 +176,7 @@ For dataset json preprocessing (if you want to create the dataset jsons from scr
 * Train dataset json: `Answer type distribution: {'VQA': 865242, 'REPORT_DIAGNOSIS': 46406, 'REPORT': 46406, 'DIAGNOSIS': 46406}`
 * Val dataset json `Answer type distribution: {'VQA': 56202, 'REPORT_DIAGNOSIS': 3005, 'REPORT': 3005, 'DIAGNOSIS': 3005}`
 
-
-    
-## Training
-To run a training, execute
-```
-python train.py --model_type <model_type> --dataset_path <path_to_dataset> --embeddings_path <path_to_embeddings>
-```
-* Current supported model types: "owl" and "qwen"
-* Current supported datasets with embeddings: See [Data Location](#data-location)
-
-## Inference
-To run inference, execute
-```
-python inference.py --model_type <model_type> --dataset_path <path_to_dataset> --embeddings_path <path_to_embeddings>
-```
-* Current supported model types: "owl" and "qwen"
-* Current supported datasets with embeddings: See [Data Location](#data-location)
+---
 
 # Coding guidlines
 ## Code formatting

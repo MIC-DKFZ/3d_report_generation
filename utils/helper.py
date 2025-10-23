@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+import string
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, TypeVar
@@ -126,7 +127,7 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
     )
 
 
-def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "best", "best_nlp"]) -> Path:
+def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "best", "best_metric"]) -> Path:
     """
     Determine the checkpoint directory within a run directory.
 
@@ -140,7 +141,7 @@ def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "bes
     run_dir = Path(run_dir)
     if not run_dir.exists():
         raise FileNotFoundError(f"The specified run directory does not exist: {run_dir}")
-    if mode == "best_nlp":
+    if mode == "best_metric":
         our_best_ckpt_dir = Path(run_dir, "best_model")
         if not our_best_ckpt_dir.is_dir():
             raise FileNotFoundError(f"No 'best_model' directory found in {run_dir}")
@@ -219,9 +220,23 @@ def find_run_dir_in_output_dir(run_dir: str):
     return matches[0]
 
 
+def chunkify(lis: list, num_chunks: int):
+    """Split list into 'num_chunks' roughly equal-sized chunks."""
+    k, m = divmod(len(lis), num_chunks)
+    return [lis[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(num_chunks)]
+
+
+def get_random_uid(length: int = 4) -> str:
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+
 def is_main_process():
     """
     Check if this is the main process (rank 0).
     As recommended in the JSC tutorial, only rank 0 should handle logging, saving, etc.
     """
     return int(os.environ.get("RANK", "0")) == 0
+
+
+def get_process_rank() -> int:
+    return int(os.environ.get("RANK", "0"))

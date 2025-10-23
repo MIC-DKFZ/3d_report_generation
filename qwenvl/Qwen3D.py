@@ -55,10 +55,10 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         checkpoint_paths = glob.glob(f"{vision_encoder_path}/fold_all/checkpoint_*.pth")
         if len(checkpoint_paths) > 1:
             checkpoint_path = [c for c in checkpoint_paths if "final" in c][0]
-            logger.info(f"Multiple VE checkpoints found, using final: {checkpoint_path}")
+            logger.info_main(f"Multiple VE checkpoints found, using final: {checkpoint_path}")
             if len(checkpoint_path) == 0:
                 checkpoint_path = checkpoint_paths[0]
-                logger.info(f"Multiple VE checkpoints found, using first: {checkpoint_path}")
+                logger.info_main(f"Multiple VE checkpoints found, using first: {checkpoint_path}")
         else:
             checkpoint_path = checkpoint_paths[0]
 

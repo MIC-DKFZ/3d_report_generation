@@ -1,30 +1,27 @@
 import argparse
-import os
 from argparse import Namespace
 from pathlib import Path
 
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
-from typing import Literal
-
 from configs.run_config import RunConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
-from eval_ctrate import main as eval_ctrate
-from evaluation.metrics import bleu_score, meteor_score, rouge_score
+from evaluation.eval_distributed_sampler import EvalDistributedSampler
 from models.abstract_vlm import AbstractVLMModel
-from utils import logger, rank_zero_filter
+from utils import logger
+from utils.ddp_utils import setup_ddp, gather_inference_outputs
 from utils.filter_batch import extract_batch_prompt_only
 from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir
 from utils.load_and_save_files import load_json, save_json
+from utils.logging import setup_logger, log_banner
 from utils.vision_input_type import VisionInputType
 
 
 class UnifiedVLMInference:
     def __init__(self, vlm_model: AbstractVLMModel, cfg: RunConfig, output_dir: str | Path, per_device_batch_size: int,
-                 num_dataloader_workers: int):
+                 num_dataloader_workers: int, max_new_tokens: int):
         """
         Initialize the unified VLM inference.
         Args:
@@ -41,20 +38,13 @@ class UnifiedVLMInference:
 
         self.per_device_batch_size = per_device_batch_size
         self.num_dataloader_workers = num_dataloader_workers
+        self.max_new_tokens = max_new_tokens
 
-        self.ddp_available = dist.is_available() and dist.is_initialized()
-        if self.ddp_available:
-            logger.info("Distributed training is available and initialized.")
-            self.local_rank = int(os.environ["LOCAL_RANK"])
-            self.world_size = int(os.environ["WORLD_SIZE"])
-            self.global_rank = int(os.environ["RANK"])
-            torch.cuda.set_device(self.local_rank)
-            self.device = torch.device("cuda", self.local_rank)
-        else:
-            logger.info("Distributed training is not available or not initialized.")
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.local_rank = 0  # or handle as single process
-            self.world_size = 1
+        (self.is_distributed,
+         self.rank,
+         self.world_size,
+         self.local_rank,
+         self.local_world_size) = setup_ddp()
 
     def inference(self, test_dataset):
         """
@@ -62,11 +52,11 @@ class UnifiedVLMInference:
         Args:
             test_dataset: Test dataset
         """
-        logger.info("Running inference...")
+        logger.info_main("Running inference...")
         model = self.vlm_model.model
         model.eval().cuda()
 
-        if self.ddp_available:
+        if self.is_distributed:
             # Wrap the model with DDP
             logger.info(f"Wrapping model with DDP on rank {self.local_rank}")
             model = DDP(
@@ -76,10 +66,10 @@ class UnifiedVLMInference:
                 find_unused_parameters=False,
             )
 
-            sampler = DistributedSampler(
+            sampler = EvalDistributedSampler(
                 test_dataset,
                 num_replicas=self.world_size,
-                rank=self.global_rank,
+                rank=self.rank,
                 shuffle=False,  # Usually False for evaluation/testing
             )
         else:
@@ -111,15 +101,15 @@ class UnifiedVLMInference:
                 if "batch_count" in inputs:
                     del inputs["batch_count"]
 
-                if self.ddp_available:
+                if self.is_distributed:
                     outputs = model.module.generate(
                         **inputs,
-                        max_new_tokens=1024,  # Adjust max_new_tokens as needed
+                        max_new_tokens=self.max_new_tokens,
                     )
                 else:
                     outputs = model.generate(
                         **inputs,
-                        max_new_tokens=1024,  # Adjust max_new_tokens as needed
+                        max_new_tokens=self.max_new_tokens,
                     )
 
                 trimmed_generated_ids = [
@@ -129,12 +119,7 @@ class UnifiedVLMInference:
                     trimmed_generated_ids, skip_special_tokens=True
                 )
 
-                # Log the first sample output
-                # if i == 0:
-                #     logger.info(f"First sample input: {raw_samples['answer'][0]}")
-                #     logger.info(f"First sample output: {decoded_output[0]}")
-
-                logger.info(f"First Sample from Batch {i + 1}/{len(test_loader)}: {decoded_output[0]}")
+                logger.info_main(f"First batch sample {i + 1}/{len(test_loader)}:\n{decoded_output[0]}")
 
                 results.extend(
                     [
@@ -146,10 +131,6 @@ class UnifiedVLMInference:
                     ]
                 )
 
-                # if i == 50:
-                #     logger.info("Stopping after 50 samples for testing purposes.")
-                #     break
-
         for result in results:
             # Clean up the output text
             outputs_text = result["output_text"]
@@ -159,13 +140,24 @@ class UnifiedVLMInference:
                 outputs_text = outputs_text.split("system\n")[-1].strip()
             result["output_text_clean"] = outputs_text
 
-        results_filename = "inference_results.json"
+        if self.is_distributed:
+            all_results = gather_inference_outputs(local_results=results, main_rank=0)
+        else:
+            all_results = results
 
-        save_json(results, Path(self.output_dir, results_filename))
+        if is_main_process():
+            results_filename = "inference_results.json"
 
-        logger.info(
-            f"Saved inference results to {str(Path(self.output_dir, results_filename))}"
-        )
+            save_json(all_results, Path(self.output_dir, results_filename))
+
+            logger.info_main(f"Total number of inference samples: {len(all_results)}")
+            logger.info_main(f"Saved inference results to {str(Path(self.output_dir, results_filename))}")
+
+        # Make sure that main process finishes writing before continuing
+        if self.is_distributed:
+            dist.barrier()
+
+        log_banner("Successfully finished Inference")
 
 
 def parse_args() -> Namespace:
@@ -189,9 +181,9 @@ def parse_args() -> Namespace:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["best_nlp", "best", "final"],
-        default="best_nlp",
-        help="When using --run_dir, choose which checkpoint to load: 'best_nlp', 'best' or 'final'."
+        choices=["best_metric", "best", "final"],
+        default="final",
+        help="When using --run_dir, choose which checkpoint to load: 'best_metric', 'best' or 'final'."
     )
     parser.add_argument(
         "--dataset_json",
@@ -213,10 +205,16 @@ def parse_args() -> Namespace:
         help="Number of samples. Run all if 'None'."
     )
     parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=640,
+        help="Maximum number of new tokens to generate."
+    )
+    parser.add_argument(
         "--per_device_batch_size",
         type=int,
         default=64,
-        help="The batch size per device to run inference with. Default: 64"
+        help="The batch size per device to run inference with."
     )
     parser.add_argument(
         "--num_dataloader_workers",
@@ -225,6 +223,7 @@ def parse_args() -> Namespace:
         help="Number of subprocesses per device to use for data loading."
     )
 
+    # Needed if inference is run in another environment
     parser.add_argument(
         "--vision_encoder_path",
         type=str,
@@ -238,7 +237,6 @@ def parse_args() -> Namespace:
         help="Path to the vision input directory."
     )
 
-    # First parse just the config argument to load the file
     args, _ = parser.parse_known_args()
     return args
 
@@ -249,10 +247,6 @@ def main_cli():
 
 
 def main(args):
-    test_dataset_json_path = Path(args.test_dataset_json)
-    if not test_dataset_json_path.exists():
-        raise FileNotFoundError(f"Test dataset JSON not found: {str(test_dataset_json_path)}")
-
     if args.run_dir:
         run_dir = Path(args.run_dir)
 
@@ -266,9 +260,9 @@ def main(args):
         vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
 
     if args.dataset_json is not None:
-        dataset_json_path = Path(args.dataset_json)
-        if not dataset_json_path.is_file():
-            raise FileNotFoundError(f"The specified dataset JSON file does not exist: {str(dataset_json_path)}")
+        dataset_json_path = args.dataset_json
+        if not Path(args.dataset_json).is_file():
+            raise FileNotFoundError(f"The specified dataset JSON file does not exist: {dataset_json_path}")
     else:
         if args.split == "test":
             raise ValueError("The 'dataset_json' has to be specified if 'split=test'")
@@ -283,16 +277,9 @@ def main(args):
 
     inference_output_dir = Path(ckpt_dir, "inference")
 
-    local_rank = 0
-    if "LOCAL_RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        local_rank = int(os.environ["LOCAL_RANK"])
-        world_size = int(os.environ["WORLD_SIZE"])
-        dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
-
     log_file_name = add_datetime_tag("inference") + ".log"
-    log_file = Path(inference_output_dir, log_file_name)
-    if local_rank == 0:
-        logger.add(log_file, filter=rank_zero_filter)
+    log_file_path = Path(inference_output_dir, log_file_name)
+    setup_logger(log_file_path)
 
     if cfg.data.vision_input_type == VisionInputType.IMAGE:
         ve_plans = load_json(Path(cfg.model.vision_encoder.vision_encoder_path, "plans.json"))
@@ -300,10 +287,10 @@ def main(args):
     else:
         vision_encoder_patch_size = None
 
-    logger.info(f"Using {args.split} split for inference.")
+    logger.info_main(f"Using {args.split} split for inference.")
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
-            dataset_json_path=str(dataset_json_path),
+            dataset_json_path=dataset_json_path,
             model_name=cfg.model.model_type,
             split=args.split,
             vision_input_path=cfg.data.vision_input_path,
@@ -313,11 +300,12 @@ def main(args):
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
-            vision_encoder_patch_size=vision_encoder_patch_size
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            do_sentence_shuffle=False
         )
     elif cfg.data.dataset_name == "ctrate":
         test_dataset = CTRATEDataset(
-            dataset_json_path=str(dataset_json_path),
+            dataset_json_path=dataset_json_path,
             model_name=cfg.model.model_type,
             split=args.split,
             vision_input_path=cfg.data.vision_input_path,
@@ -327,24 +315,27 @@ def main(args):
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
-            vision_encoder_patch_size=vision_encoder_patch_size
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            do_sentence_shuffle=False
         )
     else:
         raise ValueError(f"Unsupported dataset name: {cfg.data.dataset_name}")
 
-    logger.info(f"Loaded {len(test_dataset)} test samples")
+    logger.info_main(f"Loaded {len(test_dataset)} inference samples")
 
-    if cfg.data.embedding_constant is not None and is_main_process():
-        logger.info(f"Using embedding constant: {cfg.data.embedding_constant}")
+    if cfg.data.embedding_constant is not None:
+        logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
         print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     # Create inference object and run inference
     inference = UnifiedVLMInference(vlm_model, cfg=cfg, output_dir=inference_output_dir,
                                     per_device_batch_size=args.per_device_batch_size,
-                                    num_dataloader_workers=args.num_dataloader_workers)
-    # calculate_metrics = not args.no_calculate_metrics
+                                    num_dataloader_workers=args.num_dataloader_workers,
+                                    max_new_tokens=args.max_new_tokens)
+
     inference.inference(test_dataset)
 
+    return ckpt_dir
 
 if __name__ == "__main__":
     main_cli()

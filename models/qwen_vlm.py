@@ -5,7 +5,6 @@ import transformers
 from configs.model.model_config import ModelConfig
 from qwenvl.processing_3d import QwenVLProcessor3D
 from qwenvl.Qwen3D import QwenVLForConditionalGeneration3D
-from utils import logger
 from utils.filter_batch import extract_raw_samples_from_batch
 from utils.vision_input_type import VisionInputType
 
@@ -34,7 +33,7 @@ class QwenVLModel(AbstractVLMModel):
             "lm_head": "lm_head",
         }
 
-    def setup_model(self, bnb_config=None):
+    def setup_model(self):
         """Initialize model, processor and PEFT configuration"""
 
         if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
@@ -68,7 +67,8 @@ class QwenVLModel(AbstractVLMModel):
         texts = [self.processor.apply_chat_template(example["formatted_qa"], tokenize=False) for example in examples]
 
         texts_prompt_only = [
-            self.processor.apply_chat_template(example["formatted_qa_prompt_only"], tokenize=False)
+            self.processor.apply_chat_template(example["formatted_qa_prompt_only"],
+                                               tokenize=False) + "<|im_start|>assistant\n"
             for example in examples
         ]
 
@@ -78,13 +78,20 @@ class QwenVLModel(AbstractVLMModel):
             if "vision_input" in example and example["vision_input"] is not None
         ]
 
-        batch = self.processor(text=texts, vision_inputs=vision_inputs, return_tensors="pt", padding=True)
+        batch = self.processor(
+            text=texts,
+            vision_inputs=vision_inputs,
+            return_tensors="pt",
+            padding=True,
+            padding_side="right"
+        )
 
         batch_prompt_only = self.processor(
             text=texts_prompt_only,
             vision_inputs=vision_inputs,
             return_tensors="pt",
             padding=True,
+            padding_side="left"
         )
 
         labels = batch["input_ids"].clone()
@@ -99,11 +106,16 @@ class QwenVLModel(AbstractVLMModel):
             labels[labels == image_token_id] = -100
 
         # Only keep the model's final assistant response as the prediction target.
-        # Everything before the last "<|im_start|>assistant\n" is ignored (-100).
+        # Everything before and including the last "<|im_start|>assistant\n"
+        # as well as after the last "<|im_end|> (e.g. pad tokens) is ignored (-100).
         im_start_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
+        im_end_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_end|>")
+
         for i in range(labels.shape[0]):
             last_im_start_pos = (labels[i] == im_start_token_id).nonzero(as_tuple=True)[0][-1]
-            labels[i, :last_im_start_pos] = -100
+            last_im_end_pos = (labels[i] == im_end_token_id).nonzero(as_tuple=True)[0][-1]
+            labels[i, :last_im_start_pos + 3] = -100
+            labels[i, last_im_end_pos + 1:] = -100
 
         raw_samples = extract_raw_samples_from_batch(examples)
         batch_out = {
@@ -120,51 +132,6 @@ class QwenVLModel(AbstractVLMModel):
         batch_out = transformers.BatchFeature(batch_out)
         self.batch_count += 1
         return batch_out
-
-    # def get_trainable_params(self):
-    #     """Return information about trainable parameters"""
-    #     if self.train_only_vision_adapter:
-    #         return {"peft_config": None, "train_only_vision_adapter": True}
-    #     else:
-    #         if self.train_vision_encoder:
-    #             # Train both language model and vision encoder
-    #             peft_config = LoraConfig(
-    #                 task_type="CAUSAL_LM",
-    #                 r=8,
-    #                 lora_alpha=32,
-    #                 target_modules=[
-    #                     "q_proj", "k_proj", "v_proj", "o_proj",
-    #                     "gate_proj", "up_proj", "down_proj",
-    #                     "lm_head"
-    #                 ],
-    #                 modules_to_save=["vision_adapter"],
-    #                 lora_dropout=0.1,
-    #                 bias="none"
-    #             )
-    #         else:
-    #             # Only train language model, exclude vision encoder modules
-    #             peft_config = LoraConfig(
-    #                 task_type="CAUSAL_LM",
-    #                 r=8,
-    #                 lora_alpha=32,
-    #                 # Use specific module paths to target only language model components
-    #                 # TODO use exclude_modules (only available in newest transformers dev right now)
-    #                 target_modules=[
-    #                     "model.language_model.layers.*.self_attn.q_proj",
-    #                     "model.language_model.layers.*.self_attn.k_proj",
-    #                     "model.language_model.layers.*.self_attn.v_proj",
-    #                     "model.language_model.layers.*.self_attn.o_proj",
-    #                     "model.language_model.layers.*.mlp.gate_proj",
-    #                     "model.language_model.layers.*.mlp.up_proj",
-    #                     "model.language_model.layers.*.mlp.down_proj",
-    #                     "lm_head"
-    #                 ],
-    #                 modules_to_save=["vision_adapter"],
-    #                 lora_dropout=0.1,
-    #                 bias="none"
-    #             )
-    #
-    #         return {"peft_config": peft_config, "train_only_vision_adapter": False}
 
     def get_model_specific_training_args(self):
         """Return model-specific training arguments"""

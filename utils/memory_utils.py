@@ -47,7 +47,7 @@ def monitor_memory_during_training():
         def __exit__(self, exc_type, exc_val, exc_tb):
             log_memory_usage("After Training Step")
             if exc_type is not None:
-                logger.error(f"Exception during training: {exc_val}")
+                logger.error_main(f"Exception during training: {exc_val}")
                 aggressive_cleanup()
 
     return MemoryMonitor()
@@ -69,4 +69,4 @@ def setup_memory_efficient_training():
         except AttributeError:
             pass
 
-        logger.info("Memory efficient training settings enabled")
+        logger.info_main("Memory efficient training settings enabled")

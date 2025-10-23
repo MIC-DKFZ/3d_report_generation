@@ -1,121 +1,63 @@
-import evaluate
-from RaTEScore import RaTEScore
-# from green_score import GREEN
+from abc import ABC, abstractmethod
 
-def bleu_score(pred, gt, max_order=4):
-    '''
-    FORMULA: BLEU = brevity_penalty * exp(sum(w_n * log(p_n)))
+from evaluation.evaluate_metrics.bleu.bleu import Bleu
+from evaluation.evaluate_metrics.meteor.meteor import Meteor
+from evaluation.evaluate_metrics.rouge.rouge import Rouge
+from utils.helper import get_process_rank, get_random_uid
 
-    predictions (`list` of `str`s): Translations to score.
-        ex: predictions = ["hello there general kenobi","foo bar foobar"]
-    references (`list` of `list`s of `str`s): references for each translation. If there is only one reference it can be list of strings as well
-        ex multi reference per pred: references = [["hello there general kenobi","hello there general kenobi"],["foo bar foobar","foo bar foobar"]]
-        ex single reference per pred: references = ["hello there general kenobi", "foo bar foobar","foo bar foobar"]
-    max_order (`int`): Maximum n-gram order to use when computing BLEU score. Defaults to `4`.
 
-        Note:
-            - Bleu score can take a list of predictions and ground truth texts but oit calculates the average score over the dataset.
-            - To calcualte the score per single pair one needs to pass only the pred and gt values of that single pair.
-    '''
+class BaseScorer(ABC):
+    """
+    Base class for all scorers to compute NLP metrics within this VLM framework.
+    """
+    def __init__(self):
+        # Child classes must assign a metric instance here
+        self.metric = None
 
-    bleu = evaluate.load("bleu")
-    b_score = bleu.compute(predictions=pred, references=gt, max_order=max_order)
+    @abstractmethod
+    def __call__(self, preds: list[str], gts: list[str], **kwargs) -> list[float]:
+        """
+        Returns pairwise scores.
+        """
+        ...
 
-    return b_score
 
-def rate_score(pred, gt):
-    '''
-    pred ('list' of 'str'): Predicted text
-        ex: pred = ["hello there general kenobi", "foo bar foobar"]
-    gt ('list' of 'str'): Ground truth text
-        ex: gt = ["hello there general kenobi", "foo bar foobar"]
+class BLEUScorer(BaseScorer):
+    def __init__(self):
+        super().__init__()
 
-    Note:
-            - RateScore can take a list of predictions and ground truth texts and calculate the score for each pair.
-            - To calcualte the average score one needs to take the mean of the scores.
-    '''
-    ratescore = RaTEScore()
-    score = ratescore.compute_score(pred, gt)
+        self.metric = Bleu(experiment_id=f"bleu_{get_process_rank()}_{get_random_uid()}")
 
-    return score
+    def __call__(self, preds: list[str], gts: list[str], max_order: int = 4) -> list[float]:
+        """
+        BLEU calculates its score on a corpus level, hence we have calculate the pairwise scores iteratively.
+        """
+        scores = []
+        for pred, gt in zip(preds, gts):
+            score = self.metric.compute(predictions=[pred], references=[gt], max_order=max_order)["bleu"]
+            scores.append(score)
+        return scores
 
-def bert_score(pred, gt, model_type="distilbert-base-uncased"):
-    '''
-    predictions (list of str): Prediction/candidate sentences.
-        ex: predictions = ["hello there general kenobi","foo bar foobar"]
 
-    references (list of str or list of list of str): Reference sentences.
-        ex multi reference per pred: references = [["hello there general kenobi","hello there general kenobi"],["foo bar foobar","foo bar foobar"]]
-        ex single reference per pred: references = ["hello there general kenobi", "foo bar foobar","foo bar foobar"]
+class ROUGELScorer(BaseScorer):
+    def __init__(self):
+        super().__init__()
 
-    lang (str): Language of the sentences; required (e.g. 'en').
+        self.metric = Rouge(experiment_id=f"rougel_{get_process_rank()}_{get_random_uid()}")
 
-    model_type (str): Bert specification, default using the suggested
-        model for the target language; has to specify at least one of
-        `model_type` or `lang`.
-    '''
-    bertscore = evaluate.load("bertscore")
-    bert_score = bertscore.compute(predictions=pred, references=gt, model_type=model_type)
+    def __call__(self, preds: list[str], gts: list[str], **kwargs) -> list[float]:
+        return self.metric.compute(predictions=preds, references=gts, rouge_types=["rougeL"], use_aggregator=False)["rougeL"]
 
-    return bert_score
 
-# def GREENScore(pred, gt, model_name="StanfordAIMI/GREEN-RadLlama2-7b", output_dir="."):
-#     '''
-#     predictions (list of str): Prediction/candidate sentences.
-#         ex: predictions = ["hello there general kenobi","foo bar foobar"]
+class METEORScorer(BaseScorer):
+    def __init__(self):
+        super().__init__()
 
-#     references (list of str or list of list of str): Reference sentences.
-#         ex multi reference per pred: references = [["hello there general kenobi","hello there general kenobi"],["foo bar foobar","foo bar foobar"]]
-#         ex single reference per pred: references = ["hello there general kenobi", "foo bar foobar","foo bar foobar"]
+        self.metric = Meteor(experiment_id=f"meteor_{get_process_rank()}_{get_random_uid()}")
 
-#     model_name (str): Pretrained model name from the GREEN model zoo (cf. https://github.com/Stanford-AIMI/GREEN?tab=readme-ov-file#benchmark).
-#     '''
-#     supported_models = [
-#         "StanfordAIMI/GREEN-RadLlama2-7b",
-#         "StanfordAIMI/GREEN-RadPhi2",
-#         "StanfordAIMI/GREEN-Phi2",
-#         "StanfordAIMI/GREEN-Mistral-7b",
-#         "StanfordAIMI/GREEN-Llama2-7b",
-#         "StanfordAIMI/GREEN-Phi-3",
-#         "StanfordAIMI/GREEN-Gemma-2b-MM",
-#     ]
-#     assert model_name in supported_models, f"Model {model_name} not supported. Supported models are: {supported_models}"
-#     global green_scorer_fct
-#     if 'green_scorer_fct' not in globals():
-#         green_scorer_fct = GREEN(model_name, output_dir=".")
-#     mean, std, green_score_list, summary, result_df = green_scorer_fct(gt, pred)
-#     return mean
-
-def rouge_score(pred, gt):
-    '''
-    predictions (list of str): Prediction/candidate sentences.
-        ex: predictions = ["hello there general kenobi","foo bar foobar"]
-
-    references (list of str or list of list of str): Reference sentences.
-        ex multi reference per pred: references = [["hello there general kenobi","hello there general kenobi"],["foo bar foobar","foo bar foobar"]]
-        ex single reference per pred: references = ["hello there general kenobi", "foo bar foobar","foo bar foobar"]
-
-    tokenizer (str): Tokenizer to use. If None, defaults to the one provided by the model.
-    '''
-    rouge = evaluate.load("rouge")
-    r_score = rouge.compute(predictions=pred, references=gt, tokenizer=None)
-
-    return r_score
-
-def meteor_score(pred, gt, alpha=0.9):
-    '''
-    predictions (list of str): Prediction/candidate sentences.
-        ex: predictions = ["hello there general kenobi","foo bar foobar"]
-
-    references (list of str or list of list of str): Reference sentences.
-        ex multi reference per pred: references = [["hello there general kenobi","hello there general kenobi"],["foo bar foobar","foo bar foobar"]]
-        ex single reference per pred: references = ["hello there general kenobi", "foo bar foobar","foo bar foobar"]
-
-    alpha (float): Parameter for controlling relative weights of precision and recall. The default value is 0.9.
-    beta (float): Parameter for controlling shape of penalty as a function of fragmentation. The default value is 3.
-    gamma (float): The relative weight assigned to fragmentation penalty. The default is 0.5.
-    '''
-    meteor = evaluate.load("meteor")
-    m_score = meteor.compute(predictions=pred, references=gt, alpha=alpha)
-
-    return m_score
+    def __call__(self, preds: list[str], gts: list[str], max_order: int = 4) -> list[float]:
+        """
+        Computes METEOR scores using a modified 'Meteor' class that returns individual scores
+        instead of their mean. See 'README_EVALUATE_METRICS.md' for details.
+        """
+        return self.metric.compute(predictions=preds, references=gts)["meteor"]

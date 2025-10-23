@@ -16,6 +16,7 @@ from torch.utils.data import Dataset
 
 from utils import logger
 from utils.dataset_utils import get_training_image_transforms, preprocess_3d_image
+from utils.regex_patterns import VQA_ANSWER_PATTERN, VQA_OPTION_PATTERN
 from utils.vision_input_type import VisionInputType
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
@@ -211,7 +212,7 @@ class MedicalImageDataset(Dataset, ABC):
         """Convert embedding to tensor"""
         # TODO check if we can remove this function!
         if embedding is None:
-            logger.error("Embedding is None, cannot convert to tensor.")
+            logger.error_main("Embedding is None, cannot convert to tensor.")
             return None
 
         np_img_flat = embedding.reshape(embedding.shape[0], embedding.shape[1], -1)
@@ -262,15 +263,15 @@ class MedicalImageDataset(Dataset, ABC):
 
     def verify(self):
         """Test function to verify dataset loading"""
-        logger.info(f"\nTotal number of samples: {len(self)}")
-        logger.info("\nExample question:")
+        logger.info_main(f"\nTotal number of samples: {len(self)}")
+        logger.info_main("\nExample question:")
         if len(self.samples) > 0:
             sample = self.samples[0]
-            logger.info(f"Image ID: {sample['image_id']}")
-            logger.info(f"Question: {sample['question']}")
-            logger.info(f"Answer: {sample['full_answer']}")
-            logger.info(f"Answer Type: {sample['answer_type']}")
-            logger.info(f"Answer Subtype: {sample['answer_subtype']}")
+            logger.info_main(f"Image ID: {sample['image_id']}")
+            logger.info_main(f"Question: {sample['question']}")
+            logger.info_main(f"Answer: {sample['full_answer']}")
+            logger.info_main(f"Answer Type: {sample['answer_type']}")
+            logger.info_main(f"Answer Subtype: {sample['answer_subtype']}")
 
     def shuffle_sentences(self, question, answer):
         # Needs to be implemented for each dataset
@@ -315,28 +316,32 @@ class AMOSMMDataset(MedicalImageDataset):
 
     def shuffle_sentences(self, question, answer) -> tuple[str, str]:
         # Extract options with their content
-        option_pattern = r'^([A-D])\.\s*(.+)$'
         lines = question.split('\n')
         
         options = {}
-        other_lines = []
-        
+        lines_before = []
+        lines_after = []
+
+        # There are always exactly 4 options
         for line in lines:
-            match = re.match(option_pattern, line)
-            if match:
-                options[match.group(1)] = match.group(2)
+            if len(options) < 4:
+                match = re.match(VQA_OPTION_PATTERN, line)
+                if match:
+                    options[match.group(1)] = match.group(2)
+                else:
+                    lines_before.append(line)
             else:
-                other_lines.append(line)
+                lines_after.append(line)
         
         if len(options) != 4:
             return question, answer
         
         # Find current correct answer letter
-        answer_match = re.search(r'(?:The answer is )?([A-D])\.?', answer, re.IGNORECASE)
+        answer_match = re.search(VQA_ANSWER_PATTERN, answer)
         if not answer_match:
             return question, answer
         
-        old_letter = answer_match.group(1)
+        old_letter = answer_match.group(2)
         correct_content = options[old_letter]
         
         # Shuffle the content
@@ -351,15 +356,14 @@ class AMOSMMDataset(MedicalImageDataset):
         
         # Rebuild question
         option_lines = [f"{letter}. {new_options[letter]}" for letter in ['A', 'B', 'C', 'D']]
-        new_question = '\n'.join(other_lines + option_lines)
+        new_question = '\n'.join(lines_before + option_lines + lines_after)
         
         # Update answer letter
         new_answer = re.sub(
-            r'((?:The answer is )?)([A-D])(\.?)',
-            lambda m: m.group(1) + new_letter + m.group(3),
+            VQA_ANSWER_PATTERN,
+            lambda m: (m.group(1) or "") + new_letter + (m.group(3) or ""),
             answer,
-            count=1,  # only replace the first match
-            flags=re.IGNORECASE
+            count=1  # only replace the first match
         )
         
         return new_question, new_answer

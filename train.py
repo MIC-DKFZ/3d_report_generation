@@ -5,20 +5,22 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import torch
 import torch.distributed as dist
-from transformers import BitsAndBytesConfig
+from torch.utils.data import DataLoader
 from trl import SFTConfig
 
 import wandb
 from configs.run_config import RunConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
+from evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
+from eval import main as eval_main
 from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
 from trainers.VLMSFTTrainer import VLMSFTTrainer
 from utils import logger
+from utils.ddp_utils import setup_ddp
 from utils.helper import (
     is_main_process,
     load_config_file,
@@ -27,6 +29,7 @@ from utils.helper import (
     seed_everything,
 )
 from utils.load_and_save_files import load_json, save_json, save_yaml
+from utils.logging import setup_logger, log_banner
 from utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
@@ -34,35 +37,6 @@ from utils.memory_utils import (
 )
 from utils.paths import VLM_CONFIG_DIR, VLM_OUTPUT_DIR
 from utils.vision_input_type import VisionInputType
-
-
-def setup_distributed_training():
-    """
-    Set up distributed training environment.
-    This function handles the distributed training initialization as recommended in the JSC tutorial.
-    """
-    # Check if we're in a distributed environment
-    if int(os.environ.get("WORLD_SIZE", 1)) > 1:
-        rank = int(os.environ["RANK"])
-        world_size = int(os.environ["WORLD_SIZE"])
-        local_rank = int(os.environ.get("LOCAL_RANK"))
-        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE"))
-
-        logger.info(f"Distributed training detected: rank={rank}, world_size={world_size}, "
-                    f"local_rank={local_rank}, local_world_size={local_world_size}")
-
-        # Set the device for this process
-        torch.cuda.set_device(local_rank)
-        
-        # Initialize the process group
-        if not dist.is_initialized():
-            dist.init_process_group(backend="nccl")
-            logger.info(f"Process group initialized on rank {rank}")
-        
-        return True, rank, world_size, local_rank, local_world_size
-    else:
-        logger.info("Single GPU/CPU training detected")
-        return False, 0, 1, 0, 1
 
 
 class UnifiedVLMTrainer:
@@ -82,12 +56,11 @@ class UnifiedVLMTrainer:
         self.trainer: VLMSFTTrainer | None = None
         self.cfg: RunConfig = cfg
 
-        # Setup distributed training
         (self.is_distributed,
          self.rank,
          self.world_size,
          self.local_rank,
-         self.local_world_size) = setup_distributed_training()
+         self.local_world_size) = setup_ddp()
 
     def get_training_args(self):
         """Configure standard training arguments for distributed training"""
@@ -111,15 +84,6 @@ class UnifiedVLMTrainer:
                          run_name=self.cfg.general.run_name,
                          output_dir=self.cfg.general.output_dir)
 
-    def get_quantization_config(self):
-        """Create and return the BitsAndBytes quantization config"""
-        return BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-        )
-
     def train(self, train_dataset, val_dataset):
         """
         Main training function that trains the VLM model.
@@ -128,22 +92,16 @@ class UnifiedVLMTrainer:
             train_dataset: Training dataset
             val_dataset: Validation dataset
         """
+        if self.is_distributed:
+            dist.barrier()
+
         # Setup memory efficient training
         setup_memory_efficient_training()
         if is_main_process():
             log_memory_usage("Before Training Setup")
 
-
-        # Create quantization config if needed
-        bnb_config = None
-        # Uncomment if you want to use quantization
-        # if trainable_params.get("train_only_vision_adapter", False) == True:
-        #     bnb_config = self.get_quantization_config()
-        # else:
-        #     bnb_config = None
-
         # Setup base model with quantization config if applicable
-        model = self.vlm_model.setup_model(bnb_config=bnb_config)
+        model = self.vlm_model.setup_model()
 
         # Apply trainable parameter configs and possibly add PEFT adapter layers
         self.vlm_model.apply_trainable_config()
@@ -182,27 +140,38 @@ class UnifiedVLMTrainer:
             if os.getenv("WANDB_MODE", "online").lower() == "offline":
                 # Re-update config one more time to ensure persistence
                 wandb.config.update(config_dict, allow_val_change=True)
-                logger.info("Offline mode: Config explicitly updated after init")
-        else:
-            logger.info(
-                f"Skipping wandb init on rank {self.rank}/{self.local_rank}"
-            )
+                logger.info_main("Offline mode: Config explicitly updated after init")
 
         # Configure training arguments
         training_args = self.get_training_args()
 
-        # Create callbacks (only add print callback on main process)
-        callbacks = [LossLoggingCallback()]
-        
-        if is_main_process():
-            callbacks.append(
-                PrintEvalBatchCallback(
-                    tokenizer=self.vlm_model.tokenizer,
-                    processor=self.vlm_model.processor,
-                    sample_count=len(val_dataset),
-                    eval_every_n_epochs=0.25
-                )
+        if self.is_distributed:
+            sampler = EvalDistributedSampler(
+                val_dataset,
+                num_replicas=self.world_size,
+                rank=self.rank,
+                shuffle=False
             )
+        else:
+            sampler = None
+
+        eval_dataloader = DataLoader(val_dataset, batch_size=self.cfg.eval.per_device_batch_size, shuffle=False,
+                                     sampler=sampler,
+                                     collate_fn=self.vlm_model.collate_fn,
+                                     num_workers=self.cfg.eval.num_dataloader_workers)
+
+        callbacks = [
+            LossLoggingCallback(),
+            PrintEvalBatchCallback(
+                eval_dataloader=eval_dataloader,
+                task_type="RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
+                max_new_tokens=self.cfg.eval.max_new_tokens,
+                eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
+                tokenizer=self.vlm_model.tokenizer,
+                processor=self.vlm_model.processor,
+                is_distributed=self.is_distributed
+            )
+        ]
 
         # Initialize SFT trainer
         self.trainer = VLMSFTTrainer(
@@ -213,6 +182,9 @@ class UnifiedVLMTrainer:
             data_collator=self.vlm_model.collate_fn,
             callbacks=callbacks
         )
+
+        if self.is_distributed:
+            dist.barrier()
 
         # Train model
         if is_main_process():
@@ -244,18 +216,21 @@ class UnifiedVLMTrainer:
             log_memory_usage("After Cleanup")
 
         # Final config validation for offline mode
-        if (is_main_process() and 
-            os.getenv("WANDB_MODE", "online").lower() == "offline" and 
-            wandb.run is not None):
+        if os.getenv("WANDB_MODE", "online").lower() == "offline" and wandb.run is not None:
             final_config = dict(wandb.config)
-            logger.info(f"Final config verification - Total keys: {len(final_config)}")
+            logger.info_main(f"Final config verification - Total keys: {len(final_config)}")
             if len(final_config) < 5:  # Arbitrary threshold - expect at least some config
-                logger.warning(
+                logger.warning_main(
                     "Suspiciously few config keys logged - may indicate config persistence issue"
                 )
 
         if is_main_process():
             wandb.finish()
+
+        if self.is_distributed:
+            dist.barrier()
+
+        log_banner("Successfully finished Training")
 
 
 def setup_config_and_logging() -> RunConfig:
@@ -299,21 +274,23 @@ def setup_config_and_logging() -> RunConfig:
     # Setup output directory and log file
     if is_main_process():
         os.makedirs(cfg.general.output_dir, exist_ok=True)
-        log_file_path = os.path.join(cfg.general.output_dir, "train.log")
-        logger.add(log_file_path)
-        logger.info(f"Successfully set up output directory at {cfg.general.output_dir}")
-        print(f"Successfully set up output directory at {cfg.general.output_dir}")
-
         shutil.copyfile(cfg.general.train_config, os.path.join(cfg.general.output_dir, "input_config.yml"))
 
+    log_file_path = os.path.join(cfg.general.output_dir, "train.log")
+    setup_logger(log_file_path)  # Setup logger on every rank
+
+    logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
+    print(f"Successfully set up output directory at {cfg.general.output_dir}")
+
     # Reset some args in case the vision input are embedding (instead of images)
-    cfg.maybe_reset_vision_encoder_specific_args(logger=logger)
+    cfg.maybe_reset_vision_encoder_specific_args()
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
     cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")
     cfg.model = merge_config_with_cli_args(cfg.model, parent_key="model")
     cfg.trainer = merge_config_with_cli_args(cfg.trainer, parent_key="trainer")
     cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
+    cfg.eval = merge_config_with_cli_args(cfg.eval, parent_key="eval")
 
     # Resolve model_id if not provided
     if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:
@@ -361,7 +338,7 @@ def ensure_wandb_config_logging():
                 config_dict = dict(wandb.config)
 
                 # Log a summary of the configuration
-                logger.info(
+                logger.info_main(
                     f"Offline mode - ensuring config persistence. Total config keys: {len(config_dict)}"
                 )
 
@@ -373,16 +350,16 @@ def ensure_wandb_config_logging():
                     config_backup_path = os.path.join(wandb.run.dir, "config_backup.json")
                     try:
                         save_json(config_dict, config_backup_path, default=str)
-                        logger.info(f"Config backup saved to: {config_backup_path}")
+                        logger.info_main(f"Config backup saved to: {config_backup_path}")
                     except Exception as e:
-                        logger.warning(f"Could not save config backup: {e}")
+                        logger.warning_main(f"Could not save config backup: {e}")
 
             except Exception as e:
-                logger.warning(f"Error in offline config handling: {e}")
+                logger.warning_main(f"Error in offline config handling: {e}")
 
         # Log the configuration to ensure it's saved
-        logger.info(f"Updated wandb config with environment variables: {env_config}")
-        logger.info(f"Total config keys logged: {len(dict(wandb.config))}")
+        logger.info_main(f"Updated wandb config with environment variables: {env_config}")
+        logger.info_main(f"Total config keys logged: {len(dict(wandb.config))}")
 
 
 def create_comprehensive_wandb_config(
@@ -437,6 +414,7 @@ def create_comprehensive_wandb_config(
 
 @logger.catch(reraise=True)
 def main():
+    setup_ddp()  # setup DDP first so we can communicate shared output folder
     cfg = setup_config_and_logging()
 
     # TODO: could add it as an argument
@@ -523,19 +501,15 @@ def main():
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
 
-    if cfg.data.embedding_constant is not None and is_main_process():
-        logger.info(f"Using embedding constant: {cfg.data.embedding_constant}")
+    if cfg.data.embedding_constant is not None:
+        logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
         print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
-    if is_main_process():
-        logger.info(
-            f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
-        )
-        print(
-            f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
-        )
-        logger.info(f"Using train batch size: {cfg.trainer.per_device_train_batch_size}")
-        logger.info(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
+    logger.info_main(
+        f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
+    )
+    logger.info_main(f"Using train batch size: {cfg.trainer.per_device_train_batch_size}")
+    logger.info_main(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
 
     # Create the trainer and train the model
     trainer = UnifiedVLMTrainer(
@@ -544,22 +518,33 @@ def main():
     )
 
     trainer.train(train_dataset, val_dataset)
+    logger.remove()
     
-    if cfg.general.run_inference_eval:
-        if cfg.model.vision_encoder:
-            ve_path = cfg.model.vision_encoder.vision_encoder_path
-        else:
-            ve_path = None
+    if cfg.eval.run_inference:
         inference_args = argparse.Namespace(
             run_dir=cfg.general.output_dir,
             mode="final",
-            test_dataset_json=cfg.data.val_dataset_json_path,
-            vision_encoder_path=ve_path,
-            vision_input_path=cfg.data.vision_input_path,
-            n_samples=None,
-            final_test=False
+            dataset_json=cfg.eval.dataset_json_path,    # if none is provided and split='val'
+            split=cfg.eval.split,                       # the validation set is used, refer to
+                                                        # 'RunConfig.set_default_eval_dataset_json_path()'
+                                                        # for more details
+            n_samples=cfg.eval.n_samples,
+            max_new_tokens=cfg.eval.max_new_tokens,
+            per_device_batch_size = cfg.eval.per_device_batch_size,
+            num_dataloader_workers = cfg.eval.num_dataloader_workers,
+            vision_encoder_path = None,
+            vision_input_path = None
         )
-        inference_main(inference_args)
+        ckpt_dir = inference_main(inference_args)
+        logger.remove()
+
+        if cfg.eval.run_eval and is_main_process():
+            eval_args = argparse.Namespace(
+                task_type="RG" if cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
+                checkpoint_dir=ckpt_dir,
+                num_processes=cfg.eval.num_eval_processes
+            )
+            eval_main(eval_args)
 
 
 if __name__ == "__main__":
