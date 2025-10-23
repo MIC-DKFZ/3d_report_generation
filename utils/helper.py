@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+import string
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, TypeVar
@@ -225,9 +226,17 @@ def chunkify(lis: list, num_chunks: int):
     return [lis[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(num_chunks)]
 
 
+def get_random_uid(length: int = 4) -> str:
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+
 def is_main_process():
     """
     Check if this is the main process (rank 0).
     As recommended in the JSC tutorial, only rank 0 should handle logging, saving, etc.
     """
     return int(os.environ.get("RANK", "0")) == 0
+
+
+def get_process_rank() -> int:
+    return int(os.environ.get("RANK", "0"))

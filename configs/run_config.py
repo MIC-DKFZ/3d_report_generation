@@ -1,6 +1,4 @@
 import os
-import random
-import string
 from pathlib import Path
 from typing import Any
 from pydantic import Field, model_validator
@@ -11,7 +9,8 @@ from configs.evaluation_config import EvaluationConfig
 from configs.general_config import GeneralConfig
 from configs.model.model_config import ModelConfig
 from configs.trainer_config import SFTTrainerConfig
-from utils.helper import load_config_file, recursive_dict_merge, add_datetime_tag, setattr_nested, is_main_process
+from utils.helper import load_config_file, recursive_dict_merge, add_datetime_tag, setattr_nested, is_main_process, \
+    get_random_uid
 from utils.paths import VLM_OUTPUT_DIR, VLM_CONFIG_DIR
 from utils.vision_input_type import VisionInputType
 from utils import logger
@@ -79,7 +78,7 @@ class RunConfig(ConfigBase):
 
     def resolve_run_name(self) -> None:
         if is_main_process():
-            uid = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+            uid = get_random_uid()
             config_name, _ = os.path.splitext(os.path.basename(self.general.train_config))
             run_name = [f"{add_datetime_tag(config_name)}__{uid}"]
         else:
