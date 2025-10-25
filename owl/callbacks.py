@@ -91,7 +91,7 @@ class PrintEvalBatchCallback(TrainerCallback):
         preds = []
         gts = []
         model.eval()  # Ensure model is in evaluation mode
-        with torch.no_grad():  # Disable gradient calculations
+        with torch.inference_mode():  # Disable gradient calculations
             for inputs in self.eval_dataloader:
                 inputs_prompt_only = extract_batch_prompt_only(inputs)
                 inputs_prompt_only = inputs_prompt_only.to(args.device)
@@ -100,7 +100,7 @@ class PrintEvalBatchCallback(TrainerCallback):
 
                 outputs = model.generate(
                     **inputs_prompt_only,
-                    max_new_tokens=self.max_new_tokens,
+                    max_new_tokens=self.max_new_tokens
                 )
 
                 # Decode input and generated output

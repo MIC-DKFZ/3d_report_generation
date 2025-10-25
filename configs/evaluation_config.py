@@ -13,7 +13,7 @@ class EvaluationConfig(ConfigBase):
 
     # 'Callback' and 'After Training' parameters
     max_new_tokens: int = Field(640, description="Maximum number of new tokens to generate.")
-    per_device_batch_size: int = Field(48, description="Inference batch size per device.")
+    per_device_batch_size: int = Field(12, description="Inference batch size per device.")
 
     # 'After Training' parameters
     run_inference: bool = Field(False, description="Run inference after training completes.")

@@ -13,7 +13,7 @@ from models.abstract_vlm import AbstractVLMModel
 from utils import logger
 from utils.ddp_utils import setup_ddp, gather_inference_outputs
 from utils.filter_batch import extract_batch_prompt_only
-from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir
+from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir, seed_everything
 from utils.load_and_save_files import load_json, save_json
 from utils.logging import setup_logger, log_banner
 from utils.vision_input_type import VisionInputType
@@ -52,7 +52,6 @@ class UnifiedVLMInference:
         Args:
             test_dataset: Test dataset
         """
-        logger.info_main("Running inference...")
         model = self.vlm_model.model
         model.eval().cuda()
 
@@ -89,8 +88,10 @@ class UnifiedVLMInference:
         for param in model.parameters():
             param.requires_grad = False
 
+        logger.info_main("Running inference...")
+
         results = []
-        with torch.no_grad():
+        with torch.inference_mode():
             # Iterate over the test dataset
             for i, inputs in tqdm(enumerate(test_loader), total=len(test_loader)):
                 raw_samples = inputs["raw_samples"]
@@ -148,6 +149,7 @@ class UnifiedVLMInference:
         if is_main_process():
             results_filename = "inference_results.json"
 
+            all_results.sort(key=lambda d: (d["image_id"], d["question"]))
             save_json(all_results, Path(self.output_dir, results_filename))
 
             logger.info_main(f"Total number of inference samples: {len(all_results)}")
@@ -247,6 +249,8 @@ def main_cli():
 
 
 def main(args):
+    seed_everything(42)  # Set a random seed for reproducibility
+
     if args.run_dir:
         run_dir = Path(args.run_dir)
 
