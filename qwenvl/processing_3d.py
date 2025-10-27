@@ -95,7 +95,7 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
             **kwargs,
         )
 
-        image_inputs = videos_inputs = {}
+        image_inputs, videos_inputs = {}, {}
         video_grid_thw = None
 
         if self.vision_input_type == VisionInputType.EMBEDDING:
@@ -148,7 +148,7 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
                 # Calculate valid dimensions (divisible by reduce_block)
                 valid_dims = (grid_thw // torch.as_tensor(self.reduce_block)) * torch.as_tensor(self.reduce_block)
                 num_tokens = valid_dims.prod().item()
-                
+
                 text[i] = text[i].replace(self.video_token, self.video_token * num_tokens, 1)
 
         #text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])

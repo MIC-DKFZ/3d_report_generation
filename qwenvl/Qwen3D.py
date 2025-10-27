@@ -11,11 +11,10 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLModel,
     Qwen2_5_VLModelOutputWithPast,
     Qwen2_5_VLPreTrainedModel,
-    Qwen2_5_VLTextModel,
+    Qwen2_5_VLTextModel, KwargsForCausalLM,
 )
 from transformers.processing_utils import Unpack
 from transformers.utils import (
-    TransformersKwargs,
     is_torchdynamo_compiling,
 )
 
@@ -73,7 +72,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
+        past_key_values: Optional[list[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
@@ -86,7 +85,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         rope_deltas: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
         second_per_grid_ts: Optional[torch.Tensor] = None,
-        **kwargs: Unpack[TransformersKwargs],
+        **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[tuple, Qwen2_5_VLModelOutputWithPast]:
         r"""
         image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
@@ -108,39 +107,32 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
-        if pixel_values_videos is not None:  # below two lines are updated by us
-            ##########
-            # Only these 3 lines (and bellow two lines) are different from the original Qwen2_5_VLModel
-            #pixel_values_videos = torch.rand_like(pixel_values_videos) #TODO RANDOM IMAGE HERE!!!
-            #pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
-            if hasattr(self, "vision_encoder") and self.vision_encoder is not None:
-                video_embeds = self.vision_encoder(pixel_values_videos.unsqueeze(1))
-                #video_embeds = rearrange(video_embeds, 'b c h w d -> b c (h w d )')
-                video_embeds = self.vision_adapter(video_embeds, video_grid_thw)
-            else:
-                video_embeds = self.vision_adapter(pixel_values_videos, video_grid_thw)
-            video_embeds = video_embeds.view(-1, video_embeds.shape[-1])  # Flatten to (total_features, embed_dim)
-            ##########
-            if input_ids is None:
-                video_mask = inputs_embeds == self.get_input_embeddings()(
-                    torch.tensor(self.config.video_token_id, dtype=torch.long, device=inputs_embeds.device)
-                )
-                video_mask = video_mask.all(-1)
-            else:
-                video_mask = input_ids == self.config.video_token_id
+            if pixel_values_videos is not None:
+                ##########
+                # Only these 3 lines (and bellow two lines) are different from the original Qwen2_5_VLModel
+                #pixel_values_videos = torch.rand_like(pixel_values_videos) #TODO RANDOM IMAGE HERE!!!
+                #pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
+                if hasattr(self, "vision_encoder") and self.vision_encoder is not None:
+                    video_embeds = self.vision_encoder(pixel_values_videos.unsqueeze(1))
+                    #video_embeds = rearrange(video_embeds, 'b c h w d -> b c (h w d )')
+                    video_embeds = self.vision_adapter(video_embeds, video_grid_thw)
+                else:
+                    video_embeds = self.vision_adapter(pixel_values_videos, video_grid_thw)
+                video_embeds = video_embeds.view(-1, video_embeds.shape[-1])  # Flatten to (total_features, embed_dim)
+                ##########
+                n_video_tokens = (input_ids == self.config.video_token_id).sum()
+                n_video_features = video_embeds.shape[0]
+                if not is_torchdynamo_compiling() and n_video_tokens != n_video_features:
+                    raise ValueError(
+                        f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"
+                    )
+                mask = input_ids == self.config.video_token_id
+                mask_unsqueezed = mask.unsqueeze(-1)
+                mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
+                video_mask = mask_expanded.to(inputs_embeds.device)
 
-            n_video_tokens = (video_mask).sum()
-            n_video_features = video_embeds.shape[0]
-            video_mask = video_mask.unsqueeze(-1).expand_as(inputs_embeds).to(inputs_embeds.device)
-            #TODO this fails for images with different sizes when batch size > 1!
-            if not is_torchdynamo_compiling() and n_video_tokens != n_video_features:
-                raise ValueError(
-                    f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"
-                )
-
-            video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
-            inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
-
+                video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+                inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
 
         if position_ids is None:
             # Calculate RoPE index once per generation in the pre-fill stage only.
@@ -172,20 +164,20 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
                     attention_mask=attention_mask,
                 )
                 self.rope_deltas = rope_deltas
+            # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
+                delta = (
+                    (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
+                    if cache_position is not None
+                    else 0
+                )
                 position_ids = torch.arange(seq_length, device=inputs_embeds.device)
-                position_ids = position_ids.view(1, 1, -1).expand(3, batch_size, -1)
-                if cache_position is not None:
-                    delta = (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
-                else:
-                    delta = torch.zeros((batch_size, seq_length), device=inputs_embeds.device)
-                delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=1)
-                #########
-                #TODO this also added and not in original Qwen. Without it I get crash in val. why do we need this?
-                position_ids = position_ids.clone()
-                #########
-                position_ids += delta.to(position_ids.device)
+                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
+                if cache_position is not None:  # otherwise `deltas` is an int `0`
+                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
+                position_ids = position_ids.add(delta)
+                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
 
         outputs = self.language_model(
             input_ids=None,
@@ -229,84 +221,84 @@ class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, Gener
 
         self.post_init()
 
-
-    def prepare_inputs_for_generation(
-        self,
-        input_ids,
-        past_key_values=None,
-        attention_mask=None,
-        inputs_embeds=None,
-        cache_position=None,
-        position_ids=None,
-        use_cache=True,
-        pixel_values=None,
-        pixel_values_videos=None,
-        image_grid_thw=None,
-        video_grid_thw=None,
-        second_per_grid_ts=None,
-        **kwargs,
-    ):
-        # Overwritten -- in specific circumstances we don't want to forward image inputs to the model
-
-        model_inputs = GenerationMixin.prepare_inputs_for_generation(
-            self,
-            input_ids,
-            past_key_values=past_key_values,
-            attention_mask=attention_mask,
-            inputs_embeds=inputs_embeds,
-            cache_position=cache_position,
-            position_ids=position_ids,
-            pixel_values=pixel_values,
-            pixel_values_videos=pixel_values_videos,
-            image_grid_thw=image_grid_thw,
-            video_grid_thw=video_grid_thw,
-            second_per_grid_ts=second_per_grid_ts,
-            use_cache=use_cache,
-            **kwargs,
-        )
-
-        # Qwen2-5-VL position_ids are prepared with rope_deltas
-        if position_ids is None:
-            # Calculate RoPE index once per generation in the pre-fill stage only.
-            # When compiling, we can't check tensor values thus we check only input length
-            # It is safe to assume that `length!=1` means we're in pre-fill because compiled
-            # models currently cannot do asssisted decoding
-            if cache_position[0] == 0 or self.model.rope_deltas is None:
-                #########
-                # wieder wie oben... just this part changed
-                video_grid_thw_for_rope = video_grid_thw.clone() if video_grid_thw is not None else None
-                for video in video_grid_thw_for_rope:
-                    # We multiply dimension 1 (height) and dimension 2 (width) by 2 in order to nullify the division
-                    # by the spatial_merge_size=2 in the get_rope_index() function below
-                    video[1] = video[1] * 2
-                    video[2] = video[2] * 2
-                #########
-                vision_positions, rope_deltas = self.model.get_rope_index(
-                    model_inputs.get("input_ids", None),
-                    image_grid_thw=image_grid_thw,
-                    video_grid_thw=video_grid_thw_for_rope,
-                    second_per_grid_ts=second_per_grid_ts,
-                    attention_mask=attention_mask,
-                )
-                self.model.rope_deltas = rope_deltas
-            # then use the prev pre-calculated rope-deltas to get the correct position ids
-            elif "position_ids" in model_inputs:
-                position_ids = model_inputs["position_ids"][None, ...]
-                delta = self.model.rope_deltas
-                delta = delta.repeat_interleave(position_ids.shape[1] // delta.shape[0], dim=0)
-                vision_positions = position_ids + delta.expand_as(position_ids)
-                vision_positions = vision_positions.expand(3, vision_positions.shape[1], -1)
-
-            # Concatenate "text + vision" positions into [4, bs, seq-len]
-            if "position_ids" not in model_inputs:
-                text_positions = torch.arange(input_ids, device=input_ids.device)[None, None, :]
-            else:
-                text_positions = model_inputs["position_ids"][None, ...]
-            model_inputs["position_ids"] = torch.cat([text_positions, vision_positions], dim=0)
-
-        if cache_position[0] != 0:
-            model_inputs["pixel_values"] = None
-            model_inputs["pixel_values_videos"] = None
-
-        return model_inputs
+# In transformers=4.53.3 this function is not needed anymore
+    # def prepare_inputs_for_generation(
+    #     self,
+    #     input_ids,
+    #     past_key_values=None,
+    #     attention_mask=None,
+    #     inputs_embeds=None,
+    #     cache_position=None,
+    #     position_ids=None,
+    #     use_cache=True,
+    #     pixel_values=None,
+    #     pixel_values_videos=None,
+    #     image_grid_thw=None,
+    #     video_grid_thw=None,
+    #     second_per_grid_ts=None,
+    #     **kwargs,
+    # ):
+    #     # Overwritten -- in specific circumstances we don't want to forward image inputs to the model
+    #
+    #     model_inputs = GenerationMixin.prepare_inputs_for_generation(
+    #         self,
+    #         input_ids,
+    #         past_key_values=past_key_values,
+    #         attention_mask=attention_mask,
+    #         inputs_embeds=inputs_embeds,
+    #         cache_position=cache_position,
+    #         position_ids=position_ids,
+    #         pixel_values=pixel_values,
+    #         pixel_values_videos=pixel_values_videos,
+    #         image_grid_thw=image_grid_thw,
+    #         video_grid_thw=video_grid_thw,
+    #         second_per_grid_ts=second_per_grid_ts,
+    #         use_cache=use_cache,
+    #         **kwargs,
+    #     )
+    #
+    #     # Qwen2-5-VL position_ids are prepared with rope_deltas
+    #     if position_ids is None:
+    #         # Calculate RoPE index once per generation in the pre-fill stage only.
+    #         # When compiling, we can't check tensor values thus we check only input length
+    #         # It is safe to assume that `length!=1` means we're in pre-fill because compiled
+    #         # models currently cannot do asssisted decoding
+    #         if cache_position[0] == 0 or self.model.rope_deltas is None:
+    #             #########
+    #             # wieder wie oben... just this part changed
+    #             video_grid_thw_for_rope = video_grid_thw.clone() if video_grid_thw is not None else None
+    #             for video in video_grid_thw_for_rope:
+    #                 # We multiply dimension 1 (height) and dimension 2 (width) by 2 in order to nullify the division
+    #                 # by the spatial_merge_size=2 in the get_rope_index() function below
+    #                 video[1] = video[1] * 2
+    #                 video[2] = video[2] * 2
+    #             #########
+    #             vision_positions, rope_deltas = self.model.get_rope_index(
+    #                 model_inputs.get("input_ids", None),
+    #                 image_grid_thw=image_grid_thw,
+    #                 video_grid_thw=video_grid_thw_for_rope,
+    #                 second_per_grid_ts=second_per_grid_ts,
+    #                 attention_mask=attention_mask,
+    #             )
+    #             self.model.rope_deltas = rope_deltas
+    #         # then use the prev pre-calculated rope-deltas to get the correct position ids
+    #         elif "position_ids" in model_inputs:
+    #             position_ids = model_inputs["position_ids"][None, ...]
+    #             delta = self.model.rope_deltas
+    #             delta = delta.repeat_interleave(position_ids.shape[1] // delta.shape[0], dim=0)
+    #             vision_positions = position_ids + delta.expand_as(position_ids)
+    #             vision_positions = vision_positions.expand(3, vision_positions.shape[1], -1)
+    #
+    #         # Concatenate "text + vision" positions into [4, bs, seq-len]
+    #         if "position_ids" not in model_inputs:
+    #             text_positions = torch.arange(input_ids, device=input_ids.device)[None, None, :]
+    #         else:
+    #             text_positions = model_inputs["position_ids"][None, ...]
+    #         model_inputs["position_ids"] = torch.cat([text_positions, vision_positions], dim=0)
+    #
+    #     if cache_position[0] != 0:
+    #         model_inputs["pixel_values"] = None
+    #         model_inputs["pixel_values_videos"] = None
+    #
+    #     return model_inputs
 

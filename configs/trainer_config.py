@@ -32,7 +32,8 @@ class SFTTrainerConfig(ConfigBase):
     save_strategy: Literal["no", "steps", "epoch"] = Field("steps", description="Checkpoint saving strategy during training.")
     save_total_limit: int = Field(2, description="Maximum number of checkpoints to keep. Older ones are deleted.")
 
-    load_best_model_at_end: bool = Field(True, description="Enables saving of best checkpoint if True! (And whether to load the best model found during training at the end).")
+    load_best_model_at_end: bool = Field(False, description="Enables saving of best checkpoint if True! (And whether to load the best model found during training at the end). "
+                                                            "WARNING: Enabling this may cause an NCCL desync error at the end of training.")
     dataset_kwargs: dict = Field(default_factory=lambda: {"skip_prepare_dataset": True}, description="Extra keyword arguments passed to dataset loading/preparation.")
     remove_unused_columns: bool = Field(False, description="Whether to remove unused columns from the dataset before training.")
     report_to: list[str] = Field(default_factory=lambda: ["wandb"], description="List of integrations to report training logs to (e.g. wandb, tensorboard).")

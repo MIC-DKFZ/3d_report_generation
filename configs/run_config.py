@@ -78,7 +78,8 @@ class RunConfig(ConfigBase):
 
     def resolve_run_name(self) -> None:
         if is_main_process():
-            uid = get_random_uid()
+            job_id = os.getenv("SLURM_JOB_ID")
+            uid = job_id if job_id else get_random_uid(length=8)
             config_name, _ = os.path.splitext(os.path.basename(self.general.train_config))
             run_name = [f"{add_datetime_tag(config_name)}__{uid}"]
         else:
@@ -86,6 +87,12 @@ class RunConfig(ConfigBase):
 
         if dist.is_available() and dist.is_initialized():
             dist.broadcast_object_list(run_name, src=0)
+
+            if run_name[0] is None:
+                raise RuntimeError(
+                    "run_name is None after distributed broadcast. "
+                    "This indicates a synchronization or initialization error in torch.distributed."
+                )
 
         self.general.run_name = run_name[0]
 

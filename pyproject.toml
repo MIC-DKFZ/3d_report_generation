@@ -20,7 +20,7 @@ dependencies = [
     "simpleitk==2.5.2",
     "torch>=2.6.0,<2.7.0",  # Changed this line
     "torchvision>=0.21.0,<0.22.0",
-    "transformers==4.54.0",
+    "transformers==4.53.3",
     "trl>=0.17.0",
     "wandb>=0.21.0",
     "loguru>=0.7.3",
