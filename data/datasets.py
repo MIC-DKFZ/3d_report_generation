@@ -87,12 +87,13 @@ class MedicalImageDataset(Dataset, ABC):
     def __init__(
         self,
         dataset_json_path,
-        model_name,
+        model_type,
         split: Literal["train", "val", "test"] = "train",
         vision_input_path=None,
         vision_input_type=VisionInputType.EMBEDDING,
         n_samples=None,
         answer_types=("CHOICE",),
+        text_only=False,
         embedding_constant=None,
         do_resize=False,
         do_transforms=False,
@@ -104,9 +105,10 @@ class MedicalImageDataset(Dataset, ABC):
         self.dataset_json_path = Path(dataset_json_path)
         self.vision_input_path = Path(vision_input_path)
         self.vision_input_type = vision_input_type
-        self.model_name = model_name
+        self.model_type = model_type
         self.split = split
         self.n_samples = n_samples
+        self.text_only = text_only
         self.embedding_constant = embedding_constant
         self.do_resize = do_resize
         self.do_transforms = do_transforms
@@ -232,10 +234,9 @@ class MedicalImageDataset(Dataset, ABC):
         else:
             result["full_answer"] = result["full_answer"]
 
-        formatted_qa, formatted_qa_prompt_only = format_into_message(
+        formatted_qa, formatted_qa_prompt_only = self.format_into_message(
                 result["question"],
                 result["full_answer"],
-                self.model_name,
                 system_text=sample["system_text"],
             )
 
@@ -276,6 +277,30 @@ class MedicalImageDataset(Dataset, ABC):
     def shuffle_sentences(self, question, answer):
         # Needs to be implemented for each dataset
         return question, answer
+
+    def format_into_message(
+            self, question, answer, system_text=SYSTEM_TEXT
+    ):
+
+        system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
+
+        if self.model_type == "qwen":
+            user_message = {
+                "role": "user",
+                "content": [
+                    {"type": "video"},
+                    {"type": "text", "text": question},
+                ],
+                "content": ([{"type": "video"}] if not self.text_only else []) + [{"type": "text", "text": question}]
+            }
+        else:
+            raise ValueError(f"Unsupported model name: {self.model_type}")
+
+        answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
+
+        full_conversation = [system_message, user_message, answer_message]
+        prompt_only_conversation = [system_message, user_message]
+        return full_conversation, prompt_only_conversation
 
 
 class AMOSMMDataset(MedicalImageDataset):

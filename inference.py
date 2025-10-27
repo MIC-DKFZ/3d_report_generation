@@ -295,7 +295,7 @@ def main(args):
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
             dataset_json_path=dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split=args.split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
@@ -310,7 +310,7 @@ def main(args):
     elif cfg.data.dataset_name == "ctrate":
         test_dataset = CTRATEDataset(
             dataset_json_path=dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split=args.split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,

@@ -40,7 +40,7 @@ def create_ctrate_splits():
     # 'embeddings_path' is crucial as CTRATEDataset filters samples based on existing embeddings.
     ctrate_train_dataset = CTRATEDataset(
         dataset_json_path=CTRATE_DATASET_ROOT_DIR,
-        model_name="qwen",  # Or any other model_name compatible with your setup, e.g., "owl"
+        model_type="qwen",  # Or any other model_name compatible with your setup, e.g., "owl"
         split="train",
         embeddings_path=CTRATE_EMBEDDINGS_DIR,
     )

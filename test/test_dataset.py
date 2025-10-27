@@ -48,7 +48,7 @@ def test_dataset_json_sample_exists(cli_args):
     model_name = "qwen"
     dataset = CTRATEDataset(
             dataset_json_path=cli_args.json_path,
-            model_name=model_name,
+            model_type=model_name,
             split=cli_args.split,
             vision_input_path=cli_args.vision_input_path,
             vision_input_type=VisionInputType.EMBEDDING,

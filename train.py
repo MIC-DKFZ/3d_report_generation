@@ -442,7 +442,7 @@ def main():
         # Use AMOSMM dataset
         train_dataset = AMOSMMDataset(
             dataset_json_path=cfg.data.train_dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split="train",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
@@ -450,6 +450,7 @@ def main():
             n_samples=cfg.data.n_train_samples,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=cfg.data.do_sentence_shuffle
@@ -457,7 +458,7 @@ def main():
 
         val_dataset = AMOSMMDataset(
             dataset_json_path=cfg.data.val_dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split="val",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
@@ -465,6 +466,7 @@ def main():
             answer_types=cfg.data.answer_types,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
         )
@@ -472,7 +474,7 @@ def main():
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
             dataset_json_path=cfg.data.train_dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split="train",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
@@ -480,6 +482,7 @@ def main():
             answer_types=cfg.data.answer_types,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=cfg.data.do_sentence_shuffle
@@ -487,13 +490,14 @@ def main():
 
         val_dataset = CTRATEDataset(
             dataset_json_path=cfg.data.val_dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split="val",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_val_samples,  # Limit the validation set size
             answer_types=cfg.data.answer_types,
             do_resize=cfg.data.do_resize,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             # no transforms for val dataset
             vision_encoder_patch_size=vision_encoder_patch_size

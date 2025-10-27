@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import Field
+from pydantic import Field, model_validator
 from configs.base import ConfigBase
 from utils.vision_input_type import VisionInputType
 
@@ -16,6 +16,10 @@ class DataConfig(ConfigBase):
 
     answer_types: str | list = Field(..., description="Which answer types and subtypes to include during training.")
 
+    text_only: bool = Field(
+        False,
+        description="Whether to only input text and omit any vision tokens."
+    )
     embedding_constant: float | Literal["random"] | None = Field(
         None,
         description="Constant value for language-only baseline. Either a float or 'random'."
@@ -27,3 +31,9 @@ class DataConfig(ConfigBase):
     do_resize: bool = Field(False, description="Resize images to 192x192x192 cubes (with lung crops).")
     do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
     do_sentence_shuffle: bool = Field(True, description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.")
+
+    @model_validator(mode="after")
+    def validate_vision_input_modifiers(self):
+        if self.text_only and self.embedding_constant is not None:
+            raise ValueError(f"'text_only' and 'embedding_constant' cannot be used together.")
+        return self
