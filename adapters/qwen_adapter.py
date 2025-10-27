@@ -8,7 +8,7 @@ from transformers.activations import QuickGELUActivation
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2RMSNorm
 
 
-class VisionAdapterReduceBlocks(nn.Module):
+class QwenAdapter(nn.Module):
     def __init__(
         self,
         embedding_dim: int,
@@ -17,6 +17,7 @@ class VisionAdapterReduceBlocks(nn.Module):
     ):
         super().__init__()
         self.reduce_block = reduce_block
+
         print(reduce_block)
         input_size = embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2]
         hidden_size = embedding_dim * min(8, reduce_block[0] * reduce_block[1] * reduce_block[2]) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
@@ -72,7 +73,7 @@ class VisionAdapterReduceBlocks(nn.Module):
         return x
 
 
-class VisionAdapterHeterogeneous(nn.Module):
+class QwenAdapterHeterogeneous(nn.Module):
     """
     Vision Adapter that handles heterogeneous input sequence lengths within a batch.
 
