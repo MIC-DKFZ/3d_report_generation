@@ -1,9 +1,7 @@
-import random
 from typing import List, Union
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from einops import rearrange
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
@@ -142,18 +140,9 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
         text = text.copy()  # below lines change text in-place
 
         if video_grid_thw is not None:
-            
             for i, grid_thw in enumerate(video_grid_thw):
-                    
-                # Calculate valid dimensions (divisible by reduce_block)
-                valid_dims = (grid_thw // torch.as_tensor(self.reduce_block)) * torch.as_tensor(self.reduce_block)
-                num_tokens = valid_dims.prod().item()
-
+                num_tokens = grid_thw.prod().item()
                 text[i] = text[i].replace(self.video_token, self.video_token * num_tokens, 1)
-
-        #text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
-        # TODO check why it fails with the above line!
-        #text_inputs = self.tokenizer(text, **{"padding":True, "return_tensors": "pt"})
 
         # Original Qwen25VL stuff
         return_tensors = output_kwargs["text_kwargs"].pop("return_tensors", None)
