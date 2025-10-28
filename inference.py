@@ -302,7 +302,8 @@ def main(args):
             answer_types=cfg.data.answer_types,
             n_samples=args.n_samples,  # Limit the validation set size
             do_resize=cfg.data.do_resize,
-            do_transforms=cfg.data.do_transforms,
+            do_transforms=False,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=False
@@ -317,7 +318,8 @@ def main(args):
             answer_types=cfg.data.answer_types,
             n_samples=args.n_samples,  # Limit the validation set size
             do_resize=cfg.data.do_resize,
-            do_transforms=cfg.data.do_transforms,
+            do_transforms=False,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=False

@@ -23,6 +23,7 @@ class AbstractVLMModel(ABC):
     def __init__(self,
                  model_cfg: ModelConfig | None = None,
                  vision_input_type: str | None = None,
+                 text_only: bool = False,
                  local_files_only=True,
                  device=None):
         self.model: PreTrainedModel | None = None
@@ -31,6 +32,7 @@ class AbstractVLMModel(ABC):
 
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.vision_input_type = vision_input_type
+        self.text_only = text_only
         self.local_files_only = local_files_only
 
         self.model_cfg = model_cfg
@@ -190,6 +192,7 @@ class AbstractVLMModel(ABC):
         vlm_model_class = vlm_registry[cfg.model.model_type].model_class
         vlm_model: AbstractVLMModel = vlm_model_class(model_cfg=cfg.model,
                                 vision_input_type=cfg.data.vision_input_type,
+                                text_only=cfg.data.text_only,
                                 local_files_only=cfg.general.local_files_only)
         vlm_model.setup_model()
         vlm_model.apply_trainable_config()

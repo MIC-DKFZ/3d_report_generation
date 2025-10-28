@@ -56,6 +56,19 @@ class RunConfig(ConfigBase):
                 raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.eval.dataset_json_path}")
         return self
 
+    @model_validator(mode="after")
+    def check_trainable_params_for_text_only_input(self):
+        if (
+                self.data.text_only
+                and self.model.trainable_params.language_model.mode == "frozen"
+                and self.model.trainable_params.lm_head.mode == "frozen"
+        ):
+            raise ValueError(
+                "When 'data.text_only' is enabled, the language model must have trainable parameters. "
+                "Otherwise, there are no gradient paths for optimization."
+            )
+        return self
+
     def maybe_reset_vision_encoder_specific_args(self):
         """
         When using embeddings, reset vision-encoder-specific arguments:

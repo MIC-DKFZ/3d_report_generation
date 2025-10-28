@@ -16,7 +16,7 @@ from torch.utils.data import Dataset
 
 from utils import logger
 from utils.dataset_utils import get_training_image_transforms, preprocess_3d_image
-from utils.regex_patterns import VQA_ANSWER_PATTERN, VQA_OPTION_PATTERN, VQA_OPTION_LETTERS_IN_TEXT_PATTERN
+from utils.regex_patterns import VQA_OPTION_PATTERN, VQA_OPTION_LETTERS_IN_TEXT_PATTERN
 from utils.vision_input_type import VisionInputType
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
@@ -41,30 +41,6 @@ def z_score_normalization(
         image = (image - mean) / max(std, 1e-8)
     return image
 
-def format_into_message(
-    question, answer, model_name, system_text=SYSTEM_TEXT, vision_input_path=None
-):
-
-    system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
-
-    if model_name == "qwen":
-        user_message = {
-            "role": "user",
-            "content": [
-                # TODO: where do we use this vision input path?
-                {"type": "video", "vision_input_path": vision_input_path},
-                {"type": "text", "text": question},
-            ],
-        }
-    else:
-        raise ValueError(f"Unsupported model name: {model_name}")
-
-    answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
-
-    full_conversation = [system_message, user_message, answer_message]
-    prompt_only_conversation = [system_message, user_message]
-    return full_conversation, prompt_only_conversation
-
 
 class MedicalImageDataset(Dataset, ABC):
     """
@@ -72,7 +48,7 @@ class MedicalImageDataset(Dataset, ABC):
 
     Args:
         dataset_json_path (str): Path to the dataset JSON file
-        model_name (str): Name of the VLM the dataset is used for
+        model_type (str): Name of the VLM the dataset is used for
         split (str): Split name ('train', 'val' or 'test')
         vision_input_path (str | Path): Root path to the vision input (images or embeddings)
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
@@ -243,19 +219,22 @@ class MedicalImageDataset(Dataset, ABC):
         result["formatted_qa"] = formatted_qa
         result["formatted_qa_prompt_only"] = formatted_qa_prompt_only
 
-        # Load embedding
-        vision_input_path = self._get_vision_input_path(sample["image_id"])
-        vision_input = self._load_vision_input(vision_input_path)
-                
-        if self.embedding_constant is not None:
-            if type(self.embedding_constant) is float:
-                result["vision_input"] = np.full(vision_input.shape, self.embedding_constant, dtype=np.float32)
-            elif type(self.embedding_constant) is str and self.embedding_constant == "random":
-                result["vision_input"] = np.random.rand(*vision_input.shape).astype(np.float32)
+        if not self.text_only:
+            # Load embedding
+            vision_input_path = self._get_vision_input_path(sample["image_id"])
+            vision_input = self._load_vision_input(vision_input_path)
+
+            if self.embedding_constant is not None:
+                if type(self.embedding_constant) is float:
+                    result["vision_input"] = np.full(vision_input.shape, self.embedding_constant, dtype=np.float32)
+                elif type(self.embedding_constant) is str and self.embedding_constant == "random":
+                    result["vision_input"] = np.random.rand(*vision_input.shape).astype(np.float32)
+                else:
+                    raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
             else:
-                raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
+                result["vision_input"] = vision_input
         else:
-            result["vision_input"] = vision_input
+            result["vision_input"] = None
 
         return result
 

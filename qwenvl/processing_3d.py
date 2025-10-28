@@ -96,7 +96,9 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
         image_inputs, videos_inputs = {}, {}
         video_grid_thw = None
 
-        if self.vision_input_type == VisionInputType.EMBEDDING:
+        if vision_inputs is None:
+            pass
+        elif self.vision_input_type == VisionInputType.EMBEDDING:
             video_grid_thw = torch.tensor(
                 np.array([np.array(v_e.shape[-3:]) // np.array(self.reduce_block) for v_e in vision_inputs])
             ).int()

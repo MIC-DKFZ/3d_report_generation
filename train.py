@@ -428,6 +428,7 @@ def main():
     vlm_model = vlm_model_class(
         model_cfg=cfg.model,
         vision_input_type=cfg.data.vision_input_type,
+        text_only=cfg.data.text_only,
         local_files_only=cfg.general.local_files_only
     )
 

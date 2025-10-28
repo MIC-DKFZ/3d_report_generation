@@ -16,10 +16,12 @@ class QwenVLModel(AbstractVLMModel):
         self,
         model_cfg: ModelConfig,
         vision_input_type: str,
-        local_files_only=False,
+        text_only: bool,
+        local_files_only: bool = False,
     ):
         super().__init__(model_cfg=model_cfg,
                          vision_input_type=vision_input_type,
+                         text_only=text_only,
                          local_files_only=local_files_only)
         self._model_str = "qwen"
         self.batch_count = 0
@@ -72,11 +74,13 @@ class QwenVLModel(AbstractVLMModel):
             for example in examples
         ]
 
-        vision_inputs = [
-            example["vision_input"]#.astype(np.float32) #TODO check why we had this cast before
-            for example in examples
-            if "vision_input" in example and example["vision_input"] is not None
-        ]
+        if not self.text_only:
+            vision_inputs = [
+                example["vision_input"]
+                for example in examples
+            ]
+        else:
+            vision_inputs = None
 
         batch = self.processor(
             text=texts,
@@ -97,13 +101,14 @@ class QwenVLModel(AbstractVLMModel):
         labels = batch["input_ids"].clone()
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
 
-        if isinstance(self.processor, QwenVLProcessor3D):
-            image_tokens = [151652, 151653, 151655]
-        else:
-            image_tokens = [self.processor.tokenizer.convert_tokens_to_ids(self.processor.image_token)]
+        if vision_inputs is not None:
+            if isinstance(self.processor, QwenVLProcessor3D):
+                image_tokens = [151652, 151653, 151655]
+            else:
+                image_tokens = [self.processor.tokenizer.convert_tokens_to_ids(self.processor.image_token)]
 
-        for image_token_id in image_tokens:
-            labels[labels == image_token_id] = -100
+            for image_token_id in image_tokens:
+                labels[labels == image_token_id] = -100
 
         # Only keep the model's final assistant response as the prediction target.
         # Everything before and including the last "<|im_start|>assistant\n"
@@ -124,11 +129,16 @@ class QwenVLModel(AbstractVLMModel):
             "attention_mask": batch["attention_mask"],
             "attention_mask_prompt_only": batch_prompt_only["attention_mask"],
             "labels": labels,
-            "pixel_values_videos": batch["pixel_values_videos"],
-            "video_grid_thw": batch["video_grid_thw"],
             "batch_count": self.batch_count,
             "raw_samples": raw_samples,
         }
+        if vision_inputs is not None:
+            batch_out.update(
+                {
+                    "pixel_values_videos": batch["pixel_values_videos"],
+                    "video_grid_thw": batch["video_grid_thw"]
+                }
+            )
         batch_out = transformers.BatchFeature(batch_out)
         self.batch_count += 1
         return batch_out
