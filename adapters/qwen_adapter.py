@@ -11,16 +11,16 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2RMSNorm
 class QwenAdapter(nn.Module):
     def __init__(
         self,
-        embedding_dim: int,
-        embed_dim: int,
+        vision_embed_dim: int,
+        text_embed_dim: int,
         reduce_block: Tuple[int, int, int] = (2, 2, 2),
     ):
         super().__init__()
         self.reduce_block = reduce_block
 
         print(reduce_block)
-        input_size = embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2]
-        hidden_size = embedding_dim * min(8, reduce_block[0] * reduce_block[1] * reduce_block[2]) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
+        input_size = vision_embed_dim * reduce_block[0] * reduce_block[1] * reduce_block[2]
+        hidden_size = vision_embed_dim * min(8, reduce_block[0] * reduce_block[1] * reduce_block[2]) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
         # the linear layer still can become too large for large blocks greater than 8cube. In such cases better use pooling?!
         self.ln_q = Qwen2RMSNorm(input_size, eps=1e-6)
         self.adapter = nn.Sequential(
@@ -29,7 +29,7 @@ class QwenAdapter(nn.Module):
                 hidden_size,
             ),
             nn.GELU(),
-            nn.Linear(hidden_size, embed_dim)
+            nn.Linear(hidden_size, text_embed_dim)
         )
 
     def forward(self, x, video_grid_thw):
@@ -84,29 +84,29 @@ class QwenAdapterHeterogeneous(nn.Module):
 
     def __init__(
         self,
-        embedding_dim: int,
-        embed_dim: int,
+        vision_embed_dim: int,
+        text_embed_dim: int,
         reduce_block: Tuple[int, int, int] = (2, 2, 2),
     ):
         """
         Args:
-            embedding_dim (int): Dimension of the input vision embeddings (channel dim).
-            embed_dim (int): Target embedding dimension (language model's embedding dim).
+            vision_embed_dim (int): Dimension of the input vision embeddings (channel dim).
+            text_embed_dim (int): Target embedding dimension (language model's embedding dim).
             reduce_block (Tuple[int, int, int]): Factors to reduce each spatial dimension (H, W, D) by.
                                                  Defines the size of the 3D patch to combine.
         """
         super().__init__()
-        self.embedding_dim = embedding_dim
-        self.embed_dim = embed_dim
+        self.embedding_dim = vision_embed_dim
+        self.embed_dim = text_embed_dim
         self.reduce_block = reduce_block
         self.reduce_factor = reduce_block[0] * reduce_block[1] * reduce_block[2]
-        self.combined_input_dim = embedding_dim * self.reduce_factor
+        self.combined_input_dim = vision_embed_dim * self.reduce_factor
 
         # The adapter MLP
         self.adapter = nn.Sequential(
             nn.Linear(self.combined_input_dim, 5120),
             QuickGELUActivation(),
-            nn.Linear(5120, embed_dim),
+            nn.Linear(5120, text_embed_dim),
         )
 
     def forward(
