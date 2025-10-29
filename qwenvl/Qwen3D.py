@@ -34,22 +34,17 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         # we need to replace Qwen25VL init because it inits 'visual'
         Qwen2_5_VLPreTrainedModel.__init__(self, config)
         self.vision_encoder = None  # init in self.setup_vision_encoder()
+        self.vision_adapter = None  # init in self.setup_vision_adapter()
         self.language_model = Qwen2_5_VLTextModel._from_config(config.text_config)
         self.rope_deltas = None     # cache rope_deltas here
 
-        model_cfg = ModelConfig(**model_cfg)
-        self.ve_cfg = model_cfg.vision_encoder
+        self.model_cfg = ModelConfig(**model_cfg)
 
         # Initialize weights and apply final processing
         self.post_init()
 
-        self.vision_adapter = model_cfg.adapter.to_adapter(vision_embed_dim=864, text_embed_dim=2048)
-        # self.vision_adapter = VisionAdapterHeterogeneous(embedding_dim=864, embed_dim=1536, reduce_block=reduce_block)
-
     def setup_vision_encoder(self):
-        # currently only working with MAE 
-        # TODO implement other vision encoders
-        vision_encoder_path = self.ve_cfg.vision_encoder_path
+        vision_encoder_path = self.model_cfg.vision_encoder.vision_encoder_path
         plans_file = f"{vision_encoder_path}/plans.json"
         checkpoint_paths = glob.glob(f"{vision_encoder_path}/fold_all/checkpoint_*.pth")
         if len(checkpoint_paths) > 1:
@@ -62,10 +57,13 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
             checkpoint_path = checkpoint_paths[0]
 
         config = get_config_from_plans(plans_file)
-        vision_encoder_class = vision_encoder_registry[self.ve_cfg.type]
+        vision_encoder_class = vision_encoder_registry[self.model_cfg.vision_encoder.type]
         self.vision_encoder = vision_encoder_class(
             input_channels=1, output_channels=1, pretrained_weights_file=checkpoint_path, **config
         )
+
+    def setup_adapter(self):
+        self.vision_adapter = self.model_cfg.adapter.to_adapter(vision_embed_dim=864, text_embed_dim=2048)
 
     def get_rope_index(
         self,
@@ -268,15 +266,12 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
 
             if pixel_values_videos is not None:
                 ##########
-                # Only these 3 lines (and bellow two lines) are different from the original Qwen2_5_VLModel
-                #pixel_values_videos = torch.rand_like(pixel_values_videos) #TODO RANDOM IMAGE HERE!!!
-                #pixel_values_videos = pixel_values_videos.to(self.vision_adapter.adapter[0].weight.dtype)
-                if hasattr(self, "vision_encoder") and self.vision_encoder is not None:
-                    video_embeds = self.vision_encoder(pixel_values_videos.unsqueeze(1))
-                    #video_embeds = rearrange(video_embeds, 'b c h w d -> b c (h w d )')
-                    video_embeds = self.vision_adapter(video_embeds, video_grid_thw)
-                else:
-                    video_embeds = self.vision_adapter(pixel_values_videos, video_grid_thw)
+                # Only these lines are different from the original Qwen2_5_VLModel
+                video_embeds = pixel_values_videos
+                if self.vision_encoder is not None:
+                    video_embeds = self.vision_encoder(video_embeds.unsqueeze(1))
+                if self.vision_adapter is not None:
+                    video_embeds = self.vision_adapter(video_embeds, video_grid_thw)  # TODO switch to adapter kwargs
                 video_embeds = video_embeds.view(-1, video_embeds.shape[-1])  # Flatten to (total_features, embed_dim)
                 ##########
                 n_video_tokens = (input_ids == self.config.video_token_id).sum()

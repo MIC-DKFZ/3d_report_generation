@@ -107,14 +107,19 @@ class AbstractVLMModel(ABC):
             # trainable_component_cfg can be None (e.g., when embeddings are used directly,
             # meaning no vision encoder and thus no TrainableModuleConfig for it)
             if trainable_component_cfg is None:
+                logger.info_main(f"  > {module_name}: NON-EXISTENT")
                 continue
 
+            # if text_only is enabled, freeze vision encoder and adapter
+            t_o_enabled_and_not_lm = module_name in ("vision_encoder", "adapter") and self.text_only
+
             mode = trainable_component_cfg.mode
-            if mode == "frozen":
+            if mode == "frozen" or t_o_enabled_and_not_lm:
                 module: torch.nn.Module = getattr_nested(self.model, module_attr_path)
                 for name, param in module.named_parameters():
                     param.requires_grad = False
-                logger.info_main(f"  > {module_name}: frozen")
+                text_only_suffix = "" if not t_o_enabled_and_not_lm else " (TEXT-ONLY INPUT)"
+                logger.info_main(f"  > {module_name}: frozen" + text_only_suffix)
             elif mode == "full":
                 module: torch.nn.Module = getattr_nested(self.model, module_attr_path)
                 for name, param in module.named_parameters():

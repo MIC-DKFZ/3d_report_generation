@@ -5,6 +5,6 @@ from configs.model.trainable_params.trainable_module import TrainableModuleConfi
 
 class TrainableParamsConfig(ConfigBase):
     vision_encoder: TrainableModuleConfig | None = None
-    adapter: TrainableModuleConfig
+    adapter: TrainableModuleConfig | None = None
     language_model: TrainableModuleConfig
     lm_head: TrainableLinearConfig

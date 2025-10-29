@@ -57,7 +57,7 @@ class RunConfig(ConfigBase):
         return self
 
     @model_validator(mode="after")
-    def check_trainable_params_for_text_only_input(self):
+    def validate_trainable_params_for_text_only_input(self):
         if (
                 self.data.text_only
                 and self.model.trainable_params.language_model.mode == "frozen"
@@ -69,25 +69,39 @@ class RunConfig(ConfigBase):
             )
         return self
 
-    def maybe_reset_vision_encoder_specific_args(self):
+    def maybe_reset_vision_related_specific_args(self):
         """
-        When using embeddings, reset vision-encoder-specific arguments:
+        When using embeddings or using text-only inputs, reset vision-related-specific arguments:
         - set object references to None
         - set preprocessing flags to False
         """
-        if self.data.vision_input_type == VisionInputType.EMBEDDING:
-            if is_main_process():
-                logger.info("[VisionInputType] Resetting vision-encoder-specific arguments for EMBEDDING input mode:")
+        embedding_input = self.data.vision_input_type == VisionInputType.EMBEDDING
+        text_only = self.data.text_only
 
-            _lis = [
-                (["model.vision_encoder", "model.trainable_params.vision_encoder"], None),
-                (["data.do_resize", "data.do_transforms"], False),
-            ]
-            for _modules, _val in _lis:
-                for _module in _modules:
-                    setattr_nested(self, _module, _val)
-                    if is_main_process():
-                        logger.info(f"  > cfg.{_module} set to {_val}")
+        if not (embedding_input or text_only):
+            return
+
+        _dic = {
+            None: set(),
+            False: set(),
+        }
+        _str = None
+        if embedding_input:
+            _str = "EMBEDDING"
+            _dic[None].update(["model.vision_encoder", "model.trainable_params.vision_encoder"])
+            _dic[False].update(["data.do_resize", "data.do_transforms"])
+        if text_only:
+            _str = "TEXT-ONLY"
+            _dic[None].update(["model.vision_encoder", "model.trainable_params.vision_encoder",
+                               "model.adapter", "model.trainable_params.adapter"])
+            _dic[False].update(["data.do_resize", "data.do_transforms"])
+
+        logger.info_main(f"[Vision Input Type] Resetting vision-encoder-specific arguments for {_str} input mode:")
+
+        for _val, _modules in _dic.items():
+            for _module in sorted(_modules):
+                setattr_nested(self, _module, _val)
+                logger.info_main(f"  > cfg.{_module} set to {_val}")
 
     def resolve_run_name(self) -> None:
         if is_main_process():
@@ -110,7 +124,7 @@ class RunConfig(ConfigBase):
         self.general.run_name = run_name[0]
 
     def resolve_output_dir(self) -> None:
-        self.general.output_dir = os.path.join(
+        self.general.output_dir = os.path.join(  # type: ignore[arg-type]
             VLM_OUTPUT_DIR,
             self.data.dataset_name,
             os.path.basename(self.data.vision_input_path),

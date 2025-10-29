@@ -13,7 +13,8 @@ class ModelConfig(ConfigBase):
     model_type: Literal["owl", "qwen"] = Field(..., description="Type of VLM model to train.")
     model_id: str | None = Field(None, description="Model ID or path.")
 
-    vision_encoder: VisionEncoderConfig | None = Field(None, description="Should only be None, if you train with embeddings instead of images.")
-    adapter: AdapterConfig
+    vision_encoder: VisionEncoderConfig | None = Field(None, description="Should only be None, if you train with embeddings instead of images. "
+                                                                         "or have text-only inputs.")
+    adapter: AdapterConfig | None  = Field(None, description="Should only be None, if you have text-only inputs.")
 
     trainable_params: TrainableParamsConfig

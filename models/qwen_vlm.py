@@ -58,8 +58,10 @@ class QwenVLModel(AbstractVLMModel):
             torch_dtype=torch.bfloat16
         )
         
-        if self.vision_input_type == VisionInputType.IMAGE:
+        if self.model_cfg.trainable_params.vision_encoder is not None:
             self.model.model.setup_vision_encoder()
+        if self.model_cfg.trainable_params.adapter is not None:
+            self.model.model.setup_adapter()
 
         return self.model
 

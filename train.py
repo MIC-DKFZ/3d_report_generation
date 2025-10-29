@@ -282,15 +282,15 @@ def setup_config_and_logging() -> RunConfig:
     logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
     print(f"Successfully set up output directory at {cfg.general.output_dir}")
 
-    # Reset some args in case the vision input are embedding (instead of images)
-    cfg.maybe_reset_vision_encoder_specific_args()
-
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
     cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")
     cfg.model = merge_config_with_cli_args(cfg.model, parent_key="model")
     cfg.trainer = merge_config_with_cli_args(cfg.trainer, parent_key="trainer")
     cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
     cfg.eval = merge_config_with_cli_args(cfg.eval, parent_key="eval")
+
+    # Reset some args in case the vision input are embeddings (instead of images)
+    cfg.maybe_reset_vision_related_specific_args()
 
     # Resolve model_id if not provided
     if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:
