@@ -1,9 +1,5 @@
-from typing import List, Optional, Union, Dict, Tuple
+from typing import List
 import resenc
-import nibabel as nib
-import nrrd
-import yaml
-import json
 import torch
 import torch.nn.functional as F
 import os
@@ -20,71 +16,10 @@ from prep.normalization_schemes import (
     NormalizationScheme,
 )
 
+import utils
 
 import torch.distributed as dist
 import os
-
-
-def setup_distributed():
-    """Initialize distributed training"""
-    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        rank = int(os.environ["RANK"])
-        world_size = int(os.environ["WORLD_SIZE"])
-        gpu = int(os.environ["LOCAL_RANK"])
-
-        dist.init_process_group(backend="nccl", init_method="env://")
-        torch.cuda.set_device(gpu)
-
-        return rank, world_size, gpu
-    else:
-        # Single GPU fallback
-        return 0, 1, 0
-
-
-def cleanup_distributed():
-    """Clean up distributed training"""
-    if dist.is_initialized():
-        dist.destroy_process_group()
-
-
-def distribute_files(img_files, rank, world_size):
-    """Distribute files across GPUs"""
-    # Split files evenly across GPUs
-    files_per_gpu = len(img_files) // world_size
-    start_idx = rank * files_per_gpu
-
-    if rank == world_size - 1:  # Last GPU gets remaining files
-        end_idx = len(img_files)
-    else:
-        end_idx = start_idx + files_per_gpu
-
-    return img_files[start_idx:end_idx]
-
-
-def save_embeddings_blosc2(
-    embeddings, output_path, clevel: int = 8, codec=blosc2.Codec.ZSTD
-):
-    blosc2.set_nthreads(1)
-
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-    # Convert tensor to numpy if needed
-    if hasattr(embeddings, "numpy"):
-        embeddings_np = embeddings.detach().cpu().numpy()
-    else:
-        embeddings_np = embeddings
-
-    print(f"Saving embeddings with shape: {embeddings_np.shape} to {output_path}")
-
-    # Ensure array is contiguous
-    embeddings_np = np.ascontiguousarray(embeddings_np)
-
-    cparams = {"codec": codec, "clevel": clevel}
-
-    bytes_saved = blosc2.save_array(
-        embeddings_np, output_path, mode="w", cparams=cparams
-    )
-    return
 
 
 def split_image_into_patches(
@@ -100,18 +35,13 @@ def split_image_into_patches(
     num_patches = [int(np.ceil(s / p)) for s, p in zip(img_shape, patch_size)]
 
     attn_mask = torch.ones(
-        [
-            nps * int(ps / vps)
-            for nps, ps, vps in zip(num_patches, patch_size, vit_patch_size)
-        ],
+        [nps * int(ps / vps) for nps, ps, vps in zip(num_patches, patch_size, vit_patch_size)],
         dtype=torch.bool,
     )
 
     # Calculate padding for each dimension
     padding = [((p - s) % p) for s, p in zip(img_shape, patch_size)]
-    tokens_to_mask = [
-        int(np.floor(pad / vps)) for pad, vps in zip(padding, vit_patch_size)
-    ]
+    tokens_to_mask = [int(np.floor(pad / vps)) for pad, vps in zip(padding, vit_patch_size)]
     if tokens_to_mask[0] > 0:
         attn_mask[-tokens_to_mask[0] :, :, :] = False
     if tokens_to_mask[1] > 0:
@@ -219,36 +149,12 @@ def combine_patches_into_image(embeddings, attn_masks, num_patches):
     return whole_image_cropped
 
 
-def load_yaml(file_path: str):
-    try:
-        with open(file_path, "r") as f:
-            rocket_data = yaml.safe_load(f)
-            return rocket_data
-    except FileNotFoundError:
-        raise f"Rocket data file not found at {file_path}"
-    except yaml.YAMLError as e:
-        raise f"Error parsing Rocket data file: {str(e)}"
-
-
-def _create_name_mapping_rocket_raw(dataset_name: str = "CPE_data/AMOS-MM"):
-    rocket_path = f"/home/r403k/ResourcesDKFZ/e230-thrp-data/mic_rocket/data/raw_converted/{dataset_name}/logs/successful_conversions.yml"
-    rocket_data = load_yaml(rocket_path)
-
-    # create mapping
-    rocket2raw = {
-        d["image_id"]: Path(d["image_filepaths"][0]).stem.split(".")[0]
-        for d in rocket_data
-    }
-    raw2rocket = {v: k for k, v in rocket2raw.items()}
-    return rocket2raw, raw2rocket
-
-
 def process_image_center_crop(
     img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"
 ):
     target_size = (192, 192, 192)
 
-    blosc2_result = load_blosc2(img_path)
+    blosc2_result = utils.load_blosc2(img_path)
     img_data, _ = blosc2_result
     img = np.array(img_data)
 
@@ -274,9 +180,7 @@ def process_image_center_crop(
 
     # Calculate crop boundaries, ensuring we don't go outside image bounds
     crop_start = [max(0, c - h) for c, h in zip(center_coords, half_target)]
-    crop_end = [
-        min(s, c + h) for s, c, h in zip(spatial_shape, center_coords, half_target)
-    ]
+    crop_end = [min(s, c + h) for s, c, h in zip(spatial_shape, center_coords, half_target)]
 
     # Adjust crop_start if crop_end - crop_start < target_size and we have room
     for i in range(3):
@@ -308,9 +212,7 @@ def process_image_center_crop(
         batch_attn_masks = rearrange(attn_masks, "n h w d -> n 1 1 (h w d)").to(device)
         batch_embeddings = model(batch_patches, batch_attn_masks)
         embeddings = list(batch_embeddings.split(patches.shape[1], dim=0))
-    embeddings = combine_patches_into_image(
-        embeddings, attn_masks.to(device), num_patches
-    )
+    embeddings = combine_patches_into_image(embeddings, attn_masks.to(device), num_patches)
 
     return embeddings.cpu(), None
 
@@ -322,7 +224,7 @@ def process_image_native_res(
     # Print debug information about patch size
     patch_size = tuple(config["recommended_downstream_patchsize"])
     try:
-        blosc2_result = load_blosc2(img_path)
+        blosc2_result = utils.load_blosc2(img_path)
         img_data, _ = blosc2_result
         img = np.array(img_data)
 
@@ -340,9 +242,7 @@ def process_image_native_res(
         print(f"Tensor shape after adding batch/channel dims: {img_tensor.shape}")
 
         # Get patch size from config and ensure it's a tuple
-        patch_size = tuple(
-            config["recommended_downstream_patchsize"]
-        )  # Should be (192, 192, 192)
+        patch_size = tuple(config["recommended_downstream_patchsize"])  # Should be (192, 192, 192)
         # FIXME: currenlty function only supports Batch size of 1
         patches, attn_masks, num_patches = split_image_into_patches(
             img_tensor, patch_size, vit_patch_size=[8, 8, 8]
@@ -367,15 +267,11 @@ def process_image_native_res(
         # All sliding windows at once (output is the same except some small numerical error < 1e-5)
         with torch.no_grad():
             batch_patches = patches.view(-1, *patches.shape[2:])
-            batch_attn_masks = rearrange(attn_masks, "n h w d -> n 1 1 (h w d)").to(
-                device
-            )
+            batch_attn_masks = rearrange(attn_masks, "n h w d -> n 1 1 (h w d)").to(device)
             batch_embeddings = model(batch_patches, batch_attn_masks)
             embeddings = list(batch_embeddings.split(patches.shape[1], dim=0))
 
-        embeddings = combine_patches_into_image(
-            embeddings, attn_masks.to(device), num_patches
-        )
+        embeddings = combine_patches_into_image(embeddings, attn_masks.to(device), num_patches)
 
         return embeddings.cpu(), None
 
@@ -390,111 +286,12 @@ def process_image_native_res(
         raise
 
 
-# --- Image Processing Functions ---
-def load_nrrd(img_path):
-    """
-    Loads a NRRD image (.nrrd) and returns data and affine matrix.
-
-    Args:
-        img_path (str): Path to the NRRD image.
-
-    Returns:
-        tuple: (img_data, affine)
-    """
-    data, header = nrrd.read(img_path)
-    img_data = np.array(data)  # Ensure it's a NumPy array
-
-    # Construct the affine matrix from NRRD header information
-    space_directions = header["space directions"]
-    space_origin = header["space origin"]
-
-    # Handle cases where 'space directions' might have 'none' entries (e.g., for scalar data)
-    valid_directions = []
-    for direction in space_directions:
-        if not np.isnan(
-            direction
-        ).any():  # or not any(d is None for d in direction) #removed this as it does raise a type error.
-            valid_directions.append(direction)
-    valid_directions = np.array(valid_directions)
-
-    affine = np.eye(4)
-    affine[: valid_directions.shape[0], : valid_directions.shape[1]] = valid_directions
-    affine[:3, 3] = space_origin
-    # The following line is needed as otherwise some files do have a shape which is not correct for multiplication
-    affine = affine.T
-    return img_data, affine
-
-
-def load_nifti(img_path):
-    """
-    Loads a NIfTI image (.nii or .nii.gz) and returns data and affine matrix.
-
-    Args:
-        img_path (str): Path to the NIfTI image.
-
-    Returns:
-        tuple: (img_data, affine)
-    """
-    img = nib.load(img_path)
-    img_data = img.get_fdata()
-    affine = img.affine
-    return img_data, affine
-
-
-def load_image_data_and_affine(img_path: str):
-    """
-    Loads image data and affine matrix based on file extension.
-
-    Args:
-        img_path (str): Path to the image file.
-
-    Returns:
-        tuple: (img_data, affine) where:
-            img_data (np.ndarray): The image data as a NumPy array.
-            affine (np.ndarray): The affine transformation matrix.
-
-    Raises:
-        ValueError: If the file extension is not supported.
-    """
-    _, ext = os.path.splitext(img_path)  # Get file extension (e.g., '.nii.gz')
-    if ext == ".gz":
-        _, ext_inner = os.path.splitext(
-            img_path[:-3]
-        )  # Remove .gz and get next extension
-        ext = ext_inner + ext
-
-    if ext == ".nii.gz" or ext == ".nii":
-        return load_nifti(img_path)
-    elif ext == ".nrrd":
-        return load_nrrd(img_path)
-    elif ext == ".b2nd":
-        return load_blosc2(img_path)
-    else:
-        raise ValueError(f"Unsupported file extension: {ext}")
-
-
-def load_blosc2(img_path: str) -> Tuple[np.ndarray, np.ndarray]:
-    # von nnunet kopiert...
-    dparams = {"nthreads": 1}
-
-    mmap_kwargs = {} if os.name == "nt" else {"mmap_mode": "r"}
-
-    data_array = blosc2.open(urlpath=img_path, mode="r", dparams=dparams, **mmap_kwargs)
-    print(f"blosc2 array loaded, dtype: {data_array.dtype}, shape: {data_array.shape}")
-
-    return data_array, None
-
-
-def process_image(
-    img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"
-):
+def process_image(img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"):
     # Print debug information about patch size
     patch_size = tuple(config["recommended_downstream_patchsize"])
     # print(f"Target patch size from config: {patch_size}")
     try:
-        img_data, affine = load_image_data_and_affine(
-            img_path
-        )  # Load image data and affine
+        img_data, affine = utils.load_image_data_and_affine(img_path)  # Load image data and affine
 
         # Add batch and channel dimensions
         img_data = np.expand_dims(img_data, axis=(0))  # TODO only use this for blosc2?!
@@ -534,7 +331,7 @@ def process_image(
 
 def main(args):
     # Setup distributed processing
-    rank, world_size, gpu = setup_distributed()
+    rank, world_size, gpu = utils.setup_distributed()
 
     if rank == 0:
         print(f"Using {world_size} GPUs for processing")
@@ -545,7 +342,7 @@ def main(args):
         "center_crop": process_image_center_crop,
     }
 
-    base_path = args.base_path
+    checkpoint_path = args.checkpoint_path
     output_base = args.output_base
     input_dirs = args.input_dirs
     process_image_fct = processing_function_map[args.processing_function]
@@ -556,7 +353,7 @@ def main(args):
     # Setup model on the specific GPU
     device = torch.device(f"cuda:{gpu}")
 
-    model, config = resenc.setup_model(base_path)
+    model, config = resenc.setup_model(checkpoint_path)
     model = model.to(device)
 
     blosc2.set_nthreads(1)
@@ -585,7 +382,7 @@ def main(args):
         random.shuffle(img_files)
 
         # Distribute files across GPUs
-        my_files = distribute_files(img_files, rank, world_size)
+        my_files = utils.distribute_files(img_files, rank, world_size)
 
         if rank == 0:
             print(f"Total images: {len(img_files)}")
@@ -593,7 +390,9 @@ def main(args):
 
         # Process files assigned to this GPU
         for img_file in tqdm(my_files, desc=f"GPU {rank} - Processing {dir_name}"):
-            output_path = Path(output_dir) / f"{Path(img_file).stem}_embedding.bl2"
+            output_path = (
+                Path(output_dir) / f"{Path(img_file.replace('nii.gz', '')).stem}_embedding.bl2"
+            )
             if output_path.exists():
                 print(f"SKIPPING - Embedding already exist: {output_path}")
                 continue
@@ -608,14 +407,15 @@ def main(args):
                 for i, emb in enumerate(embeddings):
                     if i == 0:
                         # torch.Size([1, 640, 6, 6, 6])
-                        save_embeddings_blosc2(emb, output_path)
+                        utils.save_embeddings_blosc2(emb, output_path)
                     else:
                         if i <= 2:
                             # torch.Size([1, 640, 12, 12, 12])
                             # torch.Size([1, 512, 24, 24, 24])
-                            save_embeddings_blosc2(
+                            utils.save_embeddings_blosc2(
                                 emb,
-                                Path(output_dir) / f"{Path(img_file).stem}_stage{i}_embedding.bl2"
+                                Path(output_dir)
+                                / f"{Path(img_file.replace('nii.gz', '')).stem}_stage{i}_embedding.bl2",
                             )
                         else:
                             # We are only interested in the first three stages
@@ -628,38 +428,24 @@ def main(args):
                 continue
 
     # Clean up
-    cleanup_distributed()
+    utils.cleanup_distributed()
 
 
 def parse_args():
-    # # Define paths
-    # base_path = "/p/scratch/hai_1023/rocket_vlm/vision_encoders/pretrained_primus_mae/Dataset807_Rocketv2_exclude_CTRATE_val/EvaMAETrainer2500Epochs__nnsslPlans__mask_ratio08__vit_patch_size888__embed_dim864__encoder_eva_depth28__encoder_eva_numheads12__decoder_eva_depth8__decoder_eva_numheads12__batch_size8__initial_lr00003__attention_drop_rate02__3d_fullres"
-    # output_base = "/home/r403k/Data/papertrack25/segmentations/test_embeddings"
-
-    # input_dirs = [
-    #     "/home/r403k/ResourcesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/imagesTr",
-    #     "/home/r403k/ResourcesDKFZ/E132-Projekte/Projects/2024_MICCAI24_AMOS-MM/imagesVa"
-    # ]
-    # # Define function to use for embedding creation (native resolution or resized)
-    # # Use process_image for resized images or process_image_native_res for native resolution
-    # process_image_fct = process_image
-
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Embed images using a pretrained model."
-    )
+    parser = argparse.ArgumentParser(description="Embed images using a pretrained model.")
     parser.add_argument(
-        "--base_path",
+        "--checkpoint_path",
         required=True,
         type=str,
-        help="Path to the model directory containing plans.json and fold_all/checkpoint_final.pth",
+        help="Path to the model checkpoint.pth",
     )
     parser.add_argument(
         "--output_base",
         required=True,
         type=str,
-        help="Base directory to save the output embeddings (.npz files).",
+        help="Base directory to save the output embeddings (.bl2 files).",
     )
     parser.add_argument(
         "--input_dirs",
@@ -672,8 +458,8 @@ def parse_args():
         "--processing_function",
         required=True,
         type=str,
-        choices=["native", "resized", "region", "center_crop"],
-        help="Embedding generation method: 'native' (patch-based full image), 'resized' (resize full image), 'region' (patch-based region extraction).",
+        choices=["native", "resized", "center_crop"],
+        help="Embedding generation method: 'native' (patch-based full image), 'resized' (resize full image).",
     )
     return parser.parse_args()
 
