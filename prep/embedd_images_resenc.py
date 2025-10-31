@@ -393,9 +393,18 @@ def main(args):
             output_path = (
                 Path(output_dir) / f"{Path(img_file.replace('nii.gz', '')).stem}_embedding.bl2"
             )
-            if output_path.exists():
-                print(f"SKIPPING - Embedding already exist: {output_path}")
-                continue
+            p1 = output_path
+            p2 = Path(str(output_path).replace("_embedding.bl2", "_stage1_embedding.bl2"))
+            p3 = Path(str(output_path).replace("_embedding.bl2", "_stage2_embedding.bl2"))
+            if p1.exists() and p2.exists() and p3.exists():
+                try:
+                    blosc2.load_array(p1)
+                    blosc2.load_array(p2)
+                    blosc2.load_array(p3)
+                    print(f"SKIPPING - Embedding already exist: {output_path}")
+                    continue
+                except Exception:
+                    pass
 
             img_path = os.path.join(input_dir, img_file)
             try:

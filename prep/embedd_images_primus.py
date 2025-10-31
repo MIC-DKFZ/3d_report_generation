@@ -385,9 +385,13 @@ def main(args):
                 Path(output_dir) / f"{Path(img_file.replace('nii.gz', '')).stem}_embedding.bl2"
             )
             if os.path.exists(output_path):
-                print(f"SKIPPING - Embedding already exist: {output_path}")
-                continue
-
+                try:
+                    blosc2.load_array(output_path)
+                    print(f"SKIPPING - Embedding already exist: {output_path}")
+                    continue
+                except Exception:
+                    pass
+                
             img_path = os.path.join(input_dir, img_file)
             try:
                 embeddings, affine = process_image_fct(img_path, model, config, device)
