@@ -369,9 +369,6 @@ def main(args):
                     rel_path = os.path.relpath(os.path.join(root, f), input_dir)
                     img_files.append(rel_path)
 
-        # we add this so that we can run multiple times the same script to utilize multiple nodes
-        random.shuffle(img_files)
-
         # Distribute files across GPUs
         my_files = utils.distribute_files(img_files, rank, world_size)
 
