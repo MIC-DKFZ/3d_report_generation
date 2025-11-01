@@ -130,7 +130,7 @@ class UnifiedVLMTrainer:
                 reinit=True,
                 group=f"{type(self.vlm_model).__name__}_run",
                 config=config_dict,
-                id=str(Path(self.cfg.general.output_dir).relative_to(VLM_OUTPUT_DIR)).replace("/", "--")
+                id=f"{str(Path(self.cfg.data.vision_input_path).name)}--{self.cfg.general.run_name}"
             )
 
             # Ensure wandb properly logs hyperparameters in offline mode
@@ -428,6 +428,7 @@ def main():
     vlm_model = vlm_model_class(
         model_cfg=cfg.model,
         vision_input_type=cfg.data.vision_input_type,
+        vision_embed_dim=cfg.data.embed_dim,
         local_files_only=cfg.general.local_files_only
     )
 
@@ -482,7 +483,8 @@ def main():
             do_transforms=cfg.data.do_transforms,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=cfg.data.do_sentence_shuffle
+            do_sentence_shuffle=cfg.data.do_sentence_shuffle,
+            image_id_suffix=cfg.data.image_id_suffix
         )
 
         val_dataset = CTRATEDataset(
@@ -496,7 +498,8 @@ def main():
             do_resize=cfg.data.do_resize,
             embedding_constant=cfg.data.embedding_constant,
             # no transforms for val dataset
-            vision_encoder_patch_size=vision_encoder_patch_size
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            image_id_suffix=cfg.data.image_id_suffix
         )
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")

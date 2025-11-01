@@ -16,10 +16,12 @@ class QwenVLModel(AbstractVLMModel):
         self,
         model_cfg: ModelConfig,
         vision_input_type: str,
-        local_files_only=False,
+        vision_embed_dim: int,
+        local_files_only=False
     ):
         super().__init__(model_cfg=model_cfg,
                          vision_input_type=vision_input_type,
+                         vision_embed_dim=vision_embed_dim,
                          local_files_only=local_files_only)
         self._model_str = "qwen"
         self.batch_count = 0
@@ -56,8 +58,10 @@ class QwenVLModel(AbstractVLMModel):
             torch_dtype=torch.bfloat16
         )
         
-        if self.vision_input_type == VisionInputType.IMAGE:
+        if self.model_cfg.vision_encoder is not None:
             self.model.model.setup_vision_encoder()
+        if self.model_cfg.adapter is not None:
+            self.model.model.setup_vision_adapter(self.vision_embed_dim)
 
         return self.model
 
