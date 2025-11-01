@@ -27,13 +27,13 @@ pip install -e .
      Can point to any directory where results will be stored (e.g., `./results`).  
      The folder structure in the output folder is as follows:  
      ```
-     $VLM_OUTPUT_DIR/<DATASET_NAME>/<VISION_INPUT_FOLDER_NAME>/(<TRAIN_CONFIG_PATH> + '__' + <DATETIME_TAG> + '__' + <UID>)
+     $VLM_OUTPUT_DIR/<DATASET_NAME>/<VISION_INPUT_FOLDER_NAME>/(<TRAIN_CONFIG_PATH> + '__' + <DATETIME_TAG> + '__' + <JOB_ID/UID>)
      ```
 
      **Examples:**  
      Training with `dataset_name=ctrate` and `vision_input_path=/p/scratch/hai_1021/CTRATEv2_LungCrop_1.0x1.0x1.0`:
-     - `run.yml` → `$VLM_OUTPUT_DIR/ctrate/CTRATEv2_LungCrop_1.0x1.0x1.0/run__2025-10-06_20-56-58__DFJI`
-     - `lr_ablation/run.yml` → `$VLM_OUTPUT_DIR/lr_ablation/ctrate/CTRATEv2_LungCrop_1.0x1.0x1.0/lr_ablation/run__2025-10-06_20-56-58__2RF9`
+     - `run.yml` → `$VLM_OUTPUT_DIR/ctrate/CTRATEv2_LungCrop_1.0x1.0x1.0/run__2025-10-06_20-56-58__12733926`
+     - `lr_ablation/run.yml` → `$VLM_OUTPUT_DIR/lr_ablation/ctrate/CTRATEv2_LungCrop_1.0x1.0x1.0/lr_ablation/run__2025-10-06_20-56-58__12733926`
     
 ## Training, Inference & Evaluation
 
@@ -41,8 +41,6 @@ To run a training, execute
 ```
 python train.py --train_config <relative_path_to_config_file>
 ```
-* Current supported model types: "owl" and "qwen"
-* Current supported datasets with embeddings: See [Data Location](#data-location)
 
 ### Start a Run with Config Files
 
@@ -86,7 +84,7 @@ The `EvaluationConfig` manages both the validation callback during training and 
 To enable both during training, set `eval.run_inference` and `eval.run_eval` to `True`.
 More parameters and detailed information can be found in the `EvaluationConfig` class definition.
 
-### Overriding specific fields
+### Overriding Specific Fields
 
 You can also override individual fields in the training configuration directly from the command line (CLI).
 To do this, add a flag that points to the field you want to modify — relative to RunConfig — followed by the new value.
@@ -112,19 +110,44 @@ Additionally, if you group the ablation configurations in a seperate folder, thi
 
 ### Running Experiments on JSC
 
-Example run commands can be found in `_cluster/sweep_launch.sh`. This script internally submits jobs using the `_cluster/vlm_train.sh` sbatch script.
-Any flags you pass to the sbatch command are forwarded directly to train.py. In the provided examples, this is used to specify the dataset configuration via the `--add_base_configs` flag.
-You can also pass any `general`, `model`, `data`, etc. arguments in the same way, these will override the corresponding values in the final configuration.
+Example run commands can be found in `_cluster/sweep_launch.sh`. 
+This script internally submits jobs using the `_cluster/vlm_train.sh` sbatch script.
+Any flags you pass to the sbatch command are forwarded directly to `train.py`. In the provided examples, 
+this is used to specify the dataset configuration via the `--add_base_configs` flag.
+You can also pass any `general`, `model`, `data`, etc. arguments in the same way, 
+these will override the corresponding values in the final configuration ([Overriding Specific Fields](#overriding-specific-fields)).
 
 The example run commands should work out of the box after you configure the SBATCH parameters and update the necessary variables in the section marked `CONFIGURABLE`.
 
-Default configurations: `/p/scratch/hai_1023/rocket_vlm/configs/rocket_default`
+The default configuration directory is located at `/p/scratch/hai_1023/rocket_vlm/configs/rocket_default`.
+Create a copy of the folder next to it to have your own configuration directory.
+
+#### Symlinks for Vision Input Paths
+
+When using different preprocessed datasets or embeddings from various vision encoders, 
+each run should use a distinct `VISION_INPUT_FOLDER_NAME` to ensure that result folders are stored in separate directories.
+The `/p/scratch/hai_1023/rocket_vlm/data/symlinks` directory contains symbolic links to the corresponding image or embedding folders, 
+named clearly to indicate their contents.
+
+The resulting directory structure of `$VLM_OUTPUT_DIR` would look like this:
+
+```
+$VLM_OUTPUT_DIR
+├── amosmm
+│   └── ...
+└── ctrate
+    ├── CTRATEv2_LungCrop_1.0x1.0x1.0_Primus_MAE
+    ├── CTRATEv2_LungCrop_1.0x1.0x1.0_Primus_Contrastive
+    ├── CTRATEv2_LungCrop_1.0x1.0x1.0_ResEncL_MAE
+    └── CTRATEv2_LungCrop_1.0x1.0x1.0_ResEncL_Contrastive 
+```
 
 ---
 
 ### Debug Mode
 
-You can add the `debug.yml` file as a base config, which overrides arguments such as `batch_size` or `save_steps` to debug-friendly values.
+You can add the `debug.yml` file as a base config, which overrides arguments such as `batch_size` or `eval_steps` to debug-friendly values.
+This is very convenient if you want to start a quick test run for a new configuration or after you made changes to the codebase.
 
 **Example run command for debugging:**
 
@@ -135,17 +158,28 @@ python train.py --train_config Qwen_ADAPTER_Qwen.yml \
 
 ---
 
-## Inference
+## 🛠️ TODO: Inference
 To run inference, execute
 ```
 python inference.py --model_type <model_type> --dataset_path <path_to_dataset> --embeddings_path <path_to_embeddings>
 ```
-* Current supported model types: "owl" and "qwen"
+* Current supported model types: "qwen"
+* Current supported datasets with embeddings: See [Data Location](#data-location)
+---
+
+## 🛠️ TODO: Evaluation
+To run evaluation, execute
+```
+python eval.py --model_type <model_type> --dataset_path <path_to_dataset> --embeddings_path <path_to_embeddings>
+```
+* Current supported model types: "qwen"
 * Current supported datasets with embeddings: See [Data Location](#data-location)
 
 ---
 
 ## Data Location
+
+> **TODO:** Update this section regarding new CTRATE paths and train-val-test split numbers.
 
 ### AMOS-MM
 * Dataset path: `/p/scratch/hai_1021/AMOS-MM`
@@ -209,8 +243,14 @@ For dataset json preprocessing (if you want to create the dataset jsons from scr
     from utils import logger
     logger.info("This is an info")
     ```
-* For training and inference, the logs are saved to the `output_dir` as `<yyy>-<mm>-<dd>_<HH>-<MM>-<SS>_train_<uid>.log` (`inference` respectively) 
+* For training, the logs are saved to the `$VLM_OUTPUT_DIR` as `train.log`
 * For logging the loss, a separate logging level is introduced
     ```
     logger.log("LOSS", f"Step: {global_step} | Training Loss: {loss:.5f}")
     ```
+  
+### Logging with DDP
+When using the default `logger` functions under DDP, each rank writes to the log file, producing duplicate entries.  
+Although this may be desirable in some cases, logging is typically handled by the **main rank only**.  
+To only log via the main rank, use the same logging functions with a `_main` suffix, for example, `logger.info_main(...)`.
+For more details, look at the `MainRankLoggingProtocol` at `utils/logging.py`.

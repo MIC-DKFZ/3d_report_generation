@@ -13,6 +13,7 @@ class DataConfig(ConfigBase):
     val_dataset_json_path: str | None = Field(None, description="Path to the validation dataset JSON file.")
     vision_input_path: str | None = Field(None, description="Path to the vision input (either embeddings or images).")
     vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
+    embed_dim: int | None = Field(None, description="Embedding dimension of the embeddings if using embeddings as input.")
 
     answer_types: str | list = Field(..., description="Which answer types and subtypes to include during training.")
 
@@ -27,3 +28,6 @@ class DataConfig(ConfigBase):
     do_resize: bool = Field(False, description="Resize images to 192x192x192 cubes (with lung crops).")
     do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
     do_sentence_shuffle: bool = Field(True, description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.")
+
+    image_id_suffix: str = Field("", description="Add a suffix to the image IDs provided in the dataset JSON. "
+                                                 "WARNING: Only works for CTRATE embeddings.")

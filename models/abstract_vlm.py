@@ -21,8 +21,9 @@ from utils.load_sharded_checkpoint import load_sharded_checkpoint, apply_regex_s
 
 class AbstractVLMModel(ABC):
     def __init__(self,
-                 model_cfg: ModelConfig | None = None,
-                 vision_input_type: str | None = None,
+                 model_cfg: ModelConfig | None,
+                 vision_input_type: str | None,
+                 vision_embed_dim: int,
                  local_files_only=True,
                  device=None):
         self.model: PreTrainedModel | None = None
@@ -31,6 +32,7 @@ class AbstractVLMModel(ABC):
 
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.vision_input_type = vision_input_type
+        self.vision_embed_dim = vision_embed_dim
         self.local_files_only = local_files_only
 
         self.model_cfg = model_cfg
@@ -188,9 +190,12 @@ class AbstractVLMModel(ABC):
 
         from registries.vlm_registry import vlm_registry
         vlm_model_class = vlm_registry[cfg.model.model_type].model_class
-        vlm_model: AbstractVLMModel = vlm_model_class(model_cfg=cfg.model,
-                                vision_input_type=cfg.data.vision_input_type,
-                                local_files_only=cfg.general.local_files_only)
+        vlm_model: AbstractVLMModel = vlm_model_class(
+            model_cfg=cfg.model,
+            vision_input_type=cfg.data.vision_input_type,
+            vision_embed_dim=cfg.data.embed_dim,
+            local_files_only=cfg.general.local_files_only
+        )
         vlm_model.setup_model()
         vlm_model.apply_trainable_config()
         # keys_to_ignore = vlm_model.model._tied_weights_keys

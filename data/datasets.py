@@ -97,7 +97,8 @@ class MedicalImageDataset(Dataset, ABC):
         do_resize=False,
         do_transforms=False,
         vision_encoder_patch_size=None,
-        do_sentence_shuffle=False
+        do_sentence_shuffle=False,
+        image_id_suffix=""
     ):
         super().__init__()
 
@@ -112,6 +113,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.do_transforms = do_transforms
         self.vision_encoder_patch_size = vision_encoder_patch_size
         self.do_sentence_shuffle = do_sentence_shuffle
+        self.image_id_suffix = image_id_suffix
 
         if isinstance(answer_types, str):
             answer_types = [
@@ -410,7 +412,7 @@ class CTRATEDataset(MedicalImageDataset):
             raise ValueError(f"Unknown split: {self.split}")
 
         if self.vision_input_type == VisionInputType.EMBEDDING:
-            return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}_embedding.bl2")
+            return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}{self.image_id_suffix}_embedding.bl2")
         if self.vision_input_type == VisionInputType.IMAGE:
             return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}.b2nd")
         else:
