@@ -63,6 +63,8 @@ class QwenVLModel(AbstractVLMModel):
         if self.model_cfg.adapter is not None:
             self.model.model.setup_vision_adapter(self.vision_embed_dim)
 
+        self.model.post_init()
+
         return self.model
 
     def collate_fn(self, examples):

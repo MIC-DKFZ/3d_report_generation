@@ -41,7 +41,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         self.model_cfg = ModelConfig(**model_cfg)
 
         # Initialize weights and apply final processing
-        self.post_init()
+        # self.post_init()
 
     def setup_vision_adapter(self, vision_embed_dim: int):
         self.vision_adapter = self.model_cfg.adapter.to_adapter(vision_embed_dim=vision_embed_dim, text_embed_dim=2048)
@@ -365,4 +365,4 @@ class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, Gener
         self.model = QwenVLModel3D(config, model_cfg=model_cfg)
         self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
 
-        self.post_init()
+        # self.post_init()
