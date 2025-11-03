@@ -199,9 +199,9 @@ class PrintEvalBatchCallback(TrainerCallback):
             all_results = results
 
         # Handle numeric metric calculation failures indicated by -1
-        for k, lis in results.items():
+        for k, lis in all_results.items():
             if isinstance(lis[0], float) and -1.0 in lis:
-                results[k] = [-1.0] * self.total_size
+                all_results[k] = [-1.0] * self.total_size
                 logger.error(f"Detected failure in calculating {k!r}, set all values to -1 for this metric")
 
         # === Calculate final scores/metrics and log to WandB ===
