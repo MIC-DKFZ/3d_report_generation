@@ -257,3 +257,6 @@ def is_main_process():
 
 def get_process_rank() -> int:
     return int(os.environ.get("RANK", "0"))
+
+def get_local_process_rank() -> int:
+    return int(os.environ.get("LOCAL_RANK", "0"))

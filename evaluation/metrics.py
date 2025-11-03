@@ -1,18 +1,21 @@
+import os
 from abc import ABC, abstractmethod
 
 from evaluation.evaluate_metrics.bleu.bleu import Bleu
 from evaluation.evaluate_metrics.meteor.meteor import Meteor
 from evaluation.evaluate_metrics.rouge.rouge import Rouge
-from utils.helper import get_process_rank, get_random_uid
+from utils.helper import get_local_process_rank
 
 
 class BaseScorer(ABC):
     """
     Base class for all scorers to compute NLP metrics within this VLM framework.
     """
-    def __init__(self):
+    def __init__(self, metric_name: str):
         # Child classes must assign a metric instance here
         self.metric = None
+        self.cache_dir = f"/tmp/HF_METRICS_CACHE"
+        self.experiment_id = f"{metric_name}_{get_local_process_rank()}"
 
     @abstractmethod
     def __call__(self, preds: list[str], gts: list[str], **kwargs) -> list[float]:
@@ -24,9 +27,9 @@ class BaseScorer(ABC):
 
 class BLEUScorer(BaseScorer):
     def __init__(self):
-        super().__init__()
+        super().__init__(metric_name="bleu")
 
-        self.metric = Bleu(experiment_id=f"bleu_{get_process_rank()}_{get_random_uid()}")
+        self.metric = Bleu(cache_dir=self.cache_dir, experiment_id=self.experiment_id)
 
     def __call__(self, preds: list[str], gts: list[str], max_order: int = 4) -> list[float]:
         """
@@ -41,9 +44,9 @@ class BLEUScorer(BaseScorer):
 
 class ROUGELScorer(BaseScorer):
     def __init__(self):
-        super().__init__()
+        super().__init__(metric_name="rougel")
 
-        self.metric = Rouge(experiment_id=f"rougel_{get_process_rank()}_{get_random_uid()}")
+        self.metric = Rouge(cache_dir=self.cache_dir, experiment_id=self.experiment_id)
 
     def __call__(self, preds: list[str], gts: list[str], **kwargs) -> list[float]:
         return self.metric.compute(predictions=preds, references=gts, rouge_types=["rougeL"], use_aggregator=False)["rougeL"]
@@ -51,9 +54,9 @@ class ROUGELScorer(BaseScorer):
 
 class METEORScorer(BaseScorer):
     def __init__(self):
-        super().__init__()
+        super().__init__(metric_name="meteor")
 
-        self.metric = Meteor(experiment_id=f"meteor_{get_process_rank()}_{get_random_uid()}")
+        self.metric = Meteor(cache_dir=self.cache_dir, experiment_id=self.experiment_id)
 
     def __call__(self, preds: list[str], gts: list[str], max_order: int = 4) -> list[float]:
         """

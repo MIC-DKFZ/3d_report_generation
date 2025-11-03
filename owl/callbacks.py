@@ -19,7 +19,7 @@ from utils.regex_patterns import VQA_ANSWER_PATTERN
 class PrintEvalBatchCallback(TrainerCallback):
     def __init__(
         self, eval_dataloader: DataLoader, task_type: Literal["VQA", "RG"], max_new_tokens: int,
-            tokenizer=None, processor=None, eval_every_n_epochs=0.25, print_first_sample=True, log_n_per_callback=10,
+            tokenizer=None, processor=None, eval_every_n_epochs=0.25, print_first_sample=True, log_n_per_callback=5,
             is_distributed=False
     ):
         self.eval_dataloader = eval_dataloader
