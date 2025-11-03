@@ -198,14 +198,15 @@ class PrintEvalBatchCallback(TrainerCallback):
         else:
             all_results = results
 
-        # Handle numeric metric calculation failures indicated by -1
-        for k, lis in all_results.items():
-            if isinstance(lis[0], float) and -1.0 in lis:
-                all_results[k] = [-1.0] * self.total_size
-                logger.error(f"Detected failure in calculating {k!r}, set all values to -1 for this metric")
-
         # === Calculate final scores/metrics and log to WandB ===
         if state.is_world_process_zero:
+
+            # Handle numeric metric calculation failures indicated by -1
+            for k, lis in all_results.items():
+                if isinstance(lis[0], float) and -1.0 in lis:
+                    all_results[k] = [-1.0] * self.total_size
+                    logger.error(f"Detected failure in calculating {k!r}, set all values to -1 for this metric")
+
             if self.task_type == "VQA":
                 n_correct_qa = sum(all_results["n_correct_qa"])
                 accuracy = n_correct_qa / self.total_size
