@@ -67,7 +67,11 @@ def main(args):
                 print(p)
                 final_config_path = p.parent.parent / "final_config.yml"
                 eval_paths[p] = final_config_path
-    metrics_list = ["CRG Score", "F1", "Accuracy", "Precision", "Recall", "CIDEr", "ROUGE-L", "ROUGE-L (HF)", "BLEU-1", "BLEU-1 (HF)", "BLEU-2", "BLEU-2 (HF)", "BLEU-3", "BLEU-3 (HF)", "BLEU-4", "BLEU-4 (HF)", "BLEU (mean)", "BLEU (mean) (HF)", "METEOR", "METEOR (HF)"]
+    clinical_metrics = ["CRG Score", "F1", "Accuracy", "Precision", "Recall"]
+    nlg_metrics = ["CIDEr", "ROUGE-L", "ROUGE-L (HF)", "BLEU-1", "BLEU-1 (HF)", "BLEU-2", "BLEU-2 (HF)", "BLEU-3", "BLEU-3 (HF)", "BLEU-4", "BLEU-4 (HF)", "BLEU (mean)", "BLEU (mean) (HF)", "METEOR", "METEOR (HF)"]
+    nlg_metrics_mean = ["CIDEr", "ROUGE-L", "BLEU (mean)", "METEOR"]
+    metrics_list = clinical_metrics + nlg_metrics
+    # metrics_list = ["CRG Score", "F1", "Accuracy", "Precision", "Recall", "CIDEr", "ROUGE-L", "ROUGE-L (HF)", "BLEU-1", "BLEU-1 (HF)", "BLEU-2", "BLEU-2 (HF)", "BLEU-3", "BLEU-3 (HF)", "BLEU-4", "BLEU-4 (HF)", "BLEU (mean)", "BLEU (mean) (HF)", "METEOR", "METEOR (HF)"]
     results_df = pd.DataFrame(columns=[*args.config_keys, *metrics_list])
     for inference_path, config_path in eval_paths.items():
         result = {}
@@ -81,7 +85,19 @@ def main(args):
         result["BLEU (mean) (HF)"] = (result["BLEU-1 (HF)"] + result["BLEU-2 (HF)"] + result["BLEU-3 (HF)"] + result["BLEU-4 (HF)"]) / 4
         result = pd.Series(result)
         results_df = pd.concat([results_df, result.to_frame().T], ignore_index=True)
+    
     results_df.to_csv(iter_dir / "aggregated_results.csv", index=False)
+    results_df_rank = results_df.copy()
+    for metric in metrics_list:
+        results_df_rank[metric] = results_df_rank[metric].rank(ascending=False)
+    # results_df_rank["Mean Rank"] = results_df_rank[metrics_list].mean(axis=1)
+    results_df_rank["Mean Clinical"] = results_df_rank[clinical_metrics].mean(axis=1)
+    results_df_rank["Mean NLG"] = results_df_rank[nlg_metrics_mean].mean(axis=1)
+    metrics_mean = clinical_metrics + nlg_metrics_mean
+    results_df_rank["Mean Rank"] = results_df_rank[metrics_mean].mean(axis=1)
+    
+    results_df_rank.sort_values("Mean Rank", inplace=True)
+    results_df_rank.to_csv(iter_dir / "aggregated_results_rank.csv", index=False)
 
 
 if __name__ == "__main__":
