@@ -143,8 +143,9 @@ def main(args):
         csv_results["pred"].append(dic["output_text_clean"])
         csv_results["gt"].append(dic["answer"])
 
-    pred_chunks = chunkify(csv_results["pred"], num_chunks=num_processes)
-    gt_chunks = chunkify(csv_results["gt"], num_chunks=num_processes)
+    preds, gts = csv_results["pred"], csv_results["gt"]
+    pred_chunks = chunkify(preds, num_chunks=num_processes)
+    gt_chunks = chunkify(gts, num_chunks=num_processes)
 
     if task_type == "VQA":
         eval_func = eval_vqa
