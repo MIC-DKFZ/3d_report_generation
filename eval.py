@@ -1,5 +1,6 @@
 import argparse
 import multiprocessing
+import random
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -7,6 +8,7 @@ from utils import logger
 from evaluation.metrics import BLEUScorer, ROUGELScorer, METEORScorer
 from utils.helper import chunkify, add_datetime_tag
 from utils.load_and_save_files import load_json, save_json
+import matplotlib.pyplot as plt
 import numpy as np
 import csv
 
@@ -48,6 +50,51 @@ def eval_report_generation(preds: list, gts: list) -> dict[str, list] | None:
         logger.error(f"ROUGE-L score calculation failed: {e}")
         results["rougel"] = [-1.0]  # use -1 to indicate error
     return results
+
+def compare_report_subset(preds: list, output_dir: str | Path, num_pairs: int = 500) -> None:
+    """
+    Calculate pairwise BLEU-4 scores for `num_pairs` prediction pairs to assess
+    whether the model is producing overly similar (template-like) reports.
+    """
+    if len(preds) < num_pairs * 2:
+        num_pairs = len(preds) // 2
+
+    logger.info_main(f"Calculating the BLEU-4 score for {num_pairs} prediction pairs...")
+
+    bleu_scorer = BLEUScorer()
+
+    indices = list(range(len(preds)))
+    random.seed(42)
+    subset_indices = random.sample(indices, num_pairs*2)
+
+    preds_subset = []
+    for idx in subset_indices:
+        preds_subset.append(preds[idx])
+
+    try:
+        scores = bleu_scorer(preds=preds_subset[:num_pairs], gts=preds_subset[num_pairs:], max_order=4)
+        mean_score = np.mean(scores)
+    except Exception as e:
+        logger.error(f"BLEU score calculation failed: {e}")
+        logger.error(f"Skipping subset comparison.")
+        return
+
+    logger.info_main(f"Mean BLEU-4 score of {num_pairs} prediction pairs: {mean_score:.4f}")
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.set_title(f"BLEU-4 Score Distribution of {num_pairs} Prediction Pairs\nMean Score = {mean_score:.4f}")
+
+    ax.hist(scores, bins=30, edgecolor='black')
+
+    ax.set_xlabel("BLEU-4 Score")
+    ax.set_ylabel("Frequency")
+
+    output_path = Path(output_dir) / "bleu_score_histogram.png"
+    plt.savefig(output_path, bbox_inches='tight')
+
+    plt.close(fig)
+    logger.info_main(f"Histogram saved to {output_path}")
+
 
 def eval_vqa(preds: list, gts: list) -> dict[str, list] | None:
     assert len(preds) == len(gts)
@@ -143,12 +190,14 @@ def main(args):
         csv_results["pred"].append(dic["output_text_clean"])
         csv_results["gt"].append(dic["answer"])
 
-    pred_chunks = chunkify(csv_results["pred"], num_chunks=num_processes)
-    gt_chunks = chunkify(csv_results["gt"], num_chunks=num_processes)
+    preds, gts = csv_results["pred"], csv_results["gt"]
+    pred_chunks = chunkify(preds, num_chunks=num_processes)
+    gt_chunks = chunkify(gts, num_chunks=num_processes)
 
     if task_type == "VQA":
         eval_func = eval_vqa
     elif task_type == "RG":
+        compare_report_subset(preds, inference_dir, num_pairs=500)
         eval_func = eval_report_generation
     else:
         raise ValueError(f"Unknown task type: {task_type}")
