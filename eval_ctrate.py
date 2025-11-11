@@ -1,34 +1,51 @@
-import argparse
 
 import os
+from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import Union
 
 
-def main(results_path: Path, gt_report_csv_path: Path, output_dir: Union[Path, None] = None):
-    if output_dir is None:
-        print(f"Output directory not specified. Using default: {results_path.parent}")
-        output_dir = results_path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    os.system(
-        f"bash reportgen_evaluation/test.sh -o {output_dir} -p {results_path} -g {gt_report_csv_path}"
+def parse_args() -> Namespace:
+    parser = ArgumentParser(description="Evaluate NLG metrics for CTRate")
+    parser.add_argument(
+        "-r", "--results_directory", type=str, required=True, help="Results directory path to iterate over"
     )
+    parser.add_argument("--juwels_mount", type=str, default=None, help="Path to Juwels mount point. If not set, assumes local results.")
+    parser.add_argument("--train_validation", type=str, default="train", choices=["train", "validation"], help="Whether to use train or val reports as ground truth.")
+    args = parser.parse_args()
+    args.results_directory = Path(args.results_directory)
+    if args.juwels_mount:
+        args.juwels_mount = Path(args.juwels_mount)
+    return args
 
+def main_cli():
+    args = parse_args()
+    main(args)
+
+def main(args):
+    if args.juwels_mount:
+        if args.results_directory.is_absolute():
+            results_directory = Path(str(args.results_directory)[1:])
+        else:
+            results_directory = args.results_directory
+        iter_dir = args.juwels_mount / results_directory
+    else:
+        iter_dir = args.results_directory
+    eval_paths = []
+    for p in iter_dir.rglob("*"):
+        if p.is_dir() and p.name == "inference":
+            if (p / "inference_results.json").exists() and not (p / "metrics.json").exists():
+                if args.juwels_mount:
+                    rel_path = "/" / p.relative_to(args.juwels_mount)
+                    eval_paths.append(rel_path)
+                else:
+                    eval_paths.append(p)
+    gt_report_csv_path = Path(f"reportgen_evaluation/ctrate/data/radiology_text_reports/{args.train_validation}_reports.csv")
+    print("Running evaluation on\n", [str(e) for e in eval_paths])
+    for eval_path in eval_paths:
+        command = f"bash reportgen_evaluation/ctrate/test.sh -p {eval_path / 'inference_results.json'} -o {eval_path}  -g {gt_report_csv_path}"
+        if args.juwels_mount:
+            command += " -j"
+        os.system(command)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="VLM Evaluation")
-    parser.add_argument(
-        "--results_path", type=Path, required=True, help="Directory of inference results"
-    )
-    parser.add_argument(
-        "--gt_report_csv_path", type=Path, required=True, help="Path to ground truth report CSV"
-    )
-    parser.add_argument("--output_dir", type=Path, help="Directory to save evaluation outputs")
-    args = parser.parse_args()
-
-    main(
-        results_path=args.results_path,
-        gt_report_csv_path=args.gt_report_csv_path,
-        output_dir=args.output_dir,
-    )
+    main_cli()

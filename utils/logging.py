@@ -94,7 +94,7 @@ def _build_main_rank_logger(_level: str):
     is_main = int(os.environ.get("RANK", "0")) == 0  # is_main_process() -> circular import
     def _log_main(msg, *a, **kw):
         if is_main:
-            getattr(loguru_logger, _level)(msg, *a, **kw)
+            loguru_logger.opt(depth=1).log(_level.upper(), msg, *a, **kw)
     return _log_main
 
 for level in ["info", "warning", "error"]:

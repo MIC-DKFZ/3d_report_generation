@@ -16,7 +16,7 @@ class QwenVLModel(AbstractVLMModel):
         vision_input_type: str,
         vision_embed_dim: int,
         text_only: bool,
-        local_files_only: bool = False,
+        local_files_only: bool = False
     ):
         super().__init__(model_cfg=model_cfg,
                          vision_input_type=vision_input_type,
@@ -51,11 +51,11 @@ class QwenVLModel(AbstractVLMModel):
         )
 
         model: QwenVLModel3D = self.model.model
-        if self.model_cfg.trainable_params.vision_encoder is not None:
+        if self.model_cfg.vision_encoder is not None:
             model.setup_vision_encoder()
             self.downsample_factor = model.vision_encoder.downsample_factor
-        if self.model_cfg.trainable_params.adapter is not None:
-            model.setup_adapter()
+        if self.model_cfg.adapter is not None:
+            model.setup_vision_adapter()
             self.vision_adapter = model.vision_adapter
 
         self.processor = QwenVLProcessor3D.from_pretrained(

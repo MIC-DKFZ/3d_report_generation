@@ -13,10 +13,12 @@ from models.abstract_vlm import AbstractVLMModel
 from utils import logger
 from utils.ddp_utils import setup_ddp, gather_inference_outputs
 from utils.filter_batch import extract_batch_prompt_only
-from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir, seed_everything
+from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir, seed_everything, \
+    merge_config_with_cli_args
 from utils.load_and_save_files import load_json, save_json
 from utils.logging import setup_logger, log_banner
 from utils.vision_input_type import VisionInputType
+from eval import main as eval_main
 
 
 class UnifiedVLMInference:
@@ -187,57 +189,6 @@ def parse_args() -> Namespace:
         default="final",
         help="When using --run_dir, choose which checkpoint to load: 'best_metric', 'best' or 'final'."
     )
-    parser.add_argument(
-        "--dataset_json",
-        type=str,
-        default=None,
-        help="Path to the dataset JSON file to run inference on."
-    )
-    parser.add_argument(
-        "--split",
-        type=str,
-        choices=["val", "test"],
-        default="val",
-        help="The split to run inference on."
-    )
-    parser.add_argument(
-        "--n_samples",
-        type=int,
-        default=None,
-        help="Number of samples. Run all if 'None'."
-    )
-    parser.add_argument(
-        "--max_new_tokens",
-        type=int,
-        default=640,
-        help="Maximum number of new tokens to generate."
-    )
-    parser.add_argument(
-        "--per_device_batch_size",
-        type=int,
-        default=64,
-        help="The batch size per device to run inference with."
-    )
-    parser.add_argument(
-        "--num_dataloader_workers",
-        type=int,
-        default=4,
-        help="Number of subprocesses per device to use for data loading."
-    )
-
-    # Needed if inference is run in another environment
-    parser.add_argument(
-        "--vision_encoder_path",
-        type=str,
-        default=None,
-        help="Path to the vision encoder checkpoint."
-    )
-    parser.add_argument(
-        "--vision_input_path",
-        type=str,
-        default=None,
-        help="Path to the vision input directory."
-    )
 
     args, _ = parser.parse_known_args()
     return args
@@ -248,13 +199,13 @@ def main_cli():
     main(args)
 
 
-def main(args):
+def main(args, is_main=True):
     seed_everything(42)  # Set a random seed for reproducibility
 
     if args.run_dir:
         run_dir = Path(args.run_dir)
 
-        # If 'run_dir' does not exit, search for it in the output directory.
+        # If 'run_dir' does not exist, search for it in the output directory.
         if not run_dir.is_dir():
             run_dir = find_run_dir_in_output_dir(str(run_dir))
 
@@ -263,21 +214,10 @@ def main(args):
         ckpt_dir = args.checkpoint_dir
         vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
 
-    if args.dataset_json is not None:
-        dataset_json_path = args.dataset_json
-        if not Path(args.dataset_json).is_file():
-            raise FileNotFoundError(f"The specified dataset JSON file does not exist: {dataset_json_path}")
-    else:
-        if args.split == "test":
-            raise ValueError("The 'dataset_json' has to be specified if 'split=test'")
-        else:   # if args.split == "val"
-            # fall back to the val dataset JSON from the config_file if none is provided
-            dataset_json_path = cfg.data.val_dataset_json_path
-
-    if args.vision_encoder_path:
-        cfg.model.vision_encoder.vision_encoder_path = args.vision_encoder_path
-    if args.vision_input_path:
-        cfg.data.vision_input_path = args.vision_input_path
+    if is_main:  # we don't want to merge args if this was called by train.py
+        cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")
+        cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
+        cfg.eval = merge_config_with_cli_args(cfg.eval, parent_key="eval")
 
     inference_output_dir = Path(ckpt_dir, "inference")
 
@@ -291,16 +231,16 @@ def main(args):
     else:
         vision_encoder_patch_size = None
 
-    logger.info_main(f"Using {args.split} split for inference.")
+    logger.info_main(f"Using {cfg.eval.split} split for inference.")
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
-            dataset_json_path=dataset_json_path,
+            dataset_json_path=cfg.eval.dataset_json_path,
             model_type=cfg.model.model_type,
-            split=args.split,
+            split=cfg.eval.split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             answer_types=cfg.data.answer_types,
-            n_samples=args.n_samples,  # Limit the validation set size
+            n_samples=cfg.eval.n_samples,  # Limit the validation set size
             do_resize=cfg.data.do_resize,
             do_transforms=False,
             text_only=cfg.data.text_only,
@@ -310,19 +250,20 @@ def main(args):
         )
     elif cfg.data.dataset_name == "ctrate":
         test_dataset = CTRATEDataset(
-            dataset_json_path=dataset_json_path,
+            dataset_json_path=cfg.eval.dataset_json_path,
             model_type=cfg.model.model_type,
-            split=args.split,
+            split=cfg.eval.split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             answer_types=cfg.data.answer_types,
-            n_samples=args.n_samples,  # Limit the validation set size
+            n_samples=cfg.eval.n_samples,  # Limit the validation set size
             do_resize=cfg.data.do_resize,
             do_transforms=False,
             text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=False
+            do_sentence_shuffle=False,
+            image_id_suffix=cfg.data.image_id_suffix
         )
     else:
         raise ValueError(f"Unsupported dataset name: {cfg.data.dataset_name}")
@@ -335,13 +276,21 @@ def main(args):
 
     # Create inference object and run inference
     inference = UnifiedVLMInference(vlm_model, cfg=cfg, output_dir=inference_output_dir,
-                                    per_device_batch_size=args.per_device_batch_size,
-                                    num_dataloader_workers=args.num_dataloader_workers,
-                                    max_new_tokens=args.max_new_tokens)
+                                    per_device_batch_size=cfg.eval.per_device_batch_size,
+                                    num_dataloader_workers=cfg.eval.num_dataloader_workers,
+                                    max_new_tokens=cfg.eval.max_new_tokens)
 
     inference.inference(test_dataset)
+    logger.remove()
 
-    return ckpt_dir
+    if cfg.eval.run_eval and is_main_process():
+        eval_args = argparse.Namespace(
+            task_type="RG" if cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
+            checkpoint_dir=ckpt_dir,
+            num_processes=cfg.eval.num_eval_processes
+        )
+        eval_main(eval_args)
+
 
 if __name__ == "__main__":
     main_cli()

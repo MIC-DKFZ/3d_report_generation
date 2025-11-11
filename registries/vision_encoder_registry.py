@@ -1,7 +1,7 @@
-from prep.evavit import PretrainedEvaEncFromEvaMAE
+# from prep.evavit import PretrainedEvaEncFromEvaMAE
 
 
 vision_encoder_registry: dict[str, type] = {
-    "evamae": PretrainedEvaEncFromEvaMAE
+    # "evamae": PretrainedEvaEncFromEvaMAE
 }
 

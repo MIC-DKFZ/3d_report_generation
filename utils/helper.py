@@ -57,6 +57,23 @@ def load_config_file(config_path: str | Path) -> dict:
     return config_file
 
 
+def get_config_from_plans(plans_file_path):
+    # see here https://git.dkfz.de/mic/personal/group4/culrich/nnunet_finetuning/-/blob/fine_tuning_rocket/nnunetv2/training/nnUNetTrainer/variants/pretraining/eva_pretrained.py?ref_type=heads#L167
+
+    plans = load_json(plans_file_path)
+    pretrained_config = plans['configurations']['3d_fullres']
+
+    config = {
+        # "vit_patch_size": pretrained_config['vit_patch_size'],
+        "patch_embed_size": pretrained_config['vit_patch_size'],
+        "input_shape": pretrained_config['patch_size'],
+        "embed_dim": pretrained_config['embed_dim'],
+        "encoder_eva_depth": pretrained_config['encoder_eva_depth'],
+        "encoder_eva_numheads": pretrained_config['encoder_eva_numheads'],
+    }
+    return config
+
+
 def add_datetime_tag(s: str, sep: str = "__") -> str:
     return datetime.now().strftime(f"{s}{sep}%Y-%m-%d_%H-%M-%S")
 
@@ -240,3 +257,6 @@ def is_main_process():
 
 def get_process_rank() -> int:
     return int(os.environ.get("RANK", "0"))
+
+def get_local_process_rank() -> int:
+    return int(os.environ.get("LOCAL_RANK", "0"))

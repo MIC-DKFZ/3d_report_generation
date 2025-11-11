@@ -18,7 +18,7 @@ from transformers.utils import (
 )
 
 from configs.model.model_config import ModelConfig
-from prep.evavit import get_config_from_plans
+from utils.helper import get_config_from_plans
 from registries.vision_encoder_registry import vision_encoder_registry
 from utils import logger
 
@@ -32,8 +32,8 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
     def __init__(self, config, model_cfg: dict, vision_embed_dim: int):
         # we need to replace Qwen25VL init because it inits 'visual'
         Qwen2_5_VLPreTrainedModel.__init__(self, config)
-        self.vision_encoder = None  # init in self.setup_vision_encoder()
         self.vision_adapter = None  # init in self.setup_vision_adapter()
+        self.vision_encoder = None  # init in self.setup_vision_encoder()
         self.language_model = Qwen2_5_VLTextModel._from_config(config.text_config)
         self.rope_deltas = None     # cache rope_deltas here
 
@@ -44,6 +44,12 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
 
         # Initialize weights and apply final processing
         # self.post_init()
+
+    def setup_vision_adapter(self):
+        self.vision_adapter = self.model_cfg.adapter.to_adapter(
+            vision_embed_dim=self.vision_embed_dim,
+            text_embed_dim=self.text_embed_dim
+        )
 
     def setup_vision_encoder(self):
         vision_encoder_path = self.model_cfg.vision_encoder.vision_encoder_path
@@ -62,12 +68,6 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         vision_encoder_class = vision_encoder_registry[self.model_cfg.vision_encoder.type]
         self.vision_encoder = vision_encoder_class(
             input_channels=1, output_channels=1, pretrained_weights_file=checkpoint_path, **config
-        )
-
-    def setup_adapter(self):
-        self.vision_adapter = self.model_cfg.adapter.to_adapter(
-            vision_embed_dim=self.vision_embed_dim,
-            text_embed_dim=self.text_embed_dim
         )
 
     def get_rope_index(

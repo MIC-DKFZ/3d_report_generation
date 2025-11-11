@@ -200,11 +200,13 @@ class AbstractVLMModel(ABC):
 
         from registries.vlm_registry import vlm_registry
         vlm_model_class = vlm_registry[cfg.model.model_type].model_class
-        vlm_model: AbstractVLMModel = vlm_model_class(model_cfg=cfg.model,
-                                vision_input_type=cfg.data.vision_input_type,
-                                vision_embed_dim=cfg.get_vision_embed_dim(),
-                                text_only=cfg.data.text_only,
-                                local_files_only=cfg.general.local_files_only)
+        vlm_model: AbstractVLMModel = vlm_model_class(
+            model_cfg=cfg.model,
+            vision_input_type=cfg.data.vision_input_type,
+            vision_embed_dim=cfg.get_vision_embed_dim(),
+            text_only=cfg.data.text_only,
+            local_files_only=cfg.general.local_files_only
+        )
         vlm_model.setup_model()
         vlm_model.apply_trainable_config()
         # keys_to_ignore = vlm_model.model._tied_weights_keys

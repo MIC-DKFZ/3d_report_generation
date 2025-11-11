@@ -14,7 +14,6 @@ from configs.run_config import RunConfig
 from data.datasets import AMOSMMDataset, CTRATEDataset
 from evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
-from eval import main as eval_main
 from models.abstract_vlm import AbstractVLMModel
 from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from registries.vlm_registry import vlm_registry
@@ -35,7 +34,8 @@ from utils.memory_utils import (
     log_memory_usage,
     setup_memory_efficient_training,
 )
-from utils.paths import VLM_CONFIG_DIR, VLM_OUTPUT_DIR
+from utils.paths import VLM_CONFIG_DIR
+from utils.vision_input_type import VisionInputType
 
 
 class UnifiedVLMTrainer:
@@ -129,7 +129,7 @@ class UnifiedVLMTrainer:
                 reinit=True,
                 group=f"{type(self.vlm_model).__name__}_run",
                 config=config_dict,
-                id=str(Path(self.cfg.general.output_dir).relative_to(VLM_OUTPUT_DIR)).replace("/", "--")
+                id=f"{str(Path(self.cfg.data.vision_input_path).name)}--{self.cfg.general.run_name}"
             )
 
             # Ensure wandb properly logs hyperparameters in offline mode
@@ -485,7 +485,8 @@ def main():
             text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=cfg.data.do_sentence_shuffle
+            do_sentence_shuffle=cfg.data.do_sentence_shuffle,
+            image_id_suffix=cfg.data.image_id_suffix
         )
 
         val_dataset = CTRATEDataset(
@@ -500,7 +501,8 @@ def main():
             text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             # no transforms for val dataset
-            vision_encoder_patch_size=vision_encoder_patch_size
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            image_id_suffix=cfg.data.image_id_suffix
         )
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
@@ -527,28 +529,9 @@ def main():
     if cfg.eval.run_inference:
         inference_args = argparse.Namespace(
             run_dir=cfg.general.output_dir,
-            mode="final",
-            dataset_json=cfg.eval.dataset_json_path,    # if none is provided and split='val'
-            split=cfg.eval.split,                       # the validation set is used, refer to
-                                                        # 'RunConfig.set_default_eval_dataset_json_path()'
-                                                        # for more details
-            n_samples=cfg.eval.n_samples,
-            max_new_tokens=cfg.eval.max_new_tokens,
-            per_device_batch_size = cfg.eval.per_device_batch_size,
-            num_dataloader_workers = cfg.eval.num_dataloader_workers,
-            vision_encoder_path = None,
-            vision_input_path = None
+            mode="final"
         )
-        ckpt_dir = inference_main(inference_args)
-        logger.remove()
-
-        if cfg.eval.run_eval and is_main_process():
-            eval_args = argparse.Namespace(
-                task_type="RG" if cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
-                checkpoint_dir=ckpt_dir,
-                num_processes=cfg.eval.num_eval_processes
-            )
-            eval_main(eval_args)
+        inference_main(inference_args, is_main=False)
 
 
 if __name__ == "__main__":

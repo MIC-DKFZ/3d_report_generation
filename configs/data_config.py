@@ -34,6 +34,9 @@ class DataConfig(ConfigBase):
     do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
     do_sentence_shuffle: bool = Field(True, description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.")
 
+    image_id_suffix: str = Field("", description="Add a suffix to the image IDs provided in the dataset JSON. "
+                                                 "WARNING: Only works for CTRATE embeddings.")
+
     @model_validator(mode="after")
     def validate_vision_input_modifiers(self):
         if self.text_only and self.embedding_constant is not None:
