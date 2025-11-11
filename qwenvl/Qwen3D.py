@@ -157,10 +157,10 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
                     #     video_grid_thw[video_index][2],
                     # )
                     llm_grid_t, llm_grid_h, llm_grid_w = video_grid_thw[video_index]
-                    if second_per_grid_ts is not None:
-                        second_per_grid_t = second_per_grid_ts[video_index]
-                    else:
-                        second_per_grid_t = 1.0
+                    # if second_per_grid_ts is not None:
+                    #     second_per_grid_t = second_per_grid_ts[video_index]
+                    # else:
+                    #     second_per_grid_t = 1.0
                     video_index += 1
                     remain_videos -= 1
                     ed = ed_video
@@ -179,11 +179,12 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
                     expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
 
                     ## normalize type, send to device.
-                    second_per_grid_t = torch.as_tensor(
-                        second_per_grid_t, dtype=range_tensor.dtype, device=range_tensor.device
-                    )
+                    # second_per_grid_t = torch.as_tensor(
+                    #     second_per_grid_t, dtype=range_tensor.dtype, device=range_tensor.device
+                    # )
 
-                    time_tensor = expanded_range * second_per_grid_t * self.config.vision_config.tokens_per_second
+                    # time_tensor = expanded_range * second_per_grid_t * self.config.vision_config.tokens_per_second
+                    time_tensor = expanded_range
 
                     time_tensor_long = time_tensor.long()
                     t_index = time_tensor_long.flatten()
