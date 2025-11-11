@@ -14,6 +14,8 @@ class DataConfig(ConfigBase):
     vision_input_path: str | None = Field(None, description="Path to the vision input (either embeddings or images).")
     vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
 
+    embed_dim: int | None = Field(None, description="Embedding dimension when using embeddings as input (e.g. 864).")
+
     answer_types: str | list = Field(..., description="Which answer types and subtypes to include during training.")
 
     text_only: bool = Field(
@@ -36,4 +38,10 @@ class DataConfig(ConfigBase):
     def validate_vision_input_modifiers(self):
         if self.text_only and self.embedding_constant is not None:
             raise ValueError(f"'text_only' and 'embedding_constant' cannot be used together.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_embed_dim_for_embedding_input(self):
+        if self.vision_input_type == VisionInputType.EMBEDDING and self.embed_dim is None:
+            raise ValueError("'embed_dim' must be specified when 'vision_input_type' is 'embedding'.")
         return self

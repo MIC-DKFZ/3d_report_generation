@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -7,20 +5,20 @@ from torch.nn.utils.rnn import pad_sequence
 from transformers.activations import QuickGELUActivation
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2RMSNorm
 
+from adapters.grid_adapters.base import GridAdapter
 
-class QwenAdapter(nn.Module):
+
+class QwenAdapter(GridAdapter):
     def __init__(
         self,
         vision_embed_dim: int,
         text_embed_dim: int,
-        reduce_block: Tuple[int, int, int] = (2, 2, 2),
+        reduce_block: tuple[int, int, int]
     ):
-        super().__init__()
+        super().__init__(vision_embed_dim=vision_embed_dim, text_embed_dim=text_embed_dim, reduce_block=reduce_block)
         self.reduce_block = reduce_block
-
-        print(reduce_block)
-        input_size = vision_embed_dim * reduce_block[0] * reduce_block[1] * reduce_block[2]
-        hidden_size = vision_embed_dim * min(8, reduce_block[0] * reduce_block[1] * reduce_block[2]) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
+        input_size = self.vision_embed_dim * reduce_block[0] * reduce_block[1] * reduce_block[2]
+        hidden_size = self.vision_embed_dim * min(8, reduce_block[0] * reduce_block[1] * reduce_block[2]) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
         # the linear layer still can become too large for large blocks greater than 8cube. In such cases better use pooling?!
         self.ln_q = Qwen2RMSNorm(input_size, eps=1e-6)
         self.adapter = nn.Sequential(
@@ -29,10 +27,10 @@ class QwenAdapter(nn.Module):
                 hidden_size,
             ),
             nn.GELU(),
-            nn.Linear(hidden_size, text_embed_dim)
+            nn.Linear(hidden_size, self.text_embed_dim)
         )
 
-    def forward(self, x, video_grid_thw):
+    def forward(self, x: torch.Tensor, adapter_args: dict):
         # Convert input to float first
         x = x.to(torch.bfloat16)
 
@@ -40,13 +38,9 @@ class QwenAdapter(nn.Module):
         batch_size= x.shape[0]
         embedding_dim = x.shape[1]
 
-
-        if x.ndim == 3: # this is the case if we load embeddings
+        if x.ndim == 3:  # if flattened tensor (from VE, not loaded embed), restructure to original grid
+            video_grid_thw = adapter_args["video_grid_thw"]
             x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
-            #x = x.permute(0, 2, 3, 4, 1)  # Move embedding_dim to last dimension
-
-
-        # TODO how to handle cases where each image has different size i.e. video_grid_thw has size (B, 3) and this only works for B==1?
 
         # Use unfold to create reduce_block
         x = x.unfold(2, self.reduce_block[0], self.reduce_block[0])
@@ -86,7 +80,7 @@ class QwenAdapterHeterogeneous(nn.Module):
         self,
         vision_embed_dim: int,
         text_embed_dim: int,
-        reduce_block: Tuple[int, int, int] = (2, 2, 2),
+        reduce_block: tuple[int, int, int]
     ):
         """
         Args:
@@ -110,8 +104,8 @@ class QwenAdapterHeterogeneous(nn.Module):
         )
 
     def forward(
-        self, x: torch.Tensor, video_grid_thw: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self, x: torch.Tensor, video_grid_thw: torch.Tensor, **kwargs
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass for heterogeneous batch.
 

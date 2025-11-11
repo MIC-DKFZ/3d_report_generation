@@ -69,6 +69,22 @@ class RunConfig(ConfigBase):
             )
         return self
 
+    def get_vision_embed_dim(self) -> int:
+        """
+        Resolve the vision embedding dimension based on the input source.
+
+        When the vision input type is 'image', the embedding dimension is determined
+        by the vision encoder configuration (cfg.model.vision_encoder.embed_dim).
+        When precomputed image embeddings are used ('embedding'), the embedding dimension is
+        taken from the data configuration (cfg.data.embed_dim).
+        """
+        if self.data.vision_input_type == VisionInputType.IMAGE:
+            return self.model.vision_encoder.embed_dim
+        elif self.data.vision_input_type == VisionInputType.EMBEDDING:
+            return self.data.embed_dim
+        else:
+            raise ValueError(f"Unsupported vision input type: {self.cfg.model.vision_input_type}")
+
     def maybe_reset_vision_related_specific_args(self):
         """
         When using embeddings or using text-only inputs, reset vision-related-specific arguments:

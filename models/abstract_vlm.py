@@ -16,29 +16,34 @@ from configs.run_config import RunConfig
 from utils import logger
 from utils.helper import getattr_nested, setattr_nested, resolve_ckpt_dir_in_run_dir
 from utils.load_and_save_files import load_yaml
-from utils.load_sharded_checkpoint import load_sharded_checkpoint, apply_regex_subs, assert_keys_equality
+from utils.load_sharded_checkpoint import load_sharded_checkpoint, apply_regex_subs
 
 
 class AbstractVLMModel(ABC):
     def __init__(self,
-                 model_cfg: ModelConfig | None = None,
-                 vision_input_type: str | None = None,
+                 model_cfg: ModelConfig,
+                 vision_input_type: str,
+                 vision_embed_dim: int,
                  text_only: bool = False,
                  local_files_only=True,
                  device=None):
+        # init in setup_model()
         self.model: PreTrainedModel | None = None
         self.tokenizer = None
         self.processor = None
+        self.downsample_factor = None
+        self.vision_adapter = None
 
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.vision_input_type = vision_input_type
+        self.vision_embed_dim = vision_embed_dim
         self.text_only = text_only
         self.local_files_only = local_files_only
 
         self.model_cfg = model_cfg
 
     @abstractmethod
-    def setup_model(self):
+    def setup_model(self, **kwargs):
         """
         Initialize the model, tokenizer, and processor.
         """
@@ -197,6 +202,7 @@ class AbstractVLMModel(ABC):
         vlm_model_class = vlm_registry[cfg.model.model_type].model_class
         vlm_model: AbstractVLMModel = vlm_model_class(model_cfg=cfg.model,
                                 vision_input_type=cfg.data.vision_input_type,
+                                vision_embed_dim=cfg.get_vision_embed_dim(),
                                 text_only=cfg.data.text_only,
                                 local_files_only=cfg.general.local_files_only)
         vlm_model.setup_model()

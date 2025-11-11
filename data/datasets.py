@@ -169,7 +169,10 @@ class MedicalImageDataset(Dataset, ABC):
             vision_input = np.array(blosc2.open(urlpath=vision_input_path, mode='r', dparams=dparams, **mmap_kwargs))
 
         elif str(vision_input_path).endswith(".bl2"):
+            # remove batch dimension
             vision_input = blosc2.load_array(vision_input_path)
+            if vision_input.ndim == 5 and vision_input.shape[0] == 1:
+                vision_input = vision_input.squeeze(0)
             
         elif str(vision_input_path).endswith(".nrrd"):     
             vision_input, header = nrrd.read(vision_input_path)

@@ -1,12 +1,10 @@
 import os
 import torch
-import transformers
-
+import numpy as np
 from configs.model.model_config import ModelConfig
 from qwenvl.processing_3d import QwenVLProcessor3D
-from qwenvl.Qwen3D import QwenVLForConditionalGeneration3D
+from qwenvl.Qwen3D import QwenVLForConditionalGeneration3D, QwenVLModel3D
 from utils.filter_batch import extract_raw_samples_from_batch
-from utils.vision_input_type import VisionInputType
 
 from .abstract_vlm import AbstractVLMModel
 
@@ -16,12 +14,14 @@ class QwenVLModel(AbstractVLMModel):
         self,
         model_cfg: ModelConfig,
         vision_input_type: str,
+        vision_embed_dim: int,
         text_only: bool,
         local_files_only: bool = False,
     ):
         super().__init__(model_cfg=model_cfg,
                          vision_input_type=vision_input_type,
                          text_only=text_only,
+                         vision_embed_dim=vision_embed_dim,
                          local_files_only=local_files_only)
         self._model_str = "qwen"
         self.batch_count = 0
@@ -36,32 +36,35 @@ class QwenVLModel(AbstractVLMModel):
         }
 
     def setup_model(self):
-        """Initialize model, processor and PEFT configuration"""
+        """Initialize model, processor and tokenizer"""
 
         if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
             cache_dir = os.getenv("HF_HUB_CACHE")
         else:
             cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
 
-        self.processor = QwenVLProcessor3D.from_pretrained(
-            self.model_cfg.model_id,
-            cache_dir=cache_dir,
-            local_files_only=self.local_files_only,
-            reduce_block=self.model_cfg.adapter.reduce_block,
-            vision_input_type=self.vision_input_type
-        )
-        self.tokenizer = self.processor.tokenizer
-
         self.model = QwenVLForConditionalGeneration3D.from_pretrained(
             self.model_cfg.model_id,
             model_cfg=self.model_cfg.model_dump(),
+            vision_embed_dim=self.vision_embed_dim,
             torch_dtype=torch.bfloat16
         )
-        
+
+        model: QwenVLModel3D = self.model.model
         if self.model_cfg.trainable_params.vision_encoder is not None:
-            self.model.model.setup_vision_encoder()
+            model.setup_vision_encoder()
+            self.downsample_factor = model.vision_encoder.downsample_factor
         if self.model_cfg.trainable_params.adapter is not None:
-            self.model.model.setup_adapter()
+            model.setup_adapter()
+            self.vision_adapter = model.vision_adapter
+
+        self.processor = QwenVLProcessor3D.from_pretrained(
+            self.model_cfg.model_id,
+            cache_dir=cache_dir
+        )
+        self.tokenizer = self.processor.tokenizer
+
+        self.model.post_init()
 
         return self.model
 
@@ -76,17 +79,26 @@ class QwenVLModel(AbstractVLMModel):
             for example in examples
         ]
 
+        vision_inputs = None
+        num_vision_tokens, vision_position_ids, adapter_args = None, None, {}
+
         if not self.text_only:
             vision_inputs = [
                 example["vision_input"]
                 for example in examples
             ]
-        else:
-            vision_inputs = None
+            num_vision_tokens, vision_position_ids, adapter_args = self.vision_adapter.get_adapter_args(
+                vision_inputs,
+                self.vision_input_type,
+                downsample_factor=self.downsample_factor
+            )
+
+            # This only works if we use homogenous image inputs!
+            vision_inputs = torch.from_numpy(np.stack(vision_inputs))
 
         batch = self.processor(
             text=texts,
-            vision_inputs=vision_inputs,
+            num_vision_tokens=num_vision_tokens,
             return_tensors="pt",
             padding=True,
             padding_side="right"
@@ -94,7 +106,7 @@ class QwenVLModel(AbstractVLMModel):
 
         batch_prompt_only = self.processor(
             text=texts_prompt_only,
-            vision_inputs=vision_inputs,
+            num_vision_tokens=num_vision_tokens,
             return_tensors="pt",
             padding=True,
             padding_side="left"
@@ -131,17 +143,12 @@ class QwenVLModel(AbstractVLMModel):
             "attention_mask": batch["attention_mask"],
             "attention_mask_prompt_only": batch_prompt_only["attention_mask"],
             "labels": labels,
+            "pixel_values_videos": vision_inputs,
             "batch_count": self.batch_count,
             "raw_samples": raw_samples,
+            "vision_position_ids": vision_position_ids,
+            "adapter_args": adapter_args
         }
-        if vision_inputs is not None:
-            batch_out.update(
-                {
-                    "pixel_values_videos": batch["pixel_values_videos"],
-                    "video_grid_thw": batch["video_grid_thw"]
-                }
-            )
-        batch_out = transformers.BatchFeature(batch_out)
         self.batch_count += 1
         return batch_out
 

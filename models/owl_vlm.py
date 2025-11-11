@@ -18,7 +18,7 @@ class OwlVLModel(AbstractVLMModel):
         checkpoint_path=None,
         output_dir="owl-vlm",
         vision_dim=864,
-        embed_dim=896,
+        vision_embed_dim=896,
         # the following are not used
         reduce_block=[2,2,2],
         train_vision_encoder=False,
@@ -29,7 +29,7 @@ class OwlVLModel(AbstractVLMModel):
         self._model_str = "owl"  # Used for logging and evaluation
         self.output_dir = output_dir
         self.vision_dim = vision_dim
-        self.embed_dim = embed_dim
+        self.embed_dim = vision_embed_dim
         self.batch_count = 0
         self.checkpoint_path = checkpoint_path
 

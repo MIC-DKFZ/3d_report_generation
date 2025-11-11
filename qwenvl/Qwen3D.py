@@ -3,7 +3,6 @@ from typing import Optional, Union
 
 import torch
 from torch import nn
-from transformers.cache_utils import Cache
 from transformers.generation import GenerationMixin
 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
@@ -11,11 +10,11 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLModel,
     Qwen2_5_VLModelOutputWithPast,
     Qwen2_5_VLPreTrainedModel,
-    Qwen2_5_VLTextModel, KwargsForCausalLM,
+    Qwen2_5_VLTextModel, KwargsForCausalLM, Qwen2_5_VLCausalLMOutputWithPast,
 )
 from transformers.processing_utils import Unpack
 from transformers.utils import (
-    is_torchdynamo_compiling,
+    is_torchdynamo_compiling, can_return_tuple,
 )
 
 from configs.model.model_config import ModelConfig
@@ -30,7 +29,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
     config: Qwen2_5_VLConfig
     _no_split_modules = ["Qwen2_5_VLDecoderLayer", "Qwen2_5_VLVisionBlock"]
 
-    def __init__(self, config, model_cfg: dict):
+    def __init__(self, config, model_cfg: dict, vision_embed_dim: int):
         # we need to replace Qwen25VL init because it inits 'visual'
         Qwen2_5_VLPreTrainedModel.__init__(self, config)
         self.vision_encoder = None  # init in self.setup_vision_encoder()
@@ -40,8 +39,11 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
 
         self.model_cfg = ModelConfig(**model_cfg)
 
+        self.vision_embed_dim = vision_embed_dim
+        self.text_embed_dim: int = config.hidden_size
+
         # Initialize weights and apply final processing
-        self.post_init()
+        # self.post_init()
 
     def setup_vision_encoder(self):
         vision_encoder_path = self.model_cfg.vision_encoder.vision_encoder_path
@@ -63,40 +65,21 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         )
 
     def setup_adapter(self):
-        self.vision_adapter = self.model_cfg.adapter.to_adapter(vision_embed_dim=864, text_embed_dim=2048)
+        self.vision_adapter = self.model_cfg.adapter.to_adapter(
+            vision_embed_dim=self.vision_embed_dim,
+            text_embed_dim=self.text_embed_dim
+        )
 
     def get_rope_index(
         self,
         input_ids: Optional[torch.LongTensor] = None,
-        image_grid_thw: Optional[torch.LongTensor] = None,
-        video_grid_thw: Optional[torch.LongTensor] = None,
-        second_per_grid_ts: Optional[torch.Tensor] = None,
+        vision_position_ids: Optional[list[torch.Tensor]] = None,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         From 'Qwen2_5_VLModel.get_rope_index' adjusted to our usage.
 
         Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
-
-        Args:
-            input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
-                Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you provide
-                it.
-            image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
-                The temporal, height and width of feature shape of each image in LLM.
-            video_grid_thw (`torch.LongTensor` of shape `(num_videos, 3)`, *optional*):
-                The temporal, height and width of feature shape of each video in LLM.
-            second_per_grid_ts (`torch.Tensor` of shape `(num_videos)`, *optional*):
-                The time interval (in seconds) for each grid along the temporal dimension in the 3D position IDs.
-            attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
-                Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
-
-                - 1 for tokens that are **not masked**,
-                - 0 for tokens that are **masked**.
-
-        Returns:
-            position_ids (`torch.LongTensor` of shape `(3, batch_size, sequence_length)`)
-            mrope_position_deltas (`torch.Tensor` of shape `(batch_size)`)
         """
         # spatial_merge_size = self.config.vision_config.spatial_merge_size
         # image_token_id = self.config.image_token_id
@@ -104,7 +87,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         vision_start_token_id = self.config.vision_start_token_id
         mrope_position_deltas = []
         # if input_ids is not None and (image_grid_thw is not None or video_grid_thw is not None): #
-        if input_ids is not None and video_grid_thw is not None:
+        if input_ids is not None:
             total_input_ids = input_ids
             if attention_mask is None:
                 attention_mask = torch.ones_like(total_input_ids)
@@ -131,67 +114,50 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
                 # for _ in range(image_nums + video_nums): #
                 remain_videos = video_nums
                 for _ in range(video_nums):
-                    # if image_token_id in input_tokens and remain_images > 0: #
-                    #     ed_image = input_tokens.index(image_token_id, st) #
-                    # else:
-                    #     ed_image = len(input_tokens) + 1
                     if video_token_id in input_tokens and remain_videos > 0:
                         ed_video = input_tokens.index(video_token_id, st)
                     else:
                         ed_video = len(input_tokens) + 1
-                    # if ed_image < ed_video: #
-                    #     t, h, w = (
-                    #         image_grid_thw[image_index][0],
-                    #         image_grid_thw[image_index][1],
-                    #         image_grid_thw[image_index][2],
-                    #     )
-                    #     second_per_grid_t = 0
-                    #     image_index += 1
-                    #     # remain_images -= 1
-                    #     ed = ed_image
-                    #
+
+                    # if second_per_grid_ts is not None:
+                    #     second_per_grid_t = second_per_grid_ts[video_index]
                     # else:
-                    # t, h, w = (
-                    #     video_grid_thw[video_index][0],
-                    #     video_grid_thw[video_index][1],
-                    #     video_grid_thw[video_index][2],
-                    # )
-                    llm_grid_t, llm_grid_h, llm_grid_w = video_grid_thw[video_index]
-                    if second_per_grid_ts is not None:
-                        second_per_grid_t = second_per_grid_ts[video_index]
-                    else:
-                        second_per_grid_t = 1.0
-                    video_index += 1
-                    remain_videos -= 1
+                    #     second_per_grid_t = 1.0
+                    # video_index += 1
+                    # remain_videos -= 1
                     ed = ed_video
 
-                    # llm_grid_t, llm_grid_h, llm_grid_w = (
-                    #     t.item(),
-                    #     h.item() // spatial_merge_size,
-                    #     w.item() // spatial_merge_size,
-                    # )
                     text_len = ed - st
-
                     st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
                     llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
 
-                    range_tensor = torch.arange(llm_grid_t).view(-1, 1)
-                    expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
+                    # llm_grid_t, llm_grid_h, llm_grid_w = adapter_args["video_grid_thw"][video_index]
+                    #
+                    # range_tensor = torch.arange(llm_grid_t).view(-1, 1)
+                    # expanded_range = range_tensor.expand(-1, llm_grid_h * llm_grid_w)
+                    #
+                    # ## normalize type, send to device.
+                    # second_per_grid_t = torch.as_tensor(
+                    #     second_per_grid_t, dtype=range_tensor.dtype, device=range_tensor.device
+                    # )
+                    #
+                    # # time_tensor = expanded_range * second_per_grid_t * self.config.vision_config.tokens_per_second
+                    # time_tensor = expanded_range * second_per_grid_t * 1
+                    #
+                    # time_tensor_long = time_tensor.long()
+                    # t_index = time_tensor_long.flatten()
+                    #
+                    # h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
+                    # w_index = torch.arange(llm_grid_w).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
+                    # llm_pos_ids_list.append(torch.stack([t_index, h_index, w_index]) + text_len + st_idx)
+                    # st = ed + llm_grid_t * llm_grid_h * llm_grid_w
 
-                    ## normalize type, send to device.
-                    second_per_grid_t = torch.as_tensor(
-                        second_per_grid_t, dtype=range_tensor.dtype, device=range_tensor.device
-                    )
+                    current_vision_position_ids = vision_position_ids[video_index].to("cpu")
+                    llm_pos_ids_list.append(current_vision_position_ids + text_len + st_idx)
+                    st = ed + current_vision_position_ids.shape[1]
 
-                    time_tensor = expanded_range * second_per_grid_t * self.config.vision_config.tokens_per_second
-
-                    time_tensor_long = time_tensor.long()
-                    t_index = time_tensor_long.flatten()
-
-                    h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
-                    w_index = torch.arange(llm_grid_w).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
-                    llm_pos_ids_list.append(torch.stack([t_index, h_index, w_index]) + text_len + st_idx)
-                    st = ed + llm_grid_t * llm_grid_h * llm_grid_w
+                    video_index += 1
+                    remain_videos -= 1
 
                 if st < len(input_tokens):
                     st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
@@ -242,6 +208,10 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         rope_deltas: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
         second_per_grid_ts: Optional[torch.Tensor] = None,
+
+        vision_position_ids: Optional[list[torch.Tensor]] = None,
+        adapter_args: Optional[dict] = None,
+
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[tuple, Qwen2_5_VLModelOutputWithPast]:
         r"""
@@ -269,9 +239,9 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
                 # Only these lines are different from the original Qwen2_5_VLModel
                 video_embeds = pixel_values_videos
                 if self.vision_encoder is not None:
-                    video_embeds = self.vision_encoder(video_embeds.unsqueeze(1))
+                    video_embeds = self.vision_encoder(video_embeds)
                 if self.vision_adapter is not None:
-                    video_embeds = self.vision_adapter(video_embeds, video_grid_thw)  # TODO switch to adapter kwargs
+                    video_embeds = self.vision_adapter(video_embeds, adapter_args)
                 video_embeds = video_embeds.view(-1, video_embeds.shape[-1])  # Flatten to (total_features, embed_dim)
                 ##########
                 n_video_tokens = (input_ids == self.config.video_token_id).sum()
@@ -304,9 +274,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
             if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
                 position_ids, rope_deltas = self.get_rope_index(
                     input_ids,
-                    image_grid_thw,
-                    video_grid_thw,
-                    second_per_grid_ts=second_per_grid_ts,
+                    vision_position_ids,
                     attention_mask=attention_mask,
                 )
                 self.rope_deltas = rope_deltas
@@ -357,9 +325,86 @@ class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, Gener
     }
     _tied_weights_keys = ["lm_head.weight"]
 
-    def __init__(self, config, model_cfg: dict):
+    def __init__(self, config, model_cfg: dict, vision_embed_dim: int):
         super().__init__(config)
-        self.model = QwenVLModel3D(config, model_cfg=model_cfg)
+        self.model = QwenVLModel3D(config, model_cfg=model_cfg, vision_embed_dim=vision_embed_dim)
         self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
 
-        self.post_init()
+        # self.post_init()
+
+    @can_return_tuple
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[list[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        pixel_values: Optional[torch.Tensor] = None,
+        pixel_values_videos: Optional[torch.FloatTensor] = None,
+        image_grid_thw: Optional[torch.LongTensor] = None,
+        video_grid_thw: Optional[torch.LongTensor] = None,
+        rope_deltas: Optional[torch.LongTensor] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        second_per_grid_ts: Optional[torch.Tensor] = None,
+
+        vision_position_ids: Optional[list[torch.Tensor]] = None,
+        adapter_args: Optional[dict] = None,
+
+        **kwargs: Unpack[KwargsForCausalLM],
+    ) -> Union[tuple, Qwen2_5_VLCausalLMOutputWithPast]:
+        """
+        Our additional forward kwargs 'vision_position_ids' and 'adapter_kwargs' are passed on via the kwargs argument,
+        so we wouldn't have to override this function. However, the GenerationMixin._validate_model_kwargs() function
+        looks for unused forward arguments by inspecting the signature of this forward function, hence we add
+        'vision_position_ids' and 'adapter_kwargs' to the function signature.
+        """
+
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+
+        outputs = self.model(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            pixel_values_videos=pixel_values_videos,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            second_per_grid_ts=second_per_grid_ts,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+            cache_position=cache_position,
+
+            vision_position_ids=vision_position_ids,
+            adapter_args=adapter_args,
+
+            **kwargs,
+        )
+
+        hidden_states = outputs[0]
+        logits = self.lm_head(hidden_states)
+
+        loss = None
+        if labels is not None:
+            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size)
+
+        return Qwen2_5_VLCausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+            rope_deltas=outputs.rope_deltas,
+        )
+

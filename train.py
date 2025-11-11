@@ -28,7 +28,7 @@ from utils.helper import (
     print_model_parameters,
     seed_everything,
 )
-from utils.load_and_save_files import load_json, save_json, save_yaml
+from utils.load_and_save_files import save_json, save_yaml
 from utils.logging import setup_logger, log_banner
 from utils.memory_utils import (
     aggressive_cleanup,
@@ -36,7 +36,6 @@ from utils.memory_utils import (
     setup_memory_efficient_training,
 )
 from utils.paths import VLM_CONFIG_DIR, VLM_OUTPUT_DIR
-from utils.vision_input_type import VisionInputType
 
 
 class UnifiedVLMTrainer:
@@ -100,7 +99,7 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training Setup")
 
-        # Setup base model with quantization config if applicable
+        # Setup model, processor and tokenizer
         model = self.vlm_model.setup_model()
 
         # Apply trainable parameter configs and possibly add PEFT adapter layers
@@ -428,13 +427,13 @@ def main():
     vlm_model = vlm_model_class(
         model_cfg=cfg.model,
         vision_input_type=cfg.data.vision_input_type,
+        vision_embed_dim=cfg.get_vision_embed_dim(),
         text_only=cfg.data.text_only,
         local_files_only=cfg.general.local_files_only
     )
 
-    if cfg.data.vision_input_type == VisionInputType.IMAGE:
-        ve_plans = load_json(Path(cfg.model.vision_encoder.vision_encoder_path, "plans.json"))
-        vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+    if cfg.model.vision_encoder:
+        vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
     else:
         vision_encoder_patch_size = None
 
