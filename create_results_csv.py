@@ -9,6 +9,7 @@ METRICS_DICT = {
     "CRG Score": ("metrics.json", ["crg", "CRG"]),
     "F1": ("metrics.json", ["classification", "macro", "f1"]),
     "Accuracy": ("metrics.json", ["classification", "macro", "accuracy"]),
+    "Balanced Accuracy": ("metrics.json", ["classification", "macro", "balanced_accuracy"]),
     "Precision": ("metrics.json", ["classification", "macro", "precision"]),
     "Recall": ("metrics.json", ["classification", "macro", "recall"]),
     "CIDEr": ("metrics.json", ["generation", "CIDEr"]),
@@ -67,11 +68,11 @@ def main(args):
                 print(p)
                 final_config_path = p.parent.parent / "final_config.yml"
                 eval_paths[p] = final_config_path
-    clinical_metrics = ["CRG Score", "F1", "Accuracy", "Precision", "Recall"]
+    clinical_metrics = ["CRG Score", "F1", "Accuracy", "Balanced Accuracy", "Precision", "Recall"]
     nlg_metrics = ["CIDEr", "ROUGE-L", "ROUGE-L (HF)", "BLEU-1", "BLEU-1 (HF)", "BLEU-2", "BLEU-2 (HF)", "BLEU-3", "BLEU-3 (HF)", "BLEU-4", "BLEU-4 (HF)", "BLEU (mean)", "BLEU (mean) (HF)", "METEOR", "METEOR (HF)"]
     nlg_metrics_mean = ["CIDEr", "ROUGE-L", "BLEU (mean)", "METEOR"]
     metrics_list = clinical_metrics + nlg_metrics
-    # metrics_list = ["CRG Score", "F1", "Accuracy", "Precision", "Recall", "CIDEr", "ROUGE-L", "ROUGE-L (HF)", "BLEU-1", "BLEU-1 (HF)", "BLEU-2", "BLEU-2 (HF)", "BLEU-3", "BLEU-3 (HF)", "BLEU-4", "BLEU-4 (HF)", "BLEU (mean)", "BLEU (mean) (HF)", "METEOR", "METEOR (HF)"]
+    # metrics_list = ["CRG Score", "F1", "Accuracy", "Balanced Accuracy", "Precision", "Recall", "CIDEr", "ROUGE-L", "ROUGE-L (HF)", "BLEU-1", "BLEU-1 (HF)", "BLEU-2", "BLEU-2 (HF)", "BLEU-3", "BLEU-3 (HF)", "BLEU-4", "BLEU-4 (HF)", "BLEU (mean)", "BLEU (mean) (HF)", "METEOR", "METEOR (HF)"]
     results_df = pd.DataFrame(columns=[*args.config_keys, *metrics_list])
     for inference_path, config_path in eval_paths.items():
         result = {}
