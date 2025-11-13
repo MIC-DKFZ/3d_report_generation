@@ -6,6 +6,12 @@ from utils.helper import get_trainable_state_dict
 
 class VLMSFTTrainer(SFTTrainer):
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # This flag is typically True by default.
+        # For some reason, this can result in the training loss not being normalized by the batch size.
+        self.model_accepts_loss_kwargs = False
+
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         """
         Only save trainable parameters with 'requires_grad=True'.
