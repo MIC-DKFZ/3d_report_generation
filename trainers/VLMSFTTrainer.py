@@ -1,7 +1,9 @@
 from typing import Optional
 from transformers.modeling_utils import unwrap_model
+from transformers.trainer_pt_utils import get_parameter_names
 from trl import SFTTrainer
 from utils.helper import get_trainable_state_dict
+import torch.nn as nn
 
 
 class VLMSFTTrainer(SFTTrainer):
@@ -25,3 +27,12 @@ class VLMSFTTrainer(SFTTrainer):
 
         if self.args.should_save:
             self._save(output_dir, trainable_state_dict)
+
+    def get_decay_parameter_names(self, model) -> list[str]:
+        forbidden_name_patterns = [
+            r"bias", r"layernorm", r"rmsnorm", r"(?:^|\.)norm(?:$|\.)", r"_norm(?:$|\.)",
+            # Add LoRA layers and the token embedding layer (which is also the LM head) to forbidden name patterns.
+            "lora", "embed_tokens", "lm_head"
+        ]
+        decay_parameters = get_parameter_names(model, [nn.LayerNorm], forbidden_name_patterns)
+        return decay_parameters

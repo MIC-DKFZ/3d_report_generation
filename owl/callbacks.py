@@ -38,20 +38,20 @@ class PrintEvalBatchCallback(TrainerCallback):
         self.is_distributed = is_distributed
 
         # Only create wandb table if wandb is initialized (i.e., on main process)
-        if wandb.run is not None and is_main_process():
-            columns = [
-                "Epoch",
-                "Sample Index",
-                "Generated Output",
-                "Ground Truth"
-            ]
-            if self.task_type == "VQA":
-                columns += [
-                    "Answer Pred",
-                    "Answer GT"
-                ]
-            self.eval_table = wandb.Table(columns=columns, log_mode="MUTABLE")
-            logger.info_main(f"Created an eval table with the following columns: {columns}")
+        # if wandb.run is not None and is_main_process():
+        #     columns = [
+        #         "Epoch",
+        #         "Sample Index",
+        #         "Generated Output",
+        #         "Ground Truth"
+        #     ]
+        #     if self.task_type == "VQA":
+        #         columns += [
+        #             "Answer Pred",
+        #             "Answer GT"
+        #         ]
+        #     self.eval_table = wandb.Table(columns=columns, log_mode="MUTABLE")
+        #     logger.info_main(f"Created an eval table with the following columns: {columns}")
 
         self.processor = processor
 
@@ -112,16 +112,16 @@ class PrintEvalBatchCallback(TrainerCallback):
                 del outputs
                 torch.cuda.empty_cache()  # Clear CUDA cache periodically
 
-                if self.print_first_sample:
-                    logger.error_main(f"First batch sample GROUNDTRUTH:\n{decoded_gts[0]}")
-                    logger.error_main(f"First batch sample PREDICTION:\n{decoded_preds[0]}")
-
                 decoded_gt_assistant_answers = [decoded_gt.split("assistant\n")[-1].strip() for decoded_gt in decoded_gts]
                 decoded_pred_assistant_answers = [decoded_output.split("assistant\n")[-1].strip() for decoded_output in decoded_preds]
 
                 # store predictions and ground truths
                 preds.extend(decoded_pred_assistant_answers)
                 gts.extend(decoded_gt_assistant_answers)
+
+        if self.print_first_sample:
+            logger.error_main(f"First sample GROUNDTRUTH:\n{decoded_pred_assistant_answers[0]}")
+            logger.error_main(f"First sample PREDICTION:\n{decoded_gt_assistant_answers[0]}")
 
         # Synchronize all distributed processes to keep logging output aligned
         if self.is_distributed:
@@ -254,21 +254,21 @@ class PrintEvalBatchCallback(TrainerCallback):
                 raise ValueError(f"Unsupported task_type: {self.task_type}")
 
             # === Log 'self.log_n_per_callback' number of cases to the WandB eval table ===
-            for idx in range(0, self.total_size, self.total_size // self.log_n_per_callback):
-                table_data = [
-                    state.epoch,
-                    idx,
-                    all_results["preds"][idx],
-                    all_results["gts"][idx]
-                ]
-                if self.task_type == "VQA":
-                    table_data += [
-                        all_results["answer_preds"][idx],
-                        all_results["answer_gts"][idx]
-                    ]
-                self.eval_table.add_data(*table_data)
-
-            wandb.log({"eval_table": self.eval_table})
+            # for idx in range(0, self.total_size, self.total_size // self.log_n_per_callback):
+            #     table_data = [
+            #         state.epoch,
+            #         idx,
+            #         all_results["preds"][idx],
+            #         all_results["gts"][idx]
+            #     ]
+            #     if self.task_type == "VQA":
+            #         table_data += [
+            #             all_results["answer_preds"][idx],
+            #             all_results["answer_gts"][idx]
+            #         ]
+            #     self.eval_table.add_data(*table_data)
+            #
+            # wandb.log({"eval_table": self.eval_table})
 
         # Ensure that main process finishes writing before continuing
         if self.is_distributed:
