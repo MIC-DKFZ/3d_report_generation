@@ -98,6 +98,7 @@ class MedicalImageDataset(Dataset, ABC):
         do_transforms=False,
         vision_encoder_patch_size=None,
         do_sentence_shuffle=False,
+        sentence_shuffle_p=None,
         image_id_suffix=""
     ):
         super().__init__()
@@ -113,6 +114,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.do_transforms = do_transforms
         self.vision_encoder_patch_size = vision_encoder_patch_size
         self.do_sentence_shuffle = do_sentence_shuffle
+        self.sentence_shuffle_p = sentence_shuffle_p
         self.image_id_suffix = image_id_suffix
 
         if isinstance(answer_types, str):
@@ -231,8 +233,6 @@ class MedicalImageDataset(Dataset, ABC):
 
         if self.do_sentence_shuffle:
             result["question"], result["full_answer"] = self.shuffle_sentences(result["question"], result["full_answer"])
-        else:
-            result["full_answer"] = result["full_answer"]
 
         formatted_qa, formatted_qa_prompt_only = format_into_message(
                 result["question"],
@@ -418,7 +418,7 @@ class CTRATEDataset(MedicalImageDataset):
         else:
             raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
         
-    def shuffle_sentences(self, question: str, answer: str, p: float = 0.5) -> tuple[str, str]:
+    def shuffle_sentences(self, question: str, answer: str) -> tuple[str, str]:
         """
         Randomly shuffle sentences within Findings and Impression sections separately
         """
@@ -440,7 +440,7 @@ class CTRATEDataset(MedicalImageDataset):
             # Shuffle sentences in content sections
             elif part.strip():
                 sentences = re.split(r'(?<=[.!?])\s+', part.strip())
-                if len(sentences) > 1 and random.uniform(0, 1) < p:
+                if len(sentences) > 1 and random.uniform(0, 1) < self.sentence_shuffle_p:
                     random.shuffle(sentences)
                     result.append(' ' + ' '.join(sentences))
                 else:

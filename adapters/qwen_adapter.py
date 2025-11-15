@@ -22,7 +22,7 @@ class QwenAdapter(nn.Module):
         input_size = embedding_dim * reduce_block[0] * reduce_block[1] * reduce_block[2]
         hidden_size = embedding_dim * min(8, reduce_block[0] * reduce_block[1] * reduce_block[2]) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
         # the linear layer still can become too large for large blocks greater than 8cube. In such cases better use pooling?!
-        self.ln_q = Qwen2RMSNorm(input_size, eps=1e-6)
+        self.rmsnorm = Qwen2RMSNorm(input_size, eps=1e-6)
         self.adapter = nn.Sequential(
             nn.Linear(
                 input_size,
@@ -67,7 +67,7 @@ class QwenAdapter(nn.Module):
 
         # Process through adapter
         # x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
-        x = self.ln_q(x)
+        x = self.rmsnorm(x)
         x = self.adapter(x)
 
         return x

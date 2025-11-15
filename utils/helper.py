@@ -9,6 +9,7 @@ from typing import Any, Literal, TypeVar
 import numpy as np
 import torch
 import torch.nn as nn
+import transformers.trainer
 from pydantic import BaseModel
 from transformers.trainer import TRAINER_STATE_NAME
 
@@ -218,6 +219,31 @@ def print_model_parameters(model: nn.Module, file=None, width=120, **kwargs):
     print("\n" + "=" * width)
     print(f"{'End of model parameter listing':^{width}}")
     print("=" * width + "\n")
+
+
+def print_param_groups(trainer: transformers.trainer.Trainer, file=None):
+    """Prints optmizer param groups to stdout and optionally to a file."""
+
+    def _out(text=""):
+        print(text)
+        if file is not None:
+            print(text, file=file)
+
+    trainer.create_optimizer()
+    optimizer = trainer.optimizer
+
+    # Build a mapping: param -> name
+    param_to_name = {p: n for n, p in trainer.model.named_parameters()}
+
+    for i, param_group in enumerate(optimizer.param_groups):
+        _out(f"\n=== Param group {i} ===")
+        _out(f"Learning rate : {param_group.get('lr')}")
+        _out(f"Weight decay  : {param_group['weight_decay']}")
+        _out("Parameters:")
+
+        for p in param_group["params"]:
+            name = param_to_name.get(p, "<unnamed>")
+            _out(f"  - {name}   shape={tuple(p.shape)}")
 
 
 def get_trainable_state_dict(model: nn.Module):
