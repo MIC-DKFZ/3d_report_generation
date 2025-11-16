@@ -244,7 +244,7 @@ def main(args, is_main=True):
     # if args.vision_input_path:
     #     cfg.data.vision_input_path = args.vision_input_path
 
-    inference_output_dir = Path(ckpt_dir, "inference" + args.inference_dir_suffix)
+    inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "inference_dir_suffix", ""))
 
     log_file_name = add_datetime_tag("inference") + ".log"
     log_file_path = Path(inference_output_dir, log_file_name)
