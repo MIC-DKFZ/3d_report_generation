@@ -4,16 +4,16 @@ import random
 import re
 from collections import defaultdict
 from pathlib import Path
-from utils import logger
-from evaluation.metrics import BLEUScorer, ROUGELScorer, METEORScorer
-from utils.helper import chunkify, add_datetime_tag
-from utils.load_and_save_files import load_json, save_json
+from vlm.utils import logger
+from vlm.evaluation.metrics import BLEUScorer, ROUGELScorer, METEORScorer
+from vlm.utils.helper import add_datetime_tag, chunkify
+from vlm.utils.load_and_save_files import load_json, save_json
 import matplotlib.pyplot as plt
 import numpy as np
 import csv
 
-from utils.logging import setup_logger, log_banner
-from utils.regex_patterns import VQA_ANSWER_PATTERN
+from vlm.utils.logging import setup_logger, log_banner
+from vlm.utils.regex_patterns import VQA_ANSWER_PATTERN
 
 
 def eval_report_generation(preds: list, gts: list) -> dict[str, list] | None:

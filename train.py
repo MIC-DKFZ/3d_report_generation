@@ -10,31 +10,26 @@ from torch.utils.data import DataLoader
 from trl import SFTConfig
 
 import wandb
-from configs.run_config import RunConfig
-from data.datasets import AMOSMMDataset, CTRATEDataset
-from evaluation.eval_distributed_sampler import EvalDistributedSampler
+from vlm.configs.run_config import RunConfig
+from vlm.data.datasets import AMOSMMDataset, CTRATEDataset
+from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
-from models.abstract_vlm import AbstractVLMModel
-from training.callbacks import LossLoggingCallback, PrintEvalBatchCallback
-from training.trainers import VLMSFTTrainer
-from registries.vlm_registry import vlm_registry
-from utils import logger
-from utils.ddp_utils import setup_ddp
-from utils.helper import (
-    is_main_process,
-    load_config_file,
-    merge_config_with_cli_args,
-    print_model_parameters,
-    seed_everything,
-)
-from utils.load_and_save_files import save_json, save_yaml
-from utils.logging import setup_logger, log_banner
-from utils.memory_utils import (
+from vlm.models.abstract_vlm import AbstractVLMModel
+from vlm.training.callbacks import LossLoggingCallback, PrintEvalBatchCallback
+from vlm.training.trainers import VLMSFTTrainer
+from vlm.registries import vlm_registry
+from vlm.utils import logger
+from vlm.utils.ddp_utils import setup_ddp
+from vlm.utils.helper import seed_everything, merge_config_with_cli_args, load_config_file, print_model_parameters, \
+    is_main_process
+from vlm.utils.load_and_save_files import save_json, save_yaml
+from vlm.utils.logging import setup_logger, log_banner
+from vlm.utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
     setup_memory_efficient_training,
 )
-from utils.paths import VLM_CONFIG_DIR
+from vlm.utils.paths import VLM_CONFIG_DIR
 
 
 class UnifiedVLMTrainer:

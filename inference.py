@@ -6,19 +6,19 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
-from configs.run_config import RunConfig
-from data.datasets import AMOSMMDataset, CTRATEDataset
-from evaluation.eval_distributed_sampler import EvalDistributedSampler
-from models.abstract_vlm import AbstractVLMModel
-from utils import logger
-from utils.ddp_utils import setup_ddp, gather_inference_outputs
-from utils.filter_batch import extract_batch_prompt_only
-from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir, seed_everything, \
-    merge_config_with_cli_args
-from utils.load_and_save_files import load_json, save_json
-from utils.logging import setup_logger, log_banner
-from utils.vision_input_type import VisionInputType
+from vlm.configs.run_config import RunConfig
+from vlm.data.datasets import AMOSMMDataset, CTRATEDataset
+from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
+from vlm.models.abstract_vlm import AbstractVLMModel
+from vlm.utils import logger
+from vlm.utils.ddp_utils import setup_ddp, gather_inference_outputs
+from vlm.utils.filter_batch import extract_batch_prompt_only
+from vlm.utils.helper import is_main_process, find_run_dir_in_output_dir, seed_everything, merge_config_with_cli_args, \
+    add_datetime_tag
+from vlm.utils.load_and_save_files import load_json, save_json
+from vlm.utils.logging import setup_logger, log_banner
 from eval import main as eval_main
+from vlm.utils.vision_input_type import VisionInputType
 
 
 class UnifiedVLMInference:
