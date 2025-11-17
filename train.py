@@ -15,9 +15,9 @@ from data.datasets import AMOSMMDataset, CTRATEDataset
 from evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
 from models.abstract_vlm import AbstractVLMModel
-from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
+from training.callbacks import LossLoggingCallback, PrintEvalBatchCallback
+from training.trainers import VLMSFTTrainer
 from registries.vlm_registry import vlm_registry
-from trainers.VLMSFTTrainer import VLMSFTTrainer
 from utils import logger
 from utils.ddp_utils import setup_ddp
 from utils.helper import (
@@ -35,7 +35,6 @@ from utils.memory_utils import (
     setup_memory_efficient_training,
 )
 from utils.paths import VLM_CONFIG_DIR
-from utils.vision_input_type import VisionInputType
 
 
 class UnifiedVLMTrainer:

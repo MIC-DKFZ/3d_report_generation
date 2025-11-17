@@ -1,6 +1,6 @@
 from pydantic import BaseModel
-from models.owl_vlm import OwlVLModel
-from models.qwen_vlm import QwenVLModel
+from models.owl.owl_vlm import OwlVLModel
+from models.qwen25vl.qwen_vlm import QwenVLModel
 
 
 class VLMConfig(BaseModel):

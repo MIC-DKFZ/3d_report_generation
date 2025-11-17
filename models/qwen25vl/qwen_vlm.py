@@ -2,11 +2,11 @@ import os
 import torch
 import numpy as np
 from configs.model.model_config import ModelConfig
-from qwenvl.processing_3d import QwenVLProcessor3D
-from qwenvl.Qwen3D import QwenVLForConditionalGeneration3D, QwenVLModel3D
+from models.qwen25vl.processing_3d import QwenVLProcessor3D
+from models.qwen25vl.Qwen3D import QwenVLForConditionalGeneration3D, QwenVLModel3D
 from utils.filter_batch import extract_raw_samples_from_batch
 
-from .abstract_vlm import AbstractVLMModel
+from models.abstract_vlm import AbstractVLMModel
 
 
 class QwenVLModel(AbstractVLMModel):
