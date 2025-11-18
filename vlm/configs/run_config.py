@@ -1,4 +1,5 @@
 import os
+import numpy as np
 from pathlib import Path
 from typing import Any
 from pydantic import Field, model_validator
@@ -82,6 +83,19 @@ class RunConfig(ConfigBase):
             return self.model.vision_encoder.embed_dim
         elif self.data.vision_input_type == VisionInputType.EMBEDDING:
             return self.data.embed_dim
+        else:
+            raise ValueError(f"Unsupported vision input type: {self.cfg.model.vision_input_type}")
+
+    def get_vision_embed_size(self) -> tuple[int, int, int]:
+        """
+        Resolve the vision embedding size (spatial dims) based on the input source.
+        """
+        if self.data.vision_input_type == VisionInputType.IMAGE:
+            patch_size = self.model.vision_encoder.patch_size
+            downsample_factor = self.model.vision_encoder.downsample_factor
+            return tuple(p // d for p, d in zip(patch_size, downsample_factor))  # type: ignore[arg-type]
+        elif self.data.vision_input_type == VisionInputType.EMBEDDING:
+            return self.data.embed_size
         else:
             raise ValueError(f"Unsupported vision input type: {self.cfg.model.vision_input_type}")
 

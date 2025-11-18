@@ -17,7 +17,7 @@ from inference import main as inference_main
 from vlm.models.abstract_vlm import AbstractVLMModel
 from vlm.training.callbacks import LossLoggingCallback, PrintEvalBatchCallback
 from vlm.training.trainers import VLMSFTTrainer
-from vlm.registries import vlm_registry
+from vlm.registries.vlm_registry import vlm_registry
 from vlm.utils import logger
 from vlm.utils.ddp_utils import setup_ddp
 from vlm.utils.helper import seed_everything, merge_config_with_cli_args, load_config_file, print_model_parameters, \
@@ -422,6 +422,7 @@ def main():
         model_cfg=cfg.model,
         vision_input_type=cfg.data.vision_input_type,
         vision_embed_dim=cfg.get_vision_embed_dim(),
+        vision_embed_size=cfg.get_vision_embed_size(),
         text_only=cfg.data.text_only,
         local_files_only=cfg.general.local_files_only
     )

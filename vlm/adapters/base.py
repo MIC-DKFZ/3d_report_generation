@@ -10,11 +10,13 @@ class AdapterBase(nn.Module, ABC):
     def __init__(
         self,
         vision_embed_dim: int,
-        text_embed_dim: int
+        text_embed_dim: int,
+        num_vision_tokens: int
     ):
         super().__init__()
         self.vision_embed_dim = vision_embed_dim
         self.text_embed_dim = text_embed_dim
+        self.num_vision_tokens = num_vision_tokens
 
     @abstractmethod
     def get_adapter_args(

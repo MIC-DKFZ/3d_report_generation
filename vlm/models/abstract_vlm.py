@@ -24,6 +24,7 @@ class AbstractVLMModel(ABC):
                  model_cfg: ModelConfig,
                  vision_input_type: str,
                  vision_embed_dim: int,
+                 vision_embed_size: tuple[int, int, int],
                  text_only: bool = False,
                  local_files_only=True,
                  device=None):
@@ -37,6 +38,7 @@ class AbstractVLMModel(ABC):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.vision_input_type = vision_input_type
         self.vision_embed_dim = vision_embed_dim
+        self.vision_embed_size = vision_embed_size
         self.text_only = text_only
         self.local_files_only = local_files_only
 

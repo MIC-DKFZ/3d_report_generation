@@ -1,7 +1,6 @@
 import os
 import torch
 import numpy as np
-from vlm.configs.model.model_config import ModelConfig
 from vlm.models.qwen25vl.processing_3d import QwenVLProcessor3D
 from vlm.models.qwen25vl.Qwen3D import QwenVLForConditionalGeneration3D, QwenVLModel3D
 from vlm.utils.filter_batch import extract_raw_samples_from_batch
@@ -10,19 +9,8 @@ from vlm.models.abstract_vlm import AbstractVLMModel
 
 
 class QwenVLModel(AbstractVLMModel):
-    def __init__(
-        self,
-        model_cfg: ModelConfig,
-        vision_input_type: str,
-        vision_embed_dim: int,
-        text_only: bool,
-        local_files_only: bool = False
-    ):
-        super().__init__(model_cfg=model_cfg,
-                         vision_input_type=vision_input_type,
-                         text_only=text_only,
-                         vision_embed_dim=vision_embed_dim,
-                         local_files_only=local_files_only)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._model_str = "qwen"
         self.batch_count = 0
 
@@ -47,6 +35,7 @@ class QwenVLModel(AbstractVLMModel):
             self.model_cfg.model_id,
             model_cfg=self.model_cfg.model_dump(),
             vision_embed_dim=self.vision_embed_dim,
+            vision_embed_size=self.vision_embed_size,
             torch_dtype=torch.bfloat16
         )
 

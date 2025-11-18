@@ -10,14 +10,9 @@ class GridAdapter(AdapterBase, ABC):
     Adapter for processing homogeneously-sized image batches.
     This class retains the spatial grid structure of the vision embeddings and implements M-RoPE.
     """
-    def __init__(
-            self,
-            vision_embed_dim: int,
-            text_embed_dim: int,
-            reduce_block: tuple[int, int, int]
-    ):
-        super().__init__(vision_embed_dim, text_embed_dim)
-        self.reduce_block = np.array(reduce_block)
+    def __init__(self, reduce_block: tuple[int, int, int], *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reduce_block = reduce_block
 
     def get_adapter_args(
             self,
@@ -28,11 +23,11 @@ class GridAdapter(AdapterBase, ABC):
 
         batch_size = len(vision_inputs)
 
-        grid = np.array(vision_inputs[0].shape[-3:])  # take first one since all vision inputs are of same shape
+        grid = np.asarray(vision_inputs[0].shape[-3:])  # take first one since all vision inputs are of same shape
         if vision_input_type == VisionInputType.IMAGE:
-            downsample_factor = np.array(kwargs["downsample_factor"])
+            downsample_factor = np.asarray(kwargs["downsample_factor"])
             grid = grid // downsample_factor
-        grid = grid // self.reduce_block
+        grid = grid // np.asarray(self.reduce_block)
         num_vision_tokens = [int(grid.prod().item())] * batch_size
         video_grid_thw = grid[None, ...].repeat(batch_size, axis=0)
 

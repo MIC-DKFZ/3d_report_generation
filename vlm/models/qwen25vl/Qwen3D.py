@@ -29,7 +29,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
     config: Qwen2_5_VLConfig
     _no_split_modules = ["Qwen2_5_VLDecoderLayer", "Qwen2_5_VLVisionBlock"]
 
-    def __init__(self, config, model_cfg: dict, vision_embed_dim: int):
+    def __init__(self, config, model_cfg: dict, vision_embed_dim: int, vision_embed_size: tuple[int, int, int]):
         # we need to replace Qwen25VL init because it inits 'visual'
         Qwen2_5_VLPreTrainedModel.__init__(self, config)
         self.vision_adapter = None  # init in self.setup_vision_adapter()
@@ -40,14 +40,16 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         self.model_cfg = ModelConfig(**model_cfg)
 
         self.vision_embed_dim = vision_embed_dim
+        self.vision_embed_size = vision_embed_size
         self.text_embed_dim: int = config.hidden_size
 
         # Initialize weights and apply final processing
         # self.post_init()
 
     def setup_vision_adapter(self):
-        self.vision_adapter = self.model_cfg.adapter.to_adapter(
+        self.vision_adapter = self.model_cfg.build_adapter(
             vision_embed_dim=self.vision_embed_dim,
+            vision_embed_size=self.vision_embed_size,
             text_embed_dim=self.text_embed_dim
         )
 
@@ -325,9 +327,14 @@ class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, Gener
     }
     _tied_weights_keys = ["lm_head.weight"]
 
-    def __init__(self, config, model_cfg: dict, vision_embed_dim: int):
+    def __init__(self, config, model_cfg: dict, vision_embed_dim: int, vision_embed_size: tuple[int, int, int]):
         super().__init__(config)
-        self.model = QwenVLModel3D(config, model_cfg=model_cfg, vision_embed_dim=vision_embed_dim)
+        self.model = QwenVLModel3D(
+            config,
+            model_cfg=model_cfg,
+            vision_embed_dim=vision_embed_dim,
+            vision_embed_size=vision_embed_size
+        )
         self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
 
         # self.post_init()

@@ -12,15 +12,16 @@ class ModelConfig(ConfigBase):
 
     vision_encoder: VisionEncoderConfig | None = Field(None, description="Should only be None, if you train with embeddings instead of images. "
                                                                          "or have text-only inputs.")
-    adapter: AdapterDynamicClassConfig | list[AdapterDynamicClassConfig] | None \
-        = Field(None, description="Should only be None, if you have text-only inputs.")
+    adapter: AdapterDynamicClassConfig | None = Field(None, description="Should only be None, if you have text-only inputs.")
 
     trainable_params: TrainableParamsConfig
 
-    def build_adapter(self) -> nn.Module:
+    def build_adapter(
+            self,
+            vision_embed_dim: int,
+            vision_embed_size: tuple[int, int, int],
+            text_embed_dim: int
+    ) -> nn.Module:
         if self.adapter is None:
             raise ValueError(f"Cannot build adapter with 'adapter=None'")
-
-        if isinstance(self.adapter, list):
-            return nn.Sequential(*[a.to_instance() for a in self.adapter])
-        return self.adapter.to_instance()
+        return self.adapter.to_instance(vision_embed_dim, vision_embed_size, text_embed_dim)

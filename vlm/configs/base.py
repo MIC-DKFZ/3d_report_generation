@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from vlm.utils.find_class_by_name import recursive_find_python_class
 import vlm
@@ -36,7 +36,9 @@ class DynamicClassConfigBase(ConfigBase):
     Base class for configs that only hold the specific class name ('class_name') that is to be
     instantiated and returned via 'to_instance()' and its arguments ('class_args').
     """
-    target_module = None  # Overwrite in subclass
+    folder_to_search: ClassVar[str]  # Overwrite in subclass;
+                                     # Should point to the module where to start the recursive search
+                                     # for the target class. Example: 'vlm.adapters'
 
     class_name: str = Field(..., description="Name of the class to load")
     class_kwargs: dict = Field(..., description="Keyword arguments to instantiate the class with")
@@ -47,13 +49,13 @@ class DynamicClassConfigBase(ConfigBase):
     def resolve_target(self):
         """Resolve and store the Python object after validation."""
         self._resolved_class = recursive_find_python_class(
-            target_module=str(Path(vlm.__path__[0], *self.target_module.split("."))),
+            folder=str(Path(vlm.__path__[0], *self.folder_to_search.split(".")[1:])),
             class_name=self.class_name,
-            current_module=self.target_module
+            current_module=self.folder_to_search
         )
         if self._resolved_class is None:
             raise ValueError(f"Could not find {self.class_name:!r} in {vlm.__path__[0]:!r}")
         return self
 
-    def to_instance(self) -> Any:
-        return self._resolved_target(**self.class_kwargs)
+    def to_instance(self, **kwargs) -> Any:
+        return self._resolved_class(**kwargs, **self.class_kwargs)

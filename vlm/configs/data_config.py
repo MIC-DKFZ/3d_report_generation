@@ -15,6 +15,9 @@ class DataConfig(ConfigBase):
     vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
 
     embed_dim: int | None = Field(None, description="Embedding dimension when using embeddings as input (e.g. 864).")
+    embed_size: tuple[int, int, int] | None = Field(
+        None, description="Embedding size if using embeddings as input (e.g. 24x24x24)."
+    )
 
     answer_types: str | list = Field(..., description="Which answer types and subtypes to include during training.")
 
@@ -44,7 +47,8 @@ class DataConfig(ConfigBase):
         return self
 
     @model_validator(mode="after")
-    def validate_embed_dim_for_embedding_input(self):
-        if self.vision_input_type == VisionInputType.EMBEDDING and self.embed_dim is None:
-            raise ValueError("'embed_dim' must be specified when 'vision_input_type' is 'embedding'.")
+    def validate_embed_dims_for_embedding_input(self):
+        if self.vision_input_type == VisionInputType.EMBEDDING and (self.embed_dim is None or self.embed_size is None):
+            raise ValueError("Missing parameters for embedding mode: "
+                             "please specify both 'embed_dim' and 'embed_size' when vision_input_type='embedding'.")
         return self

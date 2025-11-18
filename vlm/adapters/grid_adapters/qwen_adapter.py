@@ -4,21 +4,15 @@ from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers.activations import QuickGELUActivation
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2RMSNorm
-
 from vlm.adapters.grid_adapters.base import GridAdapter
 
 
 class QwenAdapter(GridAdapter):
-    def __init__(
-        self,
-        vision_embed_dim: int,
-        text_embed_dim: int,
-        reduce_block: tuple[int, int, int]
-    ):
-        super().__init__(vision_embed_dim=vision_embed_dim, text_embed_dim=text_embed_dim, reduce_block=reduce_block)
-        self.reduce_block = reduce_block
-        input_size = self.vision_embed_dim * reduce_block[0] * reduce_block[1] * reduce_block[2]
-        hidden_size = self.vision_embed_dim * min(8, reduce_block[0] * reduce_block[1] * reduce_block[2]) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        r0, r1, r2 = self.reduce_block
+        input_size = self.vision_embed_dim * r0 * r1 * r2
+        hidden_size = self.vision_embed_dim * min(8, r0 * r1 * r2) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
         # the linear layer still can become too large for large blocks greater than 8cube. In such cases better use pooling?!
         self.ln_q = Qwen2RMSNorm(input_size, eps=1e-6)
         self.adapter = nn.Sequential(
@@ -41,23 +35,17 @@ class QwenAdapter(GridAdapter):
         if x.ndim == 3:  # if flattened tensor (from VE, not loaded embed), restructure to original grid
             video_grid_thw = adapter_args["video_grid_thw"]
             x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
-
+        
+        r0, r1, r2 = self.reduce_block
         # Use unfold to create reduce_block
-        x = x.unfold(2, self.reduce_block[0], self.reduce_block[0])
-        x = x.unfold(3, self.reduce_block[1], self.reduce_block[1])
-        x = x.unfold(4, self.reduce_block[2], self.reduce_block[2])
+        x = x.unfold(2, r0, r0)
+        x = x.unfold(3, r1, r1)
+        x = x.unfold(4, r2, r2)
 
         # Reshape to combine all reduce_block
         x = x.permute(0, 2, 3, 4, 1, 5, 6, 7)  # Move embedding_dim after spatial dims
         # (B, T', H', W', C, rT, rH, rW) -> (B, T'*H'*W', C*rT*rH*rW)
-        x = x.reshape(
-            batch_size,
-            -1,
-            embedding_dim
-            * self.reduce_block[0]
-            * self.reduce_block[1]
-            * self.reduce_block[2],
-        )
+        x = x.reshape(batch_size, -1, embedding_dim * r0 * r1 * r2)
 
         # Process through adapter
         # x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
