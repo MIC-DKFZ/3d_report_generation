@@ -18,6 +18,12 @@ class SFTTrainerConfig(ConfigBase):
     optim: str = Field("adamw_torch", description="Optimizer to use (e.g. adamw_torch, adamw_torch_fused, adamw_hf).")
     learning_rate: float = Field(2e-4, gt=0, description="Initial learning rate for optimizer.")
     lr_scheduler_type: str = Field("cosine", description="Learning rate scheduler type (e.g. linear, cosine, polynomial).")
+    weight_decay: float = Field(
+        0.0,
+        description="Weight decay coefficient for the optimizer. Use 0.0 to disable weight decay. "
+                    "Note: VLMSFTTrainer.get_decay_parameter_names() automatically excludes LoRA layers, "
+                    "normalization layers, and the embedding/head layers from weight decay."
+    )
     warmup_ratio: float = Field(0.03, ge=0, le=1, description="Ratio of total steps used for linear learning rate warmup.")
     max_grad_norm: float = Field(0.3, gt=0, description="Maximum gradient norm for gradient clipping.")
 

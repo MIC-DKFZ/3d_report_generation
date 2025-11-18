@@ -21,7 +21,7 @@ from vlm.registries.vlm_registry import vlm_registry
 from vlm.utils import logger
 from vlm.utils.ddp_utils import setup_ddp
 from vlm.utils.helper import seed_everything, merge_config_with_cli_args, load_config_file, print_model_parameters, \
-    is_main_process
+    is_main_process, print_param_groups
 from vlm.utils.load_and_save_files import save_json, save_yaml
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.memory_utils import (
@@ -123,7 +123,8 @@ class UnifiedVLMTrainer:
                 reinit=True,
                 group=f"{type(self.vlm_model).__name__}_run",
                 config=config_dict,
-                id=f"{str(Path(self.cfg.data.vision_input_path).name)}--{self.cfg.general.run_name}"
+                # id=f"{str(Path(self.cfg.data.vision_input_path).name)}--{self.cfg.general.run_name}"
+                id=self.cfg.general.run_name
             )
 
             # Ensure wandb properly logs hyperparameters in offline mode
@@ -175,6 +176,13 @@ class UnifiedVLMTrainer:
             data_collator=self.vlm_model.collate_fn,
             callbacks=callbacks
         )
+
+        # Log weight decay and params group of optimizer
+        if is_main_process():
+            params_group_log_path= Path(self.cfg.general.output_dir, "param_groups.log")
+
+            with open(params_group_log_path, "w") as f:
+                print_param_groups(trainer=self.trainer, file=f)
 
         if self.is_distributed:
             dist.barrier()
@@ -464,6 +472,7 @@ def main():
             text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
+            do_sentence_shuffle=False,
         )
     elif cfg.data.dataset_name == "ctrate":
         # Use CTRATE dataset
@@ -481,6 +490,7 @@ def main():
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=cfg.data.do_sentence_shuffle,
+            sentence_shuffle_p=cfg.data.sentence_shuffle_p,
             image_id_suffix=cfg.data.image_id_suffix
         )
 
@@ -497,6 +507,7 @@ def main():
             embedding_constant=cfg.data.embedding_constant,
             # no transforms for val dataset
             vision_encoder_patch_size=vision_encoder_patch_size,
+            do_sentence_shuffle=False,
             image_id_suffix=cfg.data.image_id_suffix
         )
     else:

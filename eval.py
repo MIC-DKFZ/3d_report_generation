@@ -141,10 +141,10 @@ def parse_args() -> argparse.Namespace:
         help="Supported task types: Report Generation (RG); Visual Question Answering (VQA)."
     )
     parser.add_argument(
-        "--checkpoint_dir",
+        "--inference_dir",
         type=str,
         default=None,
-        help="Path to a specific checkpoint directory where the inference results are located."
+        help="Path to a specific directory where the inference results are located."
     )
     parser.add_argument(
         "--num_processes",
@@ -163,8 +163,7 @@ def main_cli():
 
 
 def main(args):
-    ckpt_dir = Path(args.checkpoint_dir)
-    inference_dir = ckpt_dir / "inference"
+    inference_dir = Path(args.inference_dir)
     if not inference_dir.exists():
         raise FileNotFoundError(f"Inference directory not found: {inference_dir}")
 

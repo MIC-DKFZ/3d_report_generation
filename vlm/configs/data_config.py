@@ -36,6 +36,7 @@ class DataConfig(ConfigBase):
     do_resize: bool = Field(False, description="Resize images to 192x192x192 cubes (with lung crops).")
     do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
     do_sentence_shuffle: bool = Field(True, description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.")
+    sentence_shuffle_p: float = Field(0.5, description="Probability of randomly shuffling the order of sentences.")
 
     image_id_suffix: str = Field("", description="Add a suffix to the image IDs provided in the dataset JSON. "
                                                  "WARNING: Only works for CTRATE embeddings.")

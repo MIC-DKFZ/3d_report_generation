@@ -190,6 +190,13 @@ def parse_args() -> Namespace:
         help="When using --run_dir, choose which checkpoint to load: 'best_metric', 'best' or 'final'."
     )
 
+    parser.add_argument(
+        "--inference_dir_suffix",
+        type=str,
+        default="",
+        help="An optional suffix to append to the 'inference' output directory."
+    )
+
     args, _ = parser.parse_known_args()
     return args
 
@@ -219,7 +226,7 @@ def main(args, is_main=True):
         cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
         cfg.eval = merge_config_with_cli_args(cfg.eval, parent_key="eval")
 
-    inference_output_dir = Path(ckpt_dir, "inference")
+    inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "inference_dir_suffix", ""))
 
     log_file_name = add_datetime_tag("inference") + ".log"
     log_file_path = Path(inference_output_dir, log_file_name)
@@ -286,7 +293,7 @@ def main(args, is_main=True):
     if cfg.eval.run_eval and is_main_process():
         eval_args = argparse.Namespace(
             task_type="RG" if cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
-            checkpoint_dir=ckpt_dir,
+            inference_dir=inference_output_dir,
             num_processes=cfg.eval.num_eval_processes
         )
         eval_main(eval_args)
