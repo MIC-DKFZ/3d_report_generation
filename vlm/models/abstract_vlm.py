@@ -206,6 +206,7 @@ class AbstractVLMModel(ABC):
             model_cfg=cfg.model,
             vision_input_type=cfg.data.vision_input_type,
             vision_embed_dim=cfg.get_vision_embed_dim(),
+            vision_embed_size=cfg.get_vision_embed_size(),
             text_only=cfg.data.text_only,
             local_files_only=cfg.general.local_files_only
         )
