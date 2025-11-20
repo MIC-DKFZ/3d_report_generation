@@ -59,7 +59,7 @@ class UnifiedVLMTrainer:
     def get_training_args(self):
         """Configure standard training arguments for distributed training"""
         num_cores = os.cpu_count()
-        
+
         # Adjust number of workers based on distributed setup
         if self.is_distributed:
             # Reduce workers per process in distributed training
@@ -203,9 +203,9 @@ class UnifiedVLMTrainer:
         # Train model
         if is_main_process():
             log_memory_usage("Before Training")
-        
+
         self.trainer.train()
-        
+
         if is_main_process():
             log_memory_usage("After Training")
 
@@ -413,27 +413,10 @@ def create_comprehensive_wandb_config(
 
     return config_dict
 
-@logger.catch(reraise=True)
-def main():
-    setup_ddp()  # setup DDP first so we can communicate shared output folder
-    cfg = setup_config_and_logging()
 
-    seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
-
-    try:
-        vlm_model_class = VLM_REGISTRY[cfg.model.model_type].model_class
-    except KeyError:
-        raise ValueError(f"Unknown model type: {cfg.general.model_type}")
-
-    vlm_model = vlm_model_class(
-        model_cfg=cfg.model,
-        vision_input_type=cfg.data.vision_input_type,
-        vision_embed_dim=cfg.get_vision_embed_dim(),
-        vision_embed_size=cfg.get_vision_embed_size(),
-        text_only=cfg.data.text_only,
-        local_files_only=cfg.general.local_files_only
-    )
-
+def train_val_data_from_config(
+        cfg: RunConfig
+):
     if cfg.model.vision_encoder:
         vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
     else:
@@ -565,6 +548,35 @@ def main():
     if val_dataset is not None:
         logger.info_main(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
 
+    return train_dataset, val_dataset
+
+
+@logger.catch(reraise=True)
+def main():
+    setup_ddp()  # setup DDP first so we can communicate shared output folder
+    cfg = setup_config_and_logging()
+
+    seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
+
+    try:
+        vlm_model_class = VLM_REGISTRY[cfg.model.model_type].model_class
+    except KeyError:
+        raise ValueError(f"Unknown model type: {cfg.general.model_type}")
+
+    vlm_model = vlm_model_class(
+        model_cfg=cfg.model,
+        vision_input_type=cfg.data.vision_input_type,
+        vision_embed_dim=cfg.get_vision_embed_dim(),
+        vision_embed_size=cfg.get_vision_embed_size(),
+        text_only=cfg.data.text_only,
+        local_files_only=cfg.general.local_files_only
+    )
+
+    if cfg.model.vision_encoder:
+        vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
+
+    train_dataset, val_dataset = train_val_data_from_config(cfg)
+
     # Create the trainer and train the model
     trainer = UnifiedVLMTrainer(
         vlm_model=vlm_model,
@@ -573,7 +585,7 @@ def main():
 
     trainer.train(train_dataset, val_dataset)
     logger.remove()
-    
+
     if cfg.eval.run_inference:
         inference_args = argparse.Namespace(
             run_dir=cfg.general.output_dir,
