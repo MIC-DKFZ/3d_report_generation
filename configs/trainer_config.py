@@ -29,9 +29,9 @@ class SFTTrainerConfig(ConfigBase):
 
     logging_steps: int = Field(25, ge=1, description="Number of steps between logging events.")
 
-    eval_steps: int = Field(250, ge=1, description="Number of steps between evaluation runs.")
-    eval_strategy: Literal["no", "steps", "epoch"] = Field("steps", description="Evaluation strategy to adopt during training.")
-    metric_for_best_model: str = Field("eval_loss", description="Metric to use for selecting the best model (e.g. eval_loss, accuracy).")
+    eval_steps: int | None = Field(250, ge=1, description="Number of steps between evaluation runs.")
+    eval_strategy: Literal["no", "steps", "epoch"] | None = Field("steps", description="Evaluation strategy to adopt during training.")
+    metric_for_best_model: str | None = Field("eval_loss", description="Metric to use for selecting the best model (e.g. eval_loss, accuracy).")
     greater_is_better: bool = Field(False, description="Whether the chosen metric should be maximized (True) or minimized (False).")
 
     save_steps: int = Field(250, ge=1, description="Save checkpoint every X steps when using save_strategy='steps'.")

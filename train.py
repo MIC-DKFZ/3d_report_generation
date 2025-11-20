@@ -145,33 +145,37 @@ class UnifiedVLMTrainer:
         # Configure training arguments
         training_args = self.get_training_args()
 
-        if self.is_distributed:
-            sampler = EvalDistributedSampler(
-                val_dataset,
-                num_replicas=self.world_size,
-                rank=self.rank,
-                shuffle=False
-            )
-        else:
-            sampler = None
-
-        eval_dataloader = DataLoader(val_dataset, batch_size=self.cfg.eval.per_device_batch_size, shuffle=False,
-                                     sampler=sampler,
-                                     collate_fn=self.vlm_model.collate_fn,
-                                     num_workers=self.cfg.eval.num_dataloader_workers)
-
         callbacks = [
-            LossLoggingCallback(),
-            PrintEvalBatchCallback(
-                eval_dataloader=eval_dataloader,
-                task_type="RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
-                max_new_tokens=self.cfg.eval.max_new_tokens,
-                eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
-                tokenizer=self.vlm_model.tokenizer,
-                processor=self.vlm_model.processor,
-                is_distributed=self.is_distributed
-            )
+            LossLoggingCallback()
         ]
+
+        if val_dataset is not None:
+            if self.is_distributed:
+                sampler = EvalDistributedSampler(
+                    val_dataset,
+                    num_replicas=self.world_size,
+                    rank=self.rank,
+                    shuffle=False
+                )
+            else:
+                sampler = None
+
+            eval_dataloader = DataLoader(val_dataset, batch_size=self.cfg.eval.per_device_batch_size, shuffle=False,
+                                         sampler=sampler,
+                                         collate_fn=self.vlm_model.collate_fn,
+                                         num_workers=self.cfg.eval.num_dataloader_workers)
+
+            callbacks.append(
+                PrintEvalBatchCallback(  # type: ignore[arg-type]
+                    eval_dataloader=eval_dataloader,
+                    task_type="RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
+                    max_new_tokens=self.cfg.eval.max_new_tokens,
+                    eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
+                    tokenizer=self.vlm_model.tokenizer,
+                    processor=self.vlm_model.processor,
+                    is_distributed=self.is_distributed
+                )
+            )
 
         # Initialize SFT trainer
         self.trainer = VLMSFTTrainer(
@@ -289,8 +293,11 @@ def setup_config_and_logging() -> RunConfig:
     logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
     print(f"Successfully set up output directory at {cfg.general.output_dir}")
 
-    # Reset some args in case the vision input are embedding (instead of images)
+    # Reset vision-encoder-specific args in case the vision inputs are embeddings (instead of images)
     cfg.maybe_reset_vision_encoder_specific_args()
+
+    # Reset validation-specific args in case no validation dataset JSON was provided
+    cfg.maybe_reset_validation_specific_args()
 
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
     cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")
@@ -445,6 +452,8 @@ def main():
     else:
         vision_encoder_patch_size = None
 
+    do_validation = cfg.data.val_dataset_json_path is not None
+
     # Create datasets
     if cfg.data.dataset_name == "amosmm":
         # Use AMOSMM dataset
@@ -476,7 +485,7 @@ def main():
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=False,
-        )
+        ) if do_validation else None
     elif cfg.data.dataset_name == "ctrate":
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
@@ -510,7 +519,7 @@ def main():
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=False,
             image_id_suffix=cfg.data.image_id_suffix
-        )
+        ) if do_validation else None
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
 
@@ -519,10 +528,12 @@ def main():
         print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     logger.info_main(
-        f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples"
+        f"Loaded {len(train_dataset)} training samples and "
+        f"{len(val_dataset) if val_dataset is not None else "no"} validation samples"
     )
     logger.info_main(f"Using train batch size: {cfg.trainer.per_device_train_batch_size}")
-    logger.info_main(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
+    if val_dataset is not None:
+        logger.info_main(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
 
     # Create the trainer and train the model
     trainer = UnifiedVLMTrainer(
