@@ -13,17 +13,29 @@ from vlm.models.abstract_vlm import AbstractVLMModel
 from vlm.utils import logger
 from vlm.utils.ddp_utils import setup_ddp, gather_inference_outputs
 from vlm.utils.filter_batch import extract_batch_prompt_only
-from vlm.utils.helper import is_main_process, find_run_dir_in_output_dir, seed_everything, merge_config_with_cli_args, \
-    add_datetime_tag
+from vlm.utils.helper import (
+    add_datetime_tag,
+    is_main_process,
+    find_run_dir_in_output_dir,
+    seed_everything,
+    merge_config_with_cli_args,
+)
 from vlm.utils.load_and_save_files import load_json, save_json
 from vlm.utils.logging import setup_logger, log_banner
-from eval import main as eval_main
 from vlm.utils.vision_input_type import VisionInputType
+from eval import main as eval_main
 
 
 class UnifiedVLMInference:
-    def __init__(self, vlm_model: AbstractVLMModel, cfg: RunConfig, output_dir: str | Path, per_device_batch_size: int,
-                 num_dataloader_workers: int, max_new_tokens: int):
+    def __init__(
+        self,
+        vlm_model: AbstractVLMModel,
+        cfg: RunConfig,
+        output_dir: str | Path,
+        per_device_batch_size: int,
+        num_dataloader_workers: int,
+        max_new_tokens: int,
+    ):
         """
         Initialize the unified VLM inference.
         Args:
@@ -42,11 +54,13 @@ class UnifiedVLMInference:
         self.num_dataloader_workers = num_dataloader_workers
         self.max_new_tokens = max_new_tokens
 
-        (self.is_distributed,
-         self.rank,
-         self.world_size,
-         self.local_rank,
-         self.local_world_size) = setup_ddp()
+        (
+            self.is_distributed,
+            self.rank,
+            self.world_size,
+            self.local_rank,
+            self.local_world_size,
+        ) = setup_ddp()
 
     def inference(self, test_dataset):
         """
@@ -122,7 +136,9 @@ class UnifiedVLMInference:
                     trimmed_generated_ids, skip_special_tokens=True
                 )
 
-                logger.info_main(f"First batch sample {i + 1}/{len(test_loader)}:\n{decoded_output[0]}")
+                logger.info_main(
+                    f"First batch sample {i + 1}/{len(test_loader)}:\n{decoded_output[0]}"
+                )
 
                 results.extend(
                     [
@@ -155,7 +171,9 @@ class UnifiedVLMInference:
             save_json(all_results, Path(self.output_dir, results_filename))
 
             logger.info_main(f"Total number of inference samples: {len(all_results)}")
-            logger.info_main(f"Saved inference results to {str(Path(self.output_dir, results_filename))}")
+            logger.info_main(
+                f"Saved inference results to {str(Path(self.output_dir, results_filename))}"
+            )
 
         # Make sure that main process finishes writing before continuing
         if self.is_distributed:
@@ -172,7 +190,7 @@ def parse_args() -> Namespace:
         "--checkpoint_dir",
         type=str,
         default=None,
-        help="Path to a specific checkpoint directory to load."
+        help="Path to a specific checkpoint directory to load.",
     )
 
     group.add_argument(
@@ -180,14 +198,14 @@ def parse_args() -> Namespace:
         type=str,
         default=None,
         help="Path to a run directory containing checkpoint subdirectories "
-             "(requires --mode to select which checkpoint to load)."
+        "(requires --mode to select which checkpoint to load).",
     )
     parser.add_argument(
         "--mode",
         type=str,
         choices=["best_metric", "best", "final"],
         default="final",
-        help="When using --run_dir, choose which checkpoint to load: 'best_metric', 'best' or 'final'."
+        help="When using --run_dir, choose which checkpoint to load: 'best_metric', 'best' or 'final'.",
     )
 
     parser.add_argument(
@@ -264,10 +282,14 @@ def main(args, is_main=True):
         print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     # Create inference object and run inference
-    inference = UnifiedVLMInference(vlm_model, cfg=cfg, output_dir=inference_output_dir,
-                                    per_device_batch_size=cfg.eval.per_device_batch_size,
-                                    num_dataloader_workers=cfg.eval.num_dataloader_workers,
-                                    max_new_tokens=cfg.eval.max_new_tokens)
+    inference = UnifiedVLMInference(
+        vlm_model,
+        cfg=cfg,
+        output_dir=inference_output_dir,
+        per_device_batch_size=cfg.eval.per_device_batch_size,
+        num_dataloader_workers=cfg.eval.num_dataloader_workers,
+        max_new_tokens=cfg.eval.max_new_tokens,
+    )
 
     inference.inference(test_dataset)
     logger.remove()
