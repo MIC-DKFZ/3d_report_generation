@@ -2,7 +2,7 @@ import json
 from abc import ABC, abstractmethod
 from numbers import Number
 from pathlib import Path
-from typing import Type, Literal
+from typing import Type, Literal, Tuple
 import re
 import random
 import blosc2
@@ -17,6 +17,8 @@ from vlm.utils import logger
 from vlm.utils.dataset_utils import get_training_image_transforms, preprocess_3d_image
 from vlm.utils.regex_patterns import VQA_OPTION_PATTERN, VQA_OPTION_LETTERS_IN_TEXT_PATTERN
 from vlm.utils.vision_input_type import VisionInputType
+
+from configs.run_config import RunConfig
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
@@ -61,42 +63,35 @@ class MedicalImageDataset(Dataset, ABC):
 
     def __init__(
         self,
-        dataset_json_path,
-        model_type,
+        cfg: RunConfig,
+        vision_encoder_patch_size: Tuple[int, ...],
         split: Literal["train", "val", "test"] = "train",
-        vision_input_path=None,
-        vision_input_type=VisionInputType.EMBEDDING,
-        n_samples=None,
-        answer_types=("CHOICE",),
-        text_only=False,
-        embedding_constant=None,
-        do_resize=False,
-        do_transforms=False,
-        vision_encoder_patch_size=None,
-        do_sentence_shuffle=False,
-        sentence_shuffle_p=None,
-        is_stacked_2d_embedding=False,
-        reduce_to_n_slices=None,
-        image_id_suffix=""
     ):
         super().__init__()
 
-        self.dataset_json_path = Path(dataset_json_path)
-        self.vision_input_path = Path(vision_input_path)
-        self.vision_input_type = vision_input_type
-        self.model_type = model_type
+        self.dataset_json_path = Path(cfg.data.dataset_json_path)
+        self.vision_input_path = Path(cfg.data.vision_input_path)
+        self.vision_input_type = cfg.data.vision_input_type
+        self.model_name = cfg.model.model_type
         self.split = split
-        self.n_samples = n_samples
-        self.text_only = text_only
-        self.embedding_constant = embedding_constant
-        self.do_resize = do_resize
-        self.do_transforms = do_transforms
+        if self.split == "train":
+            self.n_samples = cfg.data.n_train_samples
+        elif self.split == "val":
+            self.n_samples = cfg.data.n_val_samples
+        elif self.split == "test":
+            self.n_samples = cfg.eval.n_samples
+        self.text_only = cfg.data.text_only
+        self.embedding_constant = cfg.data.embedding_constant
+        self.do_resize = cfg.data.do_resize
+        self.do_transforms = cfg.data.do_transforms
         self.vision_encoder_patch_size = vision_encoder_patch_size
-        self.do_sentence_shuffle = do_sentence_shuffle
-        self.sentence_shuffle_p = sentence_shuffle_p
-        self.is_stacked_2d_embedding = is_stacked_2d_embedding
-        self.reduce_to_n_slices = reduce_to_n_slices
-        self.image_id_suffix = image_id_suffix
+        self.is_stacked_2d_embedding = cfg.data.is_stacked_2d_embedding
+        self.reduce_to_n_slices = cfg.data.reduce_to_n_slices
+        self.do_sentence_shuffle = cfg.data.do_sentence_shuffle
+        self.sentence_shuffle_p = cfg.data.sentence_shuffle_p
+        self.image_id_suffix = cfg.data.image_id_suffix
+
+        answer_types = cfg.data.answer_types
 
         if isinstance(answer_types, str):
             answer_types = [
@@ -172,7 +167,7 @@ class MedicalImageDataset(Dataset, ABC):
                 'nthreads': 1
             }
             mmap_kwargs = {} if os.name == "nt" else {'mmap_mode': 'r'}
-            
+
             vision_input = np.array(blosc2.open(urlpath=vision_input_path, mode='r', dparams=dparams, **mmap_kwargs))
 
         elif str(vision_input_path).endswith(".bl2"):
@@ -190,7 +185,7 @@ class MedicalImageDataset(Dataset, ABC):
             vision_input, header = nrrd.read(vision_input_path)
 
         elif str(vision_input_path).endswith((".nii.gz", ".nii")):
-            vision_input = sitk.GetArrayFromImage(sitk.ReadImage(vision_input_path))          
+            vision_input = sitk.GetArrayFromImage(sitk.ReadImage(vision_input_path))
 
         else:
             raise ValueError(f"Unsupported vision input file format: {vision_input_path}")
@@ -420,7 +415,7 @@ class AMOSMMDataset(MedicalImageDataset):
             lambda m: options_letter_map[next(g for g in m.groups() if g)],  # replace old letter with new letter
             answer
         )
-        
+
         return new_question, new_answer
 
 
@@ -465,14 +460,14 @@ class CTRATEDataset(MedicalImageDataset):
         """
         if answer is None or not str(answer).strip():
             return question, ""
-        
+
         answer_str = str(answer).strip()
         if not self.shuffle_sentences:
             return question, answer_str
-        
+
         # Split by headers, keeping them in the result
         sections = re.split(r'(Findings:|Impression:)', answer_str)
-        
+
         result = []
         for part in sections:
             # Keep headers as-is

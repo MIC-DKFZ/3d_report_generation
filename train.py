@@ -426,110 +426,42 @@ def train_val_data_from_config(cfg: RunConfig):
     if cfg.data.dataset_name == "amosmm":
         # Use AMOSMM dataset
         train_dataset = AMOSMMDataset(
-            dataset_json_path=cfg.data.train_dataset_json_path,
-            model_type=cfg.model.model_type,
+            cfg=cfg,
             split="train",
-            vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=cfg.data.vision_input_type,
-            answer_types=cfg.data.answer_types,
-            n_samples=cfg.data.n_train_samples,
-            do_resize=cfg.data.do_resize,
-            do_transforms=cfg.data.do_transforms,
-            text_only=cfg.data.text_only,
-            embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=cfg.data.do_sentence_shuffle,
         )
 
         val_dataset = AMOSMMDataset(
-            dataset_json_path=cfg.data.val_dataset_json_path,
-            model_type=cfg.model.model_type,
+            cfg=cfg,
             split="val",
-            vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=cfg.data.vision_input_type,
-            n_samples=cfg.data.n_val_samples,  # Limit the validation set size
-            answer_types=cfg.data.answer_types,
-            do_resize=cfg.data.do_resize,
-            do_transforms=cfg.data.do_transforms,
-            text_only=cfg.data.text_only,
-            embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=False,
         ) if do_validation else None
     elif cfg.data.dataset_name == "ctrate":
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
-            dataset_json_path=cfg.data.train_dataset_json_path,
-            model_type=cfg.model.model_type,
+            cfg=cfg,
             split="train",
-            vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=cfg.data.vision_input_type,
-            n_samples=cfg.data.n_train_samples,
-            answer_types=cfg.data.answer_types,
-            do_resize=cfg.data.do_resize,
-            do_transforms=cfg.data.do_transforms,
-            text_only=cfg.data.text_only,
-            embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=cfg.data.do_sentence_shuffle,
-            sentence_shuffle_p=cfg.data.sentence_shuffle_p,
-            is_stacked_2d_embedding=cfg.data.is_stacked_2d_embedding,
-            reduce_to_n_slices=cfg.data.reduce_to_n_slices,
-            image_id_suffix=cfg.data.image_id_suffix
         )
 
         val_dataset = CTRATEDataset(
-            dataset_json_path=cfg.data.val_dataset_json_path,
-            model_type=cfg.model.model_type,
+            cfg=cfg,
             split="val",
-            vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=cfg.data.vision_input_type,
-            n_samples=cfg.data.n_val_samples,  # Limit the validation set size
-            answer_types=cfg.data.answer_types,
-            do_resize=cfg.data.do_resize,
-            text_only=cfg.data.text_only,
-            embedding_constant=cfg.data.embedding_constant,
-            # no transforms for val dataset
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=False,
-            is_stacked_2d_embedding=cfg.data.is_stacked_2d_embedding,
-            reduce_to_n_slices=cfg.data.reduce_to_n_slices,
-            image_id_suffix=cfg.data.image_id_suffix
         ) if do_validation else None
     elif cfg.data.dataset_name == "merlin":
         from vlm.data.datasets import MerlinDataset
         train_dataset = MerlinDataset(
-            dataset_json_path=cfg.data.train_dataset_json_path,
-            model_type=cfg.model.model_type,
+            cfg=cfg,
             split="train",
-            vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=cfg.data.vision_input_type,
-            n_samples=cfg.data.n_train_samples,
-            answer_types=cfg.data.answer_types,
-            do_resize=cfg.data.do_resize,
-            do_transforms=cfg.data.do_transforms,
-            text_only=cfg.data.text_only,
-            embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=cfg.data.do_sentence_shuffle,
-            sentence_shuffle_p=cfg.data.sentence_shuffle_p,
-            image_id_suffix=cfg.data.image_id_suffix
         )
 
         val_dataset = MerlinDataset(
-            dataset_json_path=cfg.data.val_dataset_json_path,
-            model_type=cfg.model.model_type,
+            cfg=cfg,
             split="val",
-            vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=cfg.data.vision_input_type,
-            n_samples=cfg.data.n_val_samples,
-            answer_types=cfg.data.answer_types,
-            do_resize=cfg.data.do_resize,
-            text_only=cfg.data.text_only,
-            embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=False,
-            image_id_suffix=cfg.data.image_id_suffix
         ) if do_validation else None
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")

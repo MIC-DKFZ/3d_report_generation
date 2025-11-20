@@ -236,59 +236,23 @@ def main(args, is_main=True):
         vision_encoder_patch_size = None
 
     logger.info_main(f"Using {cfg.eval.split} split for inference.")
+    cfg.data.do_sentence_shuffle = False
+    cfg.data.do_transform = False
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
-            dataset_json_path=cfg.eval.dataset_json_path,
-            model_type=cfg.model.model_type,
+            cfg=cfg,
             split=cfg.eval.split,
-            vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=cfg.data.vision_input_type,
-            answer_types=cfg.data.answer_types,
-            n_samples=cfg.eval.n_samples,  # Limit the validation set size
-            do_resize=cfg.data.do_resize,
-            do_transforms=False,
-            text_only=cfg.data.text_only,
-            embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=False
         )
     elif cfg.data.dataset_name == "ctrate":
         test_dataset = CTRATEDataset(
-            dataset_json_path=cfg.eval.dataset_json_path,
-            model_type=cfg.model.model_type,
-            split=cfg.eval.split,
-            vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=cfg.data.vision_input_type,
-            answer_types=cfg.data.answer_types,
-            n_samples=cfg.eval.n_samples,  # Limit the validation set size
-            do_resize=cfg.data.do_resize,
-            do_transforms=False,
-            text_only=cfg.data.text_only,
-            embedding_constant=cfg.data.embedding_constant,
+            cfg=cfg,
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=False,
-            is_stacked_2d_embedding=cfg.data.is_stacked_2d_embedding,
-            reduce_to_n_slices=cfg.data.reduce_to_n_slices,
-            image_id_suffix=cfg.data.image_id_suffix
         )
     elif cfg.data.dataset_name == "merlin":
         test_dataset = MerlinDataset(
-            dataset_json_path=cfg.eval.dataset_json_path,
-            model_type=cfg.model.model_type,
-            split=cfg.eval.split,
-            vision_input_path=cfg.data.vision_input_path,
-            vision_input_type=cfg.data.vision_input_type,
-            answer_types=cfg.data.answer_types,
-            n_samples=cfg.eval.n_samples,  # Limit the validation set size
-            do_resize=cfg.data.do_resize,
-            do_transforms=False,
-            text_only=cfg.data.text_only,
-            embedding_constant=cfg.data.embedding_constant,
+            cfg=cfg
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=False,
-            is_stacked_2d_embedding=cfg.data.is_stacked_2d_embedding,
-            reduce_to_n_slices=cfg.data.reduce_to_n_slices,
-            image_id_suffix=cfg.data.image_id_suffix
         )
     else:
         raise ValueError(f"Unsupported dataset name: {cfg.data.dataset_name}")
