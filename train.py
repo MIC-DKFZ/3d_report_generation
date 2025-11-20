@@ -35,9 +35,9 @@ from vlm.utils.paths import VLM_CONFIG_DIR
 
 class UnifiedVLMTrainer:
     def __init__(
-            self,
-            vlm_model: AbstractVLMModel,
-            cfg: RunConfig,
+        self,
+        vlm_model: AbstractVLMModel,
+        cfg: RunConfig,
     ):
         """
         Initialize the unified VLM trainer.
@@ -50,11 +50,13 @@ class UnifiedVLMTrainer:
         self.trainer: VLMSFTTrainer | None = None
         self.cfg: RunConfig = cfg
 
-        (self.is_distributed,
-         self.rank,
-         self.world_size,
-         self.local_rank,
-         self.local_world_size) = setup_ddp()
+        (
+            self.is_distributed,
+            self.rank,
+            self.world_size,
+            self.local_rank,
+            self.local_world_size,
+        ) = setup_ddp()
 
     def get_training_args(self):
         """Configure standard training arguments for distributed training"""
@@ -73,11 +75,12 @@ class UnifiedVLMTrainer:
         # Add model-specific arguments
         model_args = self.vlm_model.get_model_specific_training_args()
 
-        return SFTConfig(**self.cfg.trainer.model_dump(),
-                         **model_args,
-                         seed=self.cfg.general.seed,
-                         run_name=self.cfg.general.run_name,
-                         output_dir=self.cfg.general.output_dir)
+        return SFTConfig(
+            **self.cfg.trainer.model_dump(),
+            **model_args,
+            run_name=self.cfg.general.run_name,
+            output_dir=self.cfg.general.output_dir,
+        )
 
     def train(self, train_dataset, val_dataset):
         """
@@ -111,8 +114,7 @@ class UnifiedVLMTrainer:
 
         # Create comprehensive config for WandB logging
         config_dict = create_comprehensive_wandb_config(
-            self.vlm_model, self.cfg,
-            self.world_size, self.rank
+            self.vlm_model, self.cfg, self.world_size, self.rank
         )
 
         # Only initialize wandb on the main process (rank 0) for DDP
@@ -251,8 +253,10 @@ def setup_config_and_logging() -> RunConfig:
     args_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
 
     args_parser.add_argument(
-        "--train_config", type=str, required=True,
-        help="Path to config file (YAML or JSON), relative to the 'VLM_CONFIG_DIR' environment variable"
+        "--train_config",
+        type=str,
+        required=True,
+        help="Path to config file (YAML or JSON), relative to the 'VLM_CONFIG_DIR' environment variable",
     )
 
     args_parser.add_argument(
@@ -260,7 +264,7 @@ def setup_config_and_logging() -> RunConfig:
         type=str,
         nargs="+",
         default=[],
-        help="Optional list of base config files"
+        help="Optional list of base config files",
     )
 
     args, _ = args_parser.parse_known_args()
@@ -287,7 +291,9 @@ def setup_config_and_logging() -> RunConfig:
     # Setup output directory and log file
     if is_main_process():
         os.makedirs(cfg.general.output_dir, exist_ok=True)
-        shutil.copyfile(cfg.general.train_config, os.path.join(cfg.general.output_dir, "input_config.yml"))
+        shutil.copyfile(
+            cfg.general.train_config, os.path.join(cfg.general.output_dir, "input_config.yml")
+        )
 
     log_file_path = os.path.join(cfg.general.output_dir, "train.log")
     setup_logger(log_file_path)  # Setup logger on every rank
@@ -302,12 +308,9 @@ def setup_config_and_logging() -> RunConfig:
     if is_main_process():
         final_config_path = os.path.join(cfg.general.output_dir, "final_config.yml")
         save_yaml(
-            {
-                "command": " ".join(sys.argv),
-                "run": cfg.model_dump()
-            },
+            {"command": " ".join(sys.argv), "run": cfg.model_dump()},
             final_config_path,
-            sort_keys=False
+            sort_keys=False,
         )
 
     return cfg
@@ -364,10 +367,7 @@ def ensure_wandb_config_logging():
 
 
 def create_comprehensive_wandb_config(
-        vlm_model: AbstractVLMModel,
-        cfg: RunConfig,
-        world_size: int = 1,
-        rank: int = 0
+    vlm_model: AbstractVLMModel, cfg: RunConfig, world_size: int = 1, rank: int = 0
 ):
     """
     Create a comprehensive configuration dictionary for WandB logging.
@@ -389,7 +389,7 @@ def create_comprehensive_wandb_config(
             "world_size": world_size,
             "rank": rank,
             "is_distributed": world_size > 1,
-        }
+        },
     }
 
     # Add environment information
@@ -414,9 +414,7 @@ def create_comprehensive_wandb_config(
     return config_dict
 
 
-def train_val_data_from_config(
-        cfg: RunConfig
-):
+def train_val_data_from_config(cfg: RunConfig):
     if cfg.model.vision_encoder:
         vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
     else:
@@ -440,7 +438,7 @@ def train_val_data_from_config(
             text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=cfg.data.do_sentence_shuffle
+            do_sentence_shuffle=cfg.data.do_sentence_shuffle,
         )
 
         val_dataset = AMOSMMDataset(
@@ -578,10 +576,7 @@ def main():
     train_dataset, val_dataset = train_val_data_from_config(cfg)
 
     # Create the trainer and train the model
-    trainer = UnifiedVLMTrainer(
-        vlm_model=vlm_model,
-        cfg=cfg
-    )
+    trainer = UnifiedVLMTrainer(vlm_model=vlm_model, cfg=cfg)
 
     trainer.train(train_dataset, val_dataset)
     logger.remove()
