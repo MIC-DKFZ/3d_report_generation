@@ -63,12 +63,31 @@ class RunConfig(ConfigBase):
         - set preprocessing flags to False
         """
         if self.data.vision_input_type == VisionInputType.EMBEDDING:
-            if is_main_process():
-                logger.info("[VisionInputType] Resetting vision-encoder-specific arguments for EMBEDDING input mode:")
+            logger.info_main("[VisionInputType] Resetting vision-encoder-specific arguments for EMBEDDING input mode:")
 
             _lis = [
                 (["model.vision_encoder", "model.trainable_params.vision_encoder"], None),
                 (["data.do_resize", "data.do_transforms"], False),
+            ]
+            for _modules, _val in _lis:
+                for _module in _modules:
+                    setattr_nested(self, _module, _val)
+                    if is_main_process():
+                        logger.info(f"  > cfg.{_module} set to {_val}")
+
+    def maybe_reset_validation_specific_args(self):
+        """
+        When doing no validation (val_dataset_json_path=None), reset validation-specific arguments.
+        This is especially important for SFTTrainer args, which would otherwise raise errors.
+        """
+        if self.data.val_dataset_json_path is None:
+            if is_main_process():
+                logger.info("[No Validation] Resetting validation-specific arguments "
+                            "as no validation dataset JSON was provided:")
+
+            _lis = [
+                (["trainer.eval_steps", "trainer.metric_for_best_model"], None),
+                (["trainer.eval_strategy"], "no"),
             ]
             for _modules, _val in _lis:
                 for _module in _modules:

@@ -207,8 +207,6 @@ def main_cli():
 
 
 def main(args, is_main=True):
-    seed_everything(42)  # Set a random seed for reproducibility
-
     if args.run_dir:
         run_dir = Path(args.run_dir)
 
@@ -220,6 +218,8 @@ def main(args, is_main=True):
     else:  # if args.checkpoint_dir
         ckpt_dir = args.checkpoint_dir
         vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
+
+    seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
 
     # This is already being handled by RunConfig.set_default_eval_dataset_json_path()
     # and RunConfig.check_eval_dataset_json()
