@@ -15,7 +15,7 @@ from data.datasets import AMOSMMDataset, CTRATEDataset
 from evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
 from models.abstract_vlm import AbstractVLMModel
-from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
+from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback, PycocoevalCallback
 from registries.vlm_registry import vlm_registry
 from trainers.VLMSFTTrainer import VLMSFTTrainer
 from utils import logger
@@ -166,9 +166,17 @@ class UnifiedVLMTrainer:
                                          num_workers=self.cfg.eval.num_dataloader_workers)
 
             callbacks.append(
-                PrintEvalBatchCallback(  # type: ignore[arg-type]
+                # PrintEvalBatchCallback(  # type: ignore[arg-type]
+                #     eval_dataloader=eval_dataloader,
+                #     task_type="RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
+                #     max_new_tokens=self.cfg.eval.max_new_tokens,
+                #     eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
+                #     tokenizer=self.vlm_model.tokenizer,
+                #     processor=self.vlm_model.processor,
+                #     is_distributed=self.is_distributed
+                # )
+                PycocoevalCallback(  # type: ignore[arg-type]
                     eval_dataloader=eval_dataloader,
-                    task_type="RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
                     max_new_tokens=self.cfg.eval.max_new_tokens,
                     eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
                     tokenizer=self.vlm_model.tokenizer,

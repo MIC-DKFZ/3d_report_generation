@@ -14,6 +14,10 @@ from utils.filter_batch import extract_batch_prompt_only
 from utils import logger
 from utils.helper import get_trainable_state_dict, is_main_process
 from utils.regex_patterns import VQA_ANSWER_PATTERN
+from pycocoevalcap.bleu.bleu import Bleu
+from pycocoevalcap.rouge.rouge import Rouge
+from pycocoevalcap.cider.cider import Cider
+from pycocoevalcap.meteor.meteor import Meteor
 
 
 class PrintEvalBatchCallback(TrainerCallback):
@@ -269,6 +273,208 @@ class PrintEvalBatchCallback(TrainerCallback):
             #     self.eval_table.add_data(*table_data)
             #
             # wandb.log({"eval_table": self.eval_table})
+
+        # Ensure that main process finishes writing before continuing
+        if self.is_distributed:
+            dist.barrier()
+
+        model.train()  # Ensure model is back in training mode
+
+        logger.info_main(f"Finished Evaluation Callback...")
+
+
+    def save_checkpoint(self, model, output_dir):
+        best_model_dir = os.path.join(output_dir, "best_model")
+        os.makedirs(best_model_dir, exist_ok=True)
+
+        # Save only the trainable state_dict
+        model_to_save = unwrap_model(model)
+        trainable_state_dict = get_trainable_state_dict(model_to_save)
+
+        # Save the model
+        model.save_pretrained(best_model_dir, state_dict=trainable_state_dict)
+        if hasattr(self.tokenizer, "save_pretrained"):
+            self.tokenizer.save_pretrained(best_model_dir)
+        if hasattr(self.processor, "save_pretrained"):
+            self.processor.save_pretrained(best_model_dir)
+        logger.info_main(f"Model saved to: {best_model_dir}")
+
+
+class PycocoevalCallback(TrainerCallback):
+    def __init__(
+        self, eval_dataloader: DataLoader, max_new_tokens: int,
+            tokenizer=None, processor=None, eval_every_n_epochs=0.25, print_first_sample=True,
+            is_distributed=False
+    ):
+        self.eval_dataloader = eval_dataloader
+        self.max_new_tokens = max_new_tokens
+        self.tokenizer = tokenizer
+
+        # self.num_samples = len(eval_dataloader.sampler)  # type: ignore[arg-type]
+        # self.total_size = len(eval_dataloader.dataset)  # type: ignore[arg-type]
+
+        self.last_epoch = 0
+        self.eval_every_n_epochs = eval_every_n_epochs
+
+        self.print_first_sample = print_first_sample
+        self.is_distributed = is_distributed
+
+        self.processor = processor
+
+        # Track best metrics for model saving
+        self.best_bleu_score_1 = -1.0
+
+        # RG Metric Scorers
+        self.bleu_scorer = Bleu(4)
+        self.meteor_scorer = Meteor()
+        self.rougel_scorer = Rouge()
+        self.cider_scorer = Cider()
+
+
+    def on_evaluate(
+        self,
+        args,
+        state,
+        control,
+        model=None,
+        eval_dataloader=None,
+        metrics=None,
+        **kwargs,
+    ):
+        if state.epoch - self.last_epoch < self.eval_every_n_epochs:
+            return
+
+        self.last_epoch = state.epoch
+
+        logger.info_main(f"Starting Evaluation Callback...")
+        logger.info_main(f"Epoch {state.epoch} reached")
+
+        # Store local results; if using DDP, all processes will merge into 'all_results' on the main rank.
+        results = {}
+
+        # === Run inference ===
+        preds = []
+        gts = []
+        model.eval()  # Ensure model is in evaluation mode
+        with torch.inference_mode():  # Disable gradient calculations
+            for inputs in self.eval_dataloader:
+                inputs_prompt_only = extract_batch_prompt_only(inputs)
+                inputs_prompt_only = inputs_prompt_only.to(args.device)
+                del inputs_prompt_only["raw_samples"]
+                del inputs_prompt_only["batch_count"]
+
+                outputs = model.generate(
+                    **inputs_prompt_only,
+                    max_new_tokens=self.max_new_tokens
+                )
+
+                # Decode input and generated output
+                decoded_gts = self.tokenizer.batch_decode(inputs["input_ids"], skip_special_tokens=True)
+                decoded_preds = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+
+                # Explicitly delete large tensors to free memory
+                del inputs_prompt_only
+                del outputs
+                torch.cuda.empty_cache()  # Clear CUDA cache periodically
+
+                decoded_gt_assistant_answers = [decoded_gt.split("assistant\n")[-1].strip() for decoded_gt in decoded_gts]
+                decoded_pred_assistant_answers = [decoded_output.split("assistant\n")[-1].strip() for decoded_output in decoded_preds]
+
+                # store predictions and ground truths
+                preds.extend(decoded_pred_assistant_answers)
+                gts.extend(decoded_gt_assistant_answers)
+
+        if self.print_first_sample:
+            logger.error_main(f"First sample GROUNDTRUTH:\n{decoded_pred_assistant_answers[0]}")
+            logger.error_main(f"First sample PREDICTION:\n{decoded_gt_assistant_answers[0]}")
+
+        # Remove '\n' here as this will interfere Pycocoeval (specifically METEOR)
+        results["preds"] = [pred.replace("\n", " ") for pred in preds]
+        results["gts"] = [gt.replace("\n", " ") for gt in gts]
+
+        # === Gather results from other ranks at main rank process (DDP) ===
+        if self.is_distributed:
+            all_results = gather_inference_outputs(local_results=results, main_rank=0)
+            logger.info_main("Successfully gathered inference results at main rank.")
+            if is_main_process():
+                _lengths = {k: len(lis) for k, lis in all_results.items()}
+                logger.info_main(f"Lengths: {_lengths}")
+        else:
+            all_results = results
+
+        all_preds = all_results["preds"]
+        all_gts = all_results["gts"]
+
+        # === Calculate final scores/metrics and log to WandB ===
+        if state.is_world_process_zero:
+
+            # Put preds and gts into compatible format for Pycocoeval
+            in_res = {i: [pred] for i, pred in enumerate(all_preds)}
+            in_gts = {i: [gt] for i, gt in enumerate(all_gts)}
+
+            # === BLEU ===
+            try:
+                (bleu_score_1, bleu_score_2, bleu_score_3, bleu_score_4), _ = self.bleu_scorer.compute_score(gts=in_gts,
+                                                                                                             res=in_res,
+                                                                                                             verbose=0)
+            except Exception as e:
+                logger.error(f"BLEU score calculation failed: {e}")
+                bleu_score_1 = bleu_score_2 = bleu_score_3 = bleu_score_4 = -1.0
+
+            # === METEOR ===
+            try:
+                meteor_score, _ = self.meteor_scorer.compute_score(gts=in_gts, res=in_res)
+            except Exception as e:
+                logger.error(f"METEOR score calculation failed: {e}")
+                self.meteor_scorer.lock.release()
+                meteor_score = -1.0  # use -1 to indicate error
+
+            # === ROUGE ===
+            try:
+                rougel_score, _ = self.rougel_scorer.compute_score(gts=in_gts, res=in_res)
+                rougel_score = rougel_score.item()
+            except Exception as e:
+                logger.error(f"ROUGE-L score calculation failed: {e}")
+                rougel_score = -1.0  # use -1 to indicate error
+
+            # === CIDEr ===
+            try:
+                cider_score, _ = self.cider_scorer.compute_score(gts=in_gts, res=in_res)
+                cider_score = cider_score.item()
+            except Exception as e:
+                logger.error(f"CIDEr score calculation failed: {e}")
+                cider_score = -1.0  # use -1 to indicate error
+
+            # Log the BLEU scores
+            logger.info_main(f"BLEU-1 score: {bleu_score_1:.4f}")
+            logger.info_main(f"BLEU-2 score: {bleu_score_2:.4f}")
+            logger.info_main(f"BLEU-3 score: {bleu_score_3:.4f}")
+            logger.info_main(f"BLEU-4 score: {bleu_score_4:.4f}")
+            wandb.log({f"bleu_score_1": bleu_score_1})
+            wandb.log({f"bleu_score_2": bleu_score_2})
+            wandb.log({f"bleu_score_3": bleu_score_3})
+            wandb.log({f"bleu_score_4": bleu_score_4})
+
+            # Log the METEOR score
+            logger.info_main(f"METEOR score: {meteor_score}")
+            wandb.log({"meteor_score": meteor_score})
+
+            # Log the ROUGE-L score
+            logger.info_main(f"ROUGE-L score: {rougel_score}")
+            wandb.log({"rougel_score": rougel_score})
+
+            # Log the CIDEr score
+            logger.info_main(f"CIDEr score: {cider_score}")
+            wandb.log({"cider_score": cider_score})
+
+            # === Log and optionally save best model ===
+            if bleu_score_1 > self.best_bleu_score_1:
+                self.best_bleu_score_1 = bleu_score_1
+                logger.info_main(f"New best BLEU-1 score: {self.best_bleu_score_1:.4f} - Saving model checkpoint")
+                self.save_checkpoint(model, args.output_dir)
+
+            # Always log best, even if there is no improvement
+            wandb.log({"best_bleu_score_1": self.best_bleu_score_1})
 
         # Ensure that main process finishes writing before continuing
         if self.is_distributed:
