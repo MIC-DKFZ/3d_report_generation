@@ -431,8 +431,7 @@ def main():
     setup_ddp()  # setup DDP first so we can communicate shared output folder
     cfg = setup_config_and_logging()
 
-    # TODO: could add it as an argument
-    seed_everything(42)  # Set a random seed for reproducibility
+    seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
 
     try:
         vlm_model_class = vlm_registry[cfg.model.model_type].model_class
