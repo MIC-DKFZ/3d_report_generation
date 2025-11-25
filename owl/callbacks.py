@@ -124,8 +124,8 @@ class PrintEvalBatchCallback(TrainerCallback):
                 gts.extend(decoded_gt_assistant_answers)
 
         if self.print_first_sample:
-            logger.error_main(f"First sample GROUNDTRUTH:\n{decoded_pred_assistant_answers[0]}")
-            logger.error_main(f"First sample PREDICTION:\n{decoded_gt_assistant_answers[0]}")
+            logger.error_main(f"First sample GROUNDTRUTH:\n{decoded_gt_assistant_answers[0]}")
+            logger.error_main(f"First sample PREDICTION:\n{decoded_pred_assistant_answers[0]}")
 
         # Synchronize all distributed processes to keep logging output aligned
         if self.is_distributed:
@@ -385,8 +385,8 @@ class PycocoevalCallback(TrainerCallback):
                 gts.extend(decoded_gt_assistant_answers)
 
         if self.print_first_sample:
-            logger.error_main(f"First sample GROUNDTRUTH:\n{decoded_pred_assistant_answers[0]}")
-            logger.error_main(f"First sample PREDICTION:\n{decoded_gt_assistant_answers[0]}")
+            logger.error_main(f"First sample GROUNDTRUTH:\n{decoded_gt_assistant_answers[0]}")
+            logger.error_main(f"First sample PREDICTION:\n{decoded_pred_assistant_answers[0]}")
 
         # Remove '\n' here as this will interfere Pycocoeval (specifically METEOR)
         results["preds"] = [pred.replace("\n", " ") for pred in preds]
