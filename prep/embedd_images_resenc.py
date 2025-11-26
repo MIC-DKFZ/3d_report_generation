@@ -156,6 +156,7 @@ def combine_patches_into_image(embeddings, attn_masks, num_patches):
 def process_image_center_crop(
     img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"
 ):
+    raise Exception("Not implemented")
     target_size = (192, 192, 192)
 
     blosc2_result = utils.load_blosc2(img_path)
@@ -225,6 +226,7 @@ def process_image_center_crop(
 def process_image_native_res(
     img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"
 ):
+    raise Exception("Not implemented")
     # Print debug information about patch size
     patch_size = tuple(config["recommended_downstream_patchsize"])
     try:
