@@ -1,3 +1,7 @@
+# FIXME: Once we define which FeatureMaps we will use for creating the embeddings,
+#  this whole file can be removed and the resenc method can be integrated in embedd_images_primus.py
+#  with all the logic for the embeddings creation in the forward pass in resenc.py
+
 from typing import List
 import resenc
 import torch

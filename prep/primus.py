@@ -7,7 +7,7 @@ from nnunetv2.training.nnUNetTrainer.pretraining.primus_example import (
 
 
 class PrimusEncoderOnly(Primus):
-    def forward(self, x, ret_mask=False):
+    def forward(self, x):
         x = self.down_projection(x)
         # last output of the encoder is the input to EVA
         _, _, W, H, D = x.shape
