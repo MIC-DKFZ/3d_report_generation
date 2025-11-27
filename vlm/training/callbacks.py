@@ -403,11 +403,11 @@ class PycocoevalCallback(TrainerCallback):
         else:
             all_results = results
 
-        all_preds = all_results["preds"]
-        all_gts = all_results["gts"]
-
         # === Calculate final scores/metrics and log to WandB ===
         if state.is_world_process_zero:
+
+            all_preds = all_results["preds"]
+            all_gts = all_results["gts"]
 
             # Put preds and gts into compatible format for Pycocoeval
             in_res = {i: [pred] for i, pred in enumerate(all_preds)}
