@@ -133,6 +133,26 @@ class RunConfig(ConfigBase):
                 setattr_nested(self, _module, _val)
                 logger.info_main(f"  > cfg.{_module} set to {_val}")
 
+    def maybe_reset_validation_specific_args(self):
+        """
+        When doing no validation (val_dataset_json_path=None), reset validation-specific arguments.
+        This is especially important for SFTTrainer args, which would otherwise raise errors.
+        """
+        if self.data.val_dataset_json_path is None:
+            if is_main_process():
+                logger.info("[No Validation] Resetting validation-specific arguments "
+                            "as no validation dataset JSON was provided:")
+
+            _lis = [
+                (["trainer.eval_steps", "trainer.metric_for_best_model"], None),
+                (["trainer.eval_strategy"], "no"),
+            ]
+            for _modules, _val in _lis:
+                for _module in _modules:
+                    setattr_nested(self, _module, _val)
+                    if is_main_process():
+                        logger.info(f"  > cfg.{_module} set to {_val}")
+
     def resolve_run_name(self) -> None:
         if is_main_process():
             job_id = os.getenv("SLURM_JOB_ID")

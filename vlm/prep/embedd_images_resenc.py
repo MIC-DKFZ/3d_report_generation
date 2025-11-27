@@ -1,3 +1,7 @@
+# FIXME: Once we define which FeatureMaps we will use for creating the embeddings,
+#  this whole file can be removed and the resenc method can be integrated in embedd_images_primus.py
+#  with all the logic for the embeddings creation in the forward pass in resenc.py
+
 from typing import List
 import resenc
 import torch
@@ -149,6 +153,7 @@ def combine_patches_into_image(embeddings, attn_masks, num_patches):
 def process_image_center_crop(
     img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"
 ):
+    raise Exception("Not implemented")
     target_size = (192, 192, 192)
 
     blosc2_result = utils.load_blosc2(img_path)
@@ -218,6 +223,7 @@ def process_image_center_crop(
 def process_image_native_res(
     img_path, model, config, device="cuda" if torch.cuda.is_available() else "cpu"
 ):
+    raise Exception("Not implemented")
     # Print debug information about patch size
     patch_size = tuple(config["recommended_downstream_patchsize"])
     try:
