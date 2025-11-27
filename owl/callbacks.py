@@ -8,7 +8,7 @@ import numpy as np
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 import wandb
 from transformers.modeling_utils import unwrap_model
-from evaluation.metrics import BLEUScorer, ROUGELScorer, METEORScorer
+from evaluation.hf_evaluate.scorers import BLEUScorer, ROUGELScorer, METEORScorer
 from utils.ddp_utils import gather_inference_outputs
 from utils.filter_batch import extract_batch_prompt_only
 from utils import logger

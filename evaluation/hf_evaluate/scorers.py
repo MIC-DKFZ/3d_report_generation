@@ -1,9 +1,9 @@
 import os
 from abc import ABC, abstractmethod
 
-from evaluation.evaluate_metrics.bleu.bleu import Bleu
-from evaluation.evaluate_metrics.meteor.meteor import Meteor
-from evaluation.evaluate_metrics.rouge.rouge import Rouge
+from evaluation.hf_evaluate.bleu.bleu import Bleu
+from evaluation.hf_evaluate.meteor.meteor import Meteor
+from evaluation.hf_evaluate.rouge.rouge import Rouge
 from utils.helper import get_local_process_rank
 
 

@@ -5,7 +5,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 from utils import logger
-from evaluation.metrics import BLEUScorer, ROUGELScorer, METEORScorer
+from evaluation.hf_evaluate.scorers import BLEUScorer, ROUGELScorer, METEORScorer
 from utils.helper import chunkify, add_datetime_tag
 from utils.load_and_save_files import load_json, save_json
 import matplotlib.pyplot as plt
