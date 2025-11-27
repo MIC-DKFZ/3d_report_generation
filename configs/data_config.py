@@ -14,6 +14,9 @@ class DataConfig(ConfigBase):
     vision_input_path: str | None = Field(None, description="Path to the vision input (either embeddings or images).")
     vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
     embed_dim: int | None = Field(None, description="Embedding dimension of the embeddings if using embeddings as input.")
+    embed_size: tuple[int, int, int] | None = Field(
+        None, description="Embedding size if using embeddings as input (e.g. 24x24x24)."
+    )
 
     answer_types: str | list = Field(..., description="Which answer types and subtypes to include during training.")
 
