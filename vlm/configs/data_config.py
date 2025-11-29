@@ -8,32 +8,45 @@ class DataConfig(ConfigBase):
     """
     Dataset configuration.
     """
-    dataset_name: Literal["amosmm", "ctrate", "merlin"] | None = Field(None, description="Name of the dataset.")
-    train_dataset_json_path: str | None = Field(None, description="Path to the train dataset JSON file.")
-    val_dataset_json_path: str | None = Field(None, description="Path to the validation dataset JSON file.")
-    vision_input_path: str | None = Field(None, description="Path to the vision input (either embeddings or images).")
+    dataset_name: Literal["amosmm", "ctrate"] | None = Field(
+        None, description="Name of the dataset."
+    )
+    train_dataset_json_path: str | None = Field(
+        None, description="Path to the train dataset JSON file."
+    )
+    val_dataset_json_path: str | None = Field(
+        None, description="Path to the validation dataset JSON file."
+    )
+    vision_input_path: str | None = Field(
+        None, description="Path to the vision input (either embeddings or images)."
+    )
     vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
-
-    embed_dim: int | None = Field(None, description="Embedding dimension when using embeddings as input (e.g. 864).")
+    embed_dim: int | None = Field(
+        None, description="Embedding dimension of the embeddings if using"
+        " embeddings as input (e.g. 864.)"
+    )
     embed_size: tuple[int, int, int] | None = Field(
         None, description="Embedding size if using embeddings as input (e.g. 24x24x24)."
     )
 
-    answer_types: str | list = Field(..., description="Which answer types and subtypes to include during training.")
+    answer_types: str | list = Field(
+        ..., description="Which answer types and subtypes to include during training."
+    )
 
     text_only: bool = Field(
         False,
         description="Whether to only input text and omit any vision tokens."
     )
     embedding_constant: float | Literal["random"] | None = Field(
-        None,
-        description="Constant value for language-only baseline. Either a float or 'random'."
+        None, description="Constant value for language-only baseline. Either a float or 'random'."
     )
 
     n_train_samples: int | None = Field(None, description="Number of training samples to use.")
     n_val_samples: int = Field(200, description="Number of validation samples to use.")
 
-    do_resize: bool = Field(False, description="Resize images to 192x192x192 cubes (with lung crops).")
+    do_resize: bool = Field(
+        False, description="Resize images to 192x192x192 cubes (with lung crops)."
+    )
     do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
     do_sentence_shuffle: bool = Field(
         True,

@@ -15,7 +15,11 @@ from torch.utils.data import Dataset
 
 from vlm.utils import logger
 from vlm.utils.dataset_utils import get_training_image_transforms, preprocess_3d_image
-from vlm.utils.regex_patterns import VQA_OPTION_PATTERN, VQA_OPTION_LETTERS_IN_TEXT_PATTERN
+from vlm.utils.regex_patterns import (
+    VQA_ANSWER_PATTERN,
+    VQA_OPTION_PATTERN,
+    VQA_OPTION_LETTERS_IN_TEXT_PATTERN,
+)
 from vlm.utils.vision_input_type import VisionInputType
 
 from configs.run_config import RunConfig
@@ -28,7 +32,10 @@ def convert_dtype(image: np.ndarray, target_dtype: Type[Number]) -> np.ndarray:
 
 
 def z_score_normalization(
-    image: np.ndarray, use_mask_for_norm: bool, non_zero_mask: np.ndarray, target_dtype: Type[Number]
+    image: np.ndarray,
+    use_mask_for_norm: bool,
+    non_zero_mask: np.ndarray,
+    target_dtype: Type[Number],
 ) -> np.ndarray:
     image = convert_dtype(image, target_dtype)
     if use_mask_for_norm:
@@ -122,12 +129,14 @@ class MedicalImageDataset(Dataset, ABC):
         if self.do_transforms:
             if self.vision_input_type != VisionInputType.IMAGE:
                 raise ValueError("do_transforms can only be True if vision_input_type is IMAGE")
-            self.training_transforms = get_training_image_transforms(patch_size=self.vision_encoder_patch_size)
+            self.training_transforms = get_training_image_transforms(
+                patch_size=self.vision_encoder_patch_size
+            )
         else:
             self.training_transforms = None
 
     @abstractmethod
-    def _get_vision_input_path(self, image_id):
+    def _get_vision_input_path(self, image_id) -> Path:
         """Load vision input path for a given image ID"""
         pass
 
@@ -159,18 +168,22 @@ class MedicalImageDataset(Dataset, ABC):
             with np.load(vision_input_path) as npz_file:
                 # Attempt to load the "embeddings" key if it exists, otherwise load the first array
                 if "embedding" in npz_file:
-                    vision_input = npz_file["embeddings"].copy()  # Make a copy to avoid reference issues
+                    vision_input = npz_file[
+                        "embeddings"
+                    ].copy()  # Make a copy to avoid reference issues
                 else:
-                    vision_input = npz_file[npz_file.files[0]].copy()  # Make a copy to avoid reference issues
+                    vision_input = npz_file[
+                        npz_file.files[0]
+                    ].copy()  # Make a copy to avoid reference issues
 
         elif str(vision_input_path).endswith(".b2nd"):
             # Load b2nd file like nnUNet :)
-            dparams = {
-                'nthreads': 1
-            }
-            mmap_kwargs = {} if os.name == "nt" else {'mmap_mode': 'r'}
+            dparams = {"nthreads": 1}
+            mmap_kwargs = {} if os.name == "nt" else {"mmap_mode": "r"}
 
-            vision_input = np.array(blosc2.open(urlpath=vision_input_path, mode='r', dparams=dparams, **mmap_kwargs))
+            vision_input = np.array(
+                blosc2.open(urlpath=vision_input_path, mode="r", dparams=dparams, **mmap_kwargs)
+            )
 
         elif str(vision_input_path).endswith(".bl2"):
             # remove batch dimension
@@ -194,10 +207,14 @@ class MedicalImageDataset(Dataset, ABC):
 
         if self.vision_input_type == VisionInputType.IMAGE:
             vision_input = z_score_normalization(vision_input, False, None, np.float32)
-            vision_input = preprocess_3d_image(image_array=vision_input, do_resize=self.do_resize,
-                                               do_transforms=self.do_transforms,
-                                               patch_size=self.vision_encoder_patch_size, split=self.split,
-                                               training_transforms=self.training_transforms)
+            vision_input = preprocess_3d_image(
+                image_array=vision_input,
+                do_resize=self.do_resize,
+                do_transforms=self.do_transforms,
+                patch_size=self.vision_encoder_patch_size,
+                split=self.split,
+                training_transforms=self.training_transforms,
+            )
 
         if self.is_stacked_2d_embedding:
             # remove class token
@@ -253,7 +270,11 @@ class MedicalImageDataset(Dataset, ABC):
         # result = self.modify_sample(result)
 
         if self.do_sentence_shuffle:
-            result["question"], result["full_answer"] = self.shuffle_sentences(result["question"], result["full_answer"])
+            result["question"], result["full_answer"] = self.shuffle_sentences(
+                result["question"], result["full_answer"]
+            )
+        else:
+            result["full_answer"] = result["full_answer"]
 
         formatted_qa, formatted_qa_prompt_only = self.format_into_message(
             result["question"],
@@ -276,15 +297,17 @@ class MedicalImageDataset(Dataset, ABC):
         vision_input_path = self._get_vision_input_path(sample["image_id"])
         vision_input = self._load_vision_input(vision_input_path)
 
-            if self.embedding_constant is not None:
-                if type(self.embedding_constant) is float:
-                    result["vision_input"] = np.full(vision_input.shape, self.embedding_constant, dtype=np.float32)
-                elif type(self.embedding_constant) is str and self.embedding_constant == "random":
-                    result["vision_input"] = np.random.rand(*vision_input.shape).astype(np.float32)
-                else:
-                    raise ValueError(f"Unsupported embedding constant type: {type(self.embedding_constant)}")
+        if self.embedding_constant is not None:
+            if type(self.embedding_constant) is float:
+                result["vision_input"] = np.full(
+                    vision_input.shape, self.embedding_constant, dtype=np.float32
+                )
+            elif type(self.embedding_constant) is str and self.embedding_constant == "random":
+                result["vision_input"] = np.random.rand(*vision_input.shape).astype(np.float32)
             else:
-                result["vision_input"] = vision_input
+                raise ValueError(
+                    f"Unsupported embedding constant type: {type(self.embedding_constant)}"
+                )
         else:
             result["vision_input"] = None
 
@@ -318,10 +341,6 @@ class MedicalImageDataset(Dataset, ABC):
         if self.model_type == "qwen":
             user_message = {
                 "role": "user",
-                "content": [
-                    {"type": "video"},
-                    {"type": "text", "text": question},
-                ],
                 "content": ([{"type": "video"}] if not self.text_only else []) + [{"type": "text", "text": question}]
             }
         else:
@@ -351,14 +370,15 @@ class AMOSMMDataset(MedicalImageDataset):
         do_transforms (bool, optional): If True, apply data augmentations to images
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
-    def _get_vision_input_path(self, image_id):
+
+    def _get_vision_input_path(self, image_id) -> Path:
         """Load vision input path for a given image ID"""
         if self.split == "train":
-            image_name = f"{image_id.split("./")[-1].split(".")[0]}_0000"
+            image_name = f"{image_id.split('./')[-1].split('.')[0]}_0000"
         elif self.split == "val":
-            image_name = f"{image_id.split("./")[-1].split(".")[0]}_0000"
+            image_name = f"{image_id.split('./')[-1].split('.')[0]}_0000"
         elif self.split == "test":
-            image_name = f"{image_id.split("./")[-1].split(".")[0]}"
+            image_name = f"{image_id.split('./')[-1].split('.')[0]}"
         else:
             raise ValueError(f"Unknown split: {self.split}")
 
@@ -368,11 +388,11 @@ class AMOSMMDataset(MedicalImageDataset):
             image_name = f"{image_name}.b2nd"
         else:
             raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
-        return str(self.vision_input_path / image_name)
+        return Path(self.vision_input_path / image_name)
 
     def shuffle_sentences(self, question, answer) -> tuple[str, str]:
         # Extract options with their content
-        lines = question.split('\n')
+        lines = question.split("\n")
 
         options = {}
         lines_before = []
@@ -405,14 +425,14 @@ class AMOSMMDataset(MedicalImageDataset):
         random.shuffle(contents)
 
         # Rebuild options A, B, C, D with shuffled content
-        new_options = {chr(ord('A') + i): contents[i] for i in range(4)}
+        new_options = {chr(ord("A") + i): contents[i] for i in range(4)}
 
         # Find new letter for correct content
         # new_letter = [k for k, v in new_options.items() if v == correct_content][0]
 
         # Rebuild question
-        option_lines = [f"{letter}. {new_options[letter]}" for letter in ['A', 'B', 'C', 'D']]
-        new_question = '\n'.join(lines_before + option_lines + lines_after)
+        option_lines = [f"{letter}. {new_options[letter]}" for letter in ["A", "B", "C", "D"]]
+        new_question = "\n".join(lines_before + option_lines + lines_after)
 
         # Update answer letter
         # new_answer = re.sub(
@@ -426,12 +446,16 @@ class AMOSMMDataset(MedicalImageDataset):
         reversed_new_options = {content: letter for letter, content in new_options.items()}
         options_letter_map = {}
         for old_letter, content in options.items():
-            options_letter_map[old_letter] = reversed_new_options[content]  # map old letter to new letter
+            options_letter_map[old_letter] = reversed_new_options[
+                content
+            ]  # map old letter to new letter
 
         new_answer = re.sub(
             VQA_OPTION_LETTERS_IN_TEXT_PATTERN,
-            lambda m: options_letter_map[next(g for g in m.groups() if g)],  # replace old letter with new letter
-            answer
+            lambda m: options_letter_map[
+                next(g for g in m.groups() if g)
+            ],  # replace old letter with new letter
+            answer,
         )
 
         return new_question, new_answer
@@ -454,7 +478,8 @@ class CTRATEDataset(MedicalImageDataset):
         do_transforms (bool, optional): If True, apply data augmentations to images
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
-    def _get_vision_input_path(self, image_id):
+
+    def _get_vision_input_path(self, image_id) -> Path:
         """Load vision input path for a given image ID"""
         if self.split == "train":
             split_path = "train"
@@ -466,7 +491,11 @@ class CTRATEDataset(MedicalImageDataset):
             raise ValueError(f"Unknown split: {self.split}")
 
         if self.vision_input_type == VisionInputType.EMBEDDING:
-            return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}{self.image_id_suffix}_embedding.bl2")
+            return Path(
+                self.vision_input_path
+                / f"{split_path}_fixed"
+                / f"{image_id}{self.image_id_suffix}_embedding.bl2"
+            )
         if self.vision_input_type == VisionInputType.IMAGE:
             return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}.b2nd")
         else:
@@ -484,19 +513,19 @@ class CTRATEDataset(MedicalImageDataset):
             return question, answer_str
 
         # Split by headers, keeping them in the result
-        sections = re.split(r'(Findings:|Impression:)', answer_str)
+        sections = re.split(r"(Findings:|Impression:)", answer_str)
 
         result = []
         for part in sections:
             # Keep headers as-is
-            if part in ['Findings:', 'Impression:']:
+            if part in ["Findings:", "Impression:"]:
                 result.append(part)
             # Shuffle sentences in content sections
             elif part.strip():
-                sentences = re.split(r'(?<=[.!?])\s+', part.strip())
+                sentences = re.split(r"(?<=[.!?])\s+", part.strip())
                 if len(sentences) > 1 and random.uniform(0, 1) < self.sentence_shuffle_p:
                     random.shuffle(sentences)
-                    result.append(' ' + ' '.join(sentences))
+                    result.append(" " + " ".join(sentences))
                 else:
                     result.append(part)
 
@@ -512,124 +541,124 @@ class MerlinDataset(CTRATEDataset):
             raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
 
     def shuffle_sentences(self, question: str, answer: str) -> tuple[str, str]:
-            """Organ-aware sentence shuffling for CT reports.
+        """Organ-aware sentence shuffling for CT reports.
 
-            For structured reports (with organ headers like "Liver:", "LUNGS:"):
-            - Splits findings into organ sections
-            - Shuffles sentences WITHIN each organ section
-            - Shuffles the ORDER of organ sections
+        For structured reports (with organ headers like "Liver:", "LUNGS:"):
+        - Splits findings into organ sections
+        - Shuffles sentences WITHIN each organ section
+        - Shuffles the ORDER of organ sections
 
-            For unstructured reports (no organ headers):
-            - Shuffles all sentences (each is typically one organ observation)
+        For unstructured reports (no organ headers):
+        - Shuffles all sentences (each is typically one organ observation)
 
-            For impression:
-            - Shuffles lines (each is an independent diagnostic point)
-            """
+        For impression:
+        - Shuffles lines (each is an independent diagnostic point)
+        """
 
-            # print("answer before shuffling:", answer)
-            if answer is None or not str(answer).strip():
-                return question, ""
+        # print("answer before shuffling:", answer)
+        if answer is None or not str(answer).strip():
+            return question, ""
 
-            answer_str = str(answer).strip()
-            answer_str = re.sub(r"(?<=\.)\s+:", "", answer_str)
+        answer_str = str(answer).strip()
+        answer_str = re.sub(r"(?<=\.)\s+:", "", answer_str)
 
 
-            if random.uniform(0, 1) >= self.sentence_shuffle_p:
-               return question, answer_str
+        if random.uniform(0, 1) >= self.sentence_shuffle_p:
+           return question, answer_str
 
-            # --- Split FINDINGS / IMPRESSION ---
-            impression_split = re.split(
-                r"(IMPRESSION:)", answer_str, maxsplit=1, flags=re.IGNORECASE
-            )
+        # --- Split FINDINGS / IMPRESSION ---
+        impression_split = re.split(
+            r"(IMPRESSION:)", answer_str, maxsplit=1, flags=re.IGNORECASE
+        )
 
-            if len(impression_split) == 3:
-                findings_part = impression_split[0].strip()
-                impression_header = impression_split[1]
-                impression_part = impression_split[2].strip()
-            else:
-                findings_part = answer_str
-                impression_header = None
-                impression_part = None
+        if len(impression_split) == 3:
+            findings_part = impression_split[0].strip()
+            impression_header = impression_split[1]
+            impression_part = impression_split[2].strip()
+        else:
+            findings_part = answer_str
+            impression_header = None
+            impression_part = None
 
-            # Strip optional "FINDINGS:" prefix
-            findings_body = re.sub(
-                r"^FINDINGS:\s*", "", findings_part, flags=re.IGNORECASE
-            )
-            had_findings_header = findings_body != findings_part
+        # Strip optional "FINDINGS:" prefix
+        findings_body = re.sub(
+            r"^FINDINGS:\s*", "", findings_part, flags=re.IGNORECASE
+        )
+        had_findings_header = findings_body != findings_part
 
-            # --- Split findings into organ sections ---
-            # Organ headers: capitalized phrase followed by ":"
-            # Split at boundaries where ". " is followed by an organ header
-            organ_header_re = re.compile(
-                r"(?<=\.\s)"                          # lookbehind: sentence end ". "
-                r"(?=[A-Z][A-Za-z \-/,()]*?:\s)"     # lookahead: organ header
-            )
+        # --- Split findings into organ sections ---
+        # Organ headers: capitalized phrase followed by ":"
+        # Split at boundaries where ". " is followed by an organ header
+        organ_header_re = re.compile(
+            r"(?<=\.\s)"                          # lookbehind: sentence end ". "
+            r"(?=[A-Z][A-Za-z \-/,()]*?:\s)"     # lookahead: organ header
+        )
 
-            starts_with_header = bool(
-                re.match(r"^[A-Z][A-Za-z \-/,()]*?:\s", findings_body)
-            )
-            sections_raw = organ_header_re.split(findings_body)
-            sections_raw = [s.strip() for s in sections_raw if s.strip()]
+        starts_with_header = bool(
+            re.match(r"^[A-Z][A-Za-z \-/,()]*?:\s", findings_body)
+        )
+        sections_raw = organ_header_re.split(findings_body)
+        sections_raw = [s.strip() for s in sections_raw if s.strip()]
 
-            is_structured = len(sections_raw) > 1 or starts_with_header
+        is_structured = len(sections_raw) > 1 or starts_with_header
 
-            if is_structured:
-                shuffled_sections = []
-                for section in sections_raw:
-                    # Extract organ header
-                    header_match = re.match(
-                        r"^([A-Z][A-Za-z \-/,()]*?:\s)", section
-                    )
-                    if header_match:
-                        header = header_match.group(1)
-                        body = section[header_match.end() :]
-                    else:
-                        header = ""
-                        body = section
+        if is_structured:
+            shuffled_sections = []
+            for section in sections_raw:
+                # Extract organ header
+                header_match = re.match(
+                    r"^([A-Z][A-Za-z \-/,()]*?:\s)", section
+                )
+                if header_match:
+                    header = header_match.group(1)
+                    body = section[header_match.end() :]
+                else:
+                    header = ""
+                    body = section
 
-                    # Shuffle sentences within this organ section
-                    sentences = [
-                        s
-                        for s in re.split(r"(?<=[.!?])\s+", body)
-                        if s.strip()
-                    ]
-                    if len(sentences) > 1:
-                        random.shuffle(sentences)
-
-                    shuffled_sections.append(header + " ".join(sentences))
-
-                # Shuffle organ section order
-                random.shuffle(shuffled_sections)
-                shuffled_findings = " ".join(shuffled_sections)
-            else:
-                # Unstructured: shuffle all sentences
+                # Shuffle sentences within this organ section
                 sentences = [
                     s
-                    for s in re.split(r"(?<=[.!?])\s+", findings_body)
+                    for s in re.split(r"(?<=[.!?])\s+", body)
                     if s.strip()
                 ]
                 if len(sentences) > 1:
                     random.shuffle(sentences)
-                shuffled_findings = " ".join(sentences)
 
-            # Re-add FINDINGS header
-            if had_findings_header:
-                shuffled_findings = "FINDINGS: " + shuffled_findings
+                shuffled_sections.append(header + " ".join(sentences))
 
-            result = shuffled_findings
+            # Shuffle organ section order
+            random.shuffle(shuffled_sections)
+            shuffled_findings = " ".join(shuffled_sections)
+        else:
+            # Unstructured: shuffle all sentences
+            sentences = [
+                s
+                for s in re.split(r"(?<=[.!?])\s+", findings_body)
+                if s.strip()
+            ]
+            if len(sentences) > 1:
+                random.shuffle(sentences)
+            shuffled_findings = " ".join(sentences)
 
-            # --- Shuffle impression items (each on its own line after preprocessing) ---
-            if impression_header and impression_part:
-                impression_sentences = [
-                    s.strip() for s in impression_part.split("\n") if s.strip()
-                ]
-                if len(impression_sentences) > 1:
-                    random.shuffle(impression_sentences)
-                result += f"\n{impression_header}\n" + "\n".join(impression_sentences)
+        # Re-add FINDINGS header
+        if had_findings_header:
+            shuffled_findings = "FINDINGS: " + shuffled_findings
 
-            # print("answer after shuffling:", result)
+        result = shuffled_findings
 
-            return question, result
+        # --- Shuffle impression items (each on its own line after preprocessing) ---
+        if impression_header and impression_part:
+            impression_sentences = [
+                s.strip() for s in impression_part.split("\n") if s.strip()
+            ]
+            if len(impression_sentences) > 1:
+                random.shuffle(impression_sentences)
+            result += f"\n{impression_header}\n" + "\n".join(impression_sentences)
+
+        # print("answer after shuffling:", result)
+
+        return question, result
 
 
 class CTRATEDatasetRetrieval(CTRATEDataset):
