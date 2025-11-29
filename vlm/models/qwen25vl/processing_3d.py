@@ -61,6 +61,7 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
                     text[text_index] = text[text_index].replace(placeholder, self.video_token)
                     text_index += 1
                     text[text_index] = text[text_index].replace(self.video_token, placeholder * n, 1)
+            text[text_index] = text[text_index].replace(placeholder, self.video_token)
 
 
 
