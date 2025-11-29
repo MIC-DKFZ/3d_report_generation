@@ -69,16 +69,18 @@ class MedicalImageDataset(Dataset, ABC):
     ):
         super().__init__()
 
-        self.dataset_json_path = Path(cfg.data.dataset_json_path)
         self.vision_input_path = Path(cfg.data.vision_input_path)
         self.vision_input_type = cfg.data.vision_input_type
         self.model_name = cfg.model.model_type
         self.split = split
         if self.split == "train":
             self.n_samples = cfg.data.n_train_samples
+            self.dataset_json_path = Path(cfg.data.train_dataset_json_path)
         elif self.split == "val":
             self.n_samples = cfg.data.n_val_samples
+            self.dataset_json_path = Path(cfg.data.val_dataset_json_path)
         elif self.split == "test":
+            # TODO: which dataset_json_path to add here..?
             self.n_samples = cfg.eval.n_samples
         self.text_only = cfg.data.text_only
         self.embedding_constant = cfg.data.embedding_constant
