@@ -2,11 +2,7 @@ import json
 from abc import ABC, abstractmethod
 from numbers import Number
 from pathlib import Path
-<<<<<<< HEAD
 from typing import Type, Literal, Tuple, Dict, List
-=======
-from typing import Type, Literal, Tuple
->>>>>>> febabe0 (Refactor: Construct Datasets from RunConfig)
 import re
 import random
 import blosc2
@@ -26,11 +22,7 @@ from vlm.utils.regex_patterns import (
 )
 from vlm.utils.vision_input_type import VisionInputType
 
-<<<<<<< HEAD
 from vlm.configs.run_config import RunConfig
-=======
-from configs.run_config import RunConfig
->>>>>>> febabe0 (Refactor: Construct Datasets from RunConfig)
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
