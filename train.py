@@ -11,7 +11,13 @@ from trl import SFTConfig
 
 import wandb
 from vlm.configs.run_config import RunConfig
-from vlm.data.datasets import AMOSMMDataset, CTRATEDataset, MerlinDataset
+from vlm.data.datasets import (
+        AMOSMMDataset, 
+        CTRATEDataset, 
+        MerlinDataset,
+        CTRATEDatasetRetrieval, 
+        CTRATEDatasetRetrievalWithImage
+)
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
 from vlm.models.abstract_vlm import AbstractVLMModel
@@ -438,14 +444,23 @@ def train_val_data_from_config(cfg: RunConfig):
             do_sentence_shuffle=False,
         ) if do_validation else None
     elif cfg.data.dataset_name == "ctrate":
+        if cfg.data.retrieval_json_path is not None:
+            if cfg.data.retrieval_use_image_in_prompt:
+                ctrate_dataset_class = CTRATEDatasetRetrievalWithImage
+            else:
+                ctrate_dataset_class = CTRATEDatasetRetrieval
+        else:
+            ctrate_dataset_class = CTRATEDataset
+
+        ctrate_dataset_class
         # Use CTRATE dataset
-        train_dataset = CTRATEDataset(
+        train_dataset = ctrate_dataset_class(
             cfg=cfg,
             split="train",
             vision_encoder_patch_size=vision_encoder_patch_size,
         )
 
-        val_dataset = CTRATEDataset(
+        val_dataset = ctrate_dataset_class(
             cfg=cfg,
             split="val",
             vision_encoder_patch_size=vision_encoder_patch_size,

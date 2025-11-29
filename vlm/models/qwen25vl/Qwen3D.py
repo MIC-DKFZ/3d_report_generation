@@ -66,7 +66,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
 
         Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
         """
-        # spatial_merge_size = self.config.vision_config.spatial_merge_size
+        spatial_merge_size = self.config.vision_config.spatial_merge_size
         # image_token_id = self.config.image_token_id
         video_token_id = self.config.video_token_id
         vision_start_token_id = self.config.vision_start_token_id
@@ -114,7 +114,9 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
 
                     text_len = ed - st
                     st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-                    llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
+                    llm_pos_ids_list.append(
+                        torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx
+                    )
 
                     # llm_grid_t, llm_grid_h, llm_grid_w = adapter_args["video_grid_thw"][video_index]
                     #

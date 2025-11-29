@@ -52,8 +52,18 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
         text = text.copy()  # below lines change text in-place
 
         if num_vision_tokens is not None:
+            text_index = 0
             for i, n in enumerate(num_vision_tokens):
-                text[i] = text[i].replace(self.video_token, self.video_token * n, 1)
+                placeholder = "<|placeholder|>"
+                if self.video_token in text[text_index]
+                    text[text_index] = text[text_index].replace(self.video_token, placeholder * n, 1)
+                else:
+                    text[text_index] = text[text_index].replace(placeholder, self.video_token)
+                    text_index += 1
+                    text[text_index] = text[text_index].replace(self.video_token, placeholder * n, 1)
+
+
+
 
         if do_truncation and self.max_length is None:
             # TODO: we assume that 'truncate_after' appears at the same position across the entire dataset
