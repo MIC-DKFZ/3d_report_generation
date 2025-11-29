@@ -2,7 +2,7 @@ import json
 from abc import ABC, abstractmethod
 from numbers import Number
 from pathlib import Path
-from typing import Type, Literal, Tuple
+from typing import Type, Literal, Tuple, Dict, List
 import re
 import random
 import blosc2
@@ -235,28 +235,44 @@ class MedicalImageDataset(Dataset, ABC):
 
         return img_tensor
 
+    # def modify_sample(self, result: Dict) -> Dict:
+    #     return result
+
+    def modify_input(self, formatted_qa, formatted_qa_prompt_only, result):
+        return formatted_qa, formatted_qa_prompt_only
+
     def __getitem__(self, index):
         sample = self.samples[index]
 
         # Create a new dictionary instead of modifying the stored one
         result = dict(sample)
 
+        # Alter question
+        # result = self.modify_sample(result)
+
         if self.do_sentence_shuffle:
             result["question"], result["full_answer"] = self.shuffle_sentences(result["question"], result["full_answer"])
 
         formatted_qa, formatted_qa_prompt_only = self.format_into_message(
-                result["question"],
-                result["full_answer"],
-                system_text=sample["system_text"],
-            )
+            result["question"],
+            result["full_answer"],
+            self.model_name,
+            system_text=sample["system_text"],
+        )
+
+        formatted_qa, formatted_qa_prompt_only = self.modify_input(formatted_qa, formatted_qa_prompt_only, result)
 
         result["formatted_qa"] = formatted_qa
         result["formatted_qa_prompt_only"] = formatted_qa_prompt_only
 
         if not self.text_only:
             # Load embedding
-            vision_input_path = self._get_vision_input_path(sample["image_id"])
-            vision_input = self._load_vision_input(vision_input_path)
+            result = self._load_embeddings(sample, result)
+        return result
+
+    def _load_embeddings(self, sample, result: Dict) -> Dict:
+        vision_input_path = self._get_vision_input_path(sample["image_id"])
+        vision_input = self._load_vision_input(vision_input_path)
 
             if self.embedding_constant is not None:
                 if type(self.embedding_constant) is float:
@@ -612,3 +628,147 @@ class MerlinDataset(CTRATEDataset):
             # print("answer after shuffling:", result)
 
             return question, result
+
+
+class CTRATEDatasetRetrieval(CTRATEDataset):
+    def __init__(
+        self,
+        cfg: RunConfig,
+        vision_encoder_patch_size: Tuple[int, ...],
+        split: Literal["train", "val", "test"] = "train",
+        image_id_suffix="",
+    ):
+        super().__init__(
+            cfg=cfg,
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            split=split,
+            image_id_suffix=image_id_suffix,
+        )
+        # FIXME: not sure how to handle the case where the training samples are limited by `n_train_samples`
+        # E.g. a check would be needed that the image IDs of thre retrieval json are all included in the training subset
+        self.retrieval_json_path = Path(cfg.data.retrieval_json_path)
+        # TODO: provide this part of the cfg
+        self.n_retrieval_samples = int(cfg.data.retrieval_n_samples)
+        self.maybe_add_vision_tokens = ""
+
+        self.additional_instruction_prompt = "\nConsider those reports which were retrieved based on the query image."
+        self.add_image = False
+
+        with open(self.retrieval_json_path, "r") as f:
+            self.retrieval_dict = json.load(f)
+
+    @staticmethod
+    def get_case_from_dataset_json(dataset_json: List[Dict], image_id: str) -> Dict[str, str]:
+        for case in dataset_json:
+            if case["image_id"] == image_id:
+                return case
+
+        raise KeyError(
+            f"Image id: {image_id} can not be found in provided dataset_json make sure it exists"
+        )
+
+    def modify_input(self, formatted_qa, formatted_qa_prompt_only, result):
+        query_img_id = result["image_id"]
+
+        # get image_ids of most similar
+        nearest_neighbors_ids = self.retrieval_dict[query_img_id]["k_nearest_neighbor"]
+
+        # formatted_qa and formatted_qa_prompt_only reference the same "user_message" object
+        # we only need to modify one of them here
+        assert formatted_qa[1] is formatted_qa_prompt_only[1]
+        # for input_prompt in [formatted_qa, formatted_qa_prompt_only]:
+        # get user input
+        for d in formatted_qa:
+            if d["role"] == "user":
+                d["content"].append({"type": "text", "text": self.additional_instruction_prompt})
+                for n_nn, nearest_neighbor_id in enumerate(nearest_neighbors_ids):
+                    case = self.get_case_from_dataset_json(self.samples, nearest_neighbor_id)
+                    answer = case["answer"]
+                    if self.add_image:
+                        d["content"].append({"type": "video", "vision_input_path": nearest_neighbor_id})
+                    d["content"].append({"type": "text", "text": f"Report {n_nn + 1}:\n{answer}"})
+
+        return formatted_qa, formatted_qa_prompt_only
+
+    # def modify_sample(self, result: Dict) -> Dict:
+    #     question = result["question"]
+    #     query_img_id = result["image_id"]
+
+    #     # get image_ids of most similar
+    #     nearest_neighbors_ids = self.retrieval_dict[query_img_id]["k_nearest_neighbor"]
+
+    #     # Add text to the question/input prompt
+    #     question += (
+    #         f"\nHere is a list of {self.n_retrieval_samples} similar "
+    #         + "CT-reports based on the similarity of the query scan.\n"
+    #     )
+    #     for n_nn, nearest_neighbor_id in enumerate(nearest_neighbors_ids):
+    #         case = self.get_case_from_dataset_json(self.samples, nearest_neighbor_id)
+    #         answer = case["answer"]
+    #         question += f"Report {n_nn + 1}{self.maybe_add_vision_tokens}:\n{answer}\n"
+
+    #     result["question"] = question
+    #     return result
+
+
+class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
+    def __init__(
+        self,
+        cfg: RunConfig,
+        vision_encoder_patch_size: Tuple[int, ...],
+        split: Literal["train", "val", "test"] = "train",
+        image_id_suffix="",
+    ):
+        super().__init__(
+            cfg=cfg,
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            split=split,
+            image_id_suffix=image_id_suffix,
+        )
+        # self.maybe_add_vision_tokens = "<|vision_start|><|video_pad|><|vision_end|>"
+        self.maybe_add_vision_tokens = ""
+        self.additional_instruction_prompt = "\nConsider those similar report/image pairs which were retrieved based on the query image."
+        self.add_image = True
+
+
+    # TODO: instead of overriding the signature of the base class refactor base class and introduce hooks where this can be used
+    def _get_vision_input_path(self, image_id: str) -> List[Path]:
+        # get image_ids of most similar
+        nearest_neighbors_ids = self.retrieval_dict[image_id]["k_nearest_neighbor"]
+
+        # Bind the super method to a variable outside the list comprehension as else might lead to TypeError in some python versions
+        parent_get_vision_input_path = super()._get_vision_input_path
+
+        paths = [parent_get_vision_input_path(nn_id) for nn_id in nearest_neighbors_ids]
+
+        paths.insert(0, parent_get_vision_input_path(image_id))  # add query image at first position
+        return paths
+
+    def _load_vision_input(self, vision_input_path: List[Path]):
+        parent_load_vision_input = super()._load_vision_input
+        res = [parent_load_vision_input(p) for p in vision_input_path]
+        # FIXME: this function assumes that each input has the same size...
+        # assert [len(r.shape) == 5 for r in res], "Each loaded vision input should be 5D (B, C, H, W, D)"
+        # return np.concatenate(res, axis=0)  # concatenate along batch dimension
+        return res
+
+    # TODO is this the same as in the parent class?
+    def _load_embeddings(self, sample, result: Dict) -> Dict:
+        vision_input_path = self._get_vision_input_path(sample["image_id"])
+        vision_input = self._load_vision_input(vision_input_path)
+
+        if self.embedding_constant is not None:
+            if type(self.embedding_constant) is float:
+                result["vision_input"] = np.full(
+                    vision_input.shape, self.embedding_constant, dtype=np.float32
+                )
+            elif type(self.embedding_constant) is str and self.embedding_constant == "random":
+                result["vision_input"] = np.random.rand(*vision_input.shape).astype(np.float32)
+            else:
+                raise ValueError(
+                    f"Unsupported embedding constant type: {type(self.embedding_constant)}"
+                )
+        else:
+            result["vision_input"] = vision_input
+
+        return result

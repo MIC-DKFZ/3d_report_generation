@@ -35,7 +35,10 @@ class DataConfig(ConfigBase):
 
     do_resize: bool = Field(False, description="Resize images to 192x192x192 cubes (with lung crops).")
     do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
-    do_sentence_shuffle: bool = Field(True, description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.")
+    do_sentence_shuffle: bool = Field(
+        True,
+        description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.",
+    )
     sentence_shuffle_p: float = Field(0.5, description="Probability of randomly shuffling the order of sentences.")
 
     is_stacked_2d_embedding: bool = Field(False, description="Set to True for vision encoders such as 'Curia' "
@@ -43,8 +46,22 @@ class DataConfig(ConfigBase):
                                                              "(n_slices, class_token + n_patch_tokens, embed_dim).")
     reduce_to_n_slices: int | None = Field(None, description="The number of slices to reduce the stacked 2D embeddings to.")
 
-    image_id_suffix: str = Field("", description="Add a suffix to the image IDs provided in the dataset JSON. "
-                                                 "WARNING: Only works for CTRATE embeddings.")
+    image_id_suffix: str = Field(
+        "",
+        description="Add a suffix to the image IDs provided in the dataset JSON. "
+        "WARNING: Only works for CTRATE embeddings.",
+    )
+    retrieval_json_path: str | None = Field(
+        None, description="Path to the retrieval JSON file mapping for the respective dataset."
+    )
+
+    retrieval_n_samples: int = Field(
+        2, description="How many retrieval samples to use from the retrieval JSON file."
+    )
+
+    retrieval_use_image_in_prompt: bool = Field(
+        False, description="Whether to use the retrieved image in the prompt."
+    )
 
     @model_validator(mode="after")
     def validate_vision_input_modifiers(self):
