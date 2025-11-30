@@ -10,32 +10,26 @@ from torch.utils.data import DataLoader
 from trl import SFTConfig
 
 import wandb
-from configs.run_config import RunConfig
-from data.datasets import AMOSMMDataset, CTRATEDataset
-from evaluation.eval_distributed_sampler import EvalDistributedSampler
+from vlm.configs.run_config import RunConfig
+from vlm.data.datasets import AMOSMMDataset, CTRATEDataset
+from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
-from models.abstract_vlm import AbstractVLMModel
-from owl.callbacks import LossLoggingCallback, PrintEvalBatchCallback
-from registries.vlm_registry import vlm_registry
-from trainers.VLMSFTTrainer import VLMSFTTrainer
-from utils import logger
-from utils.ddp_utils import setup_ddp
-from utils.helper import (
-    is_main_process,
-    load_config_file,
-    merge_config_with_cli_args,
-    print_model_parameters,
-    seed_everything, print_param_groups,
-)
-from utils.load_and_save_files import load_json, save_json, save_yaml
-from utils.logging import setup_logger, log_banner
-from utils.memory_utils import (
+from vlm.models.abstract_vlm import AbstractVLMModel
+from vlm.training.callbacks import LossLoggingCallback, PrintEvalBatchCallback, PycocoevalCallback
+from vlm.training.trainers import VLMSFTTrainer
+from vlm.registries.vlm_registry import vlm_registry
+from vlm.utils import logger
+from vlm.utils.ddp_utils import setup_ddp
+from vlm.utils.helper import seed_everything, merge_config_with_cli_args, load_config_file, print_model_parameters, \
+    is_main_process, print_param_groups
+from vlm.utils.load_and_save_files import save_json, save_yaml
+from vlm.utils.logging import setup_logger, log_banner
+from vlm.utils.memory_utils import (
     aggressive_cleanup,
     log_memory_usage,
     setup_memory_efficient_training,
 )
-from utils.paths import VLM_CONFIG_DIR
-from utils.vision_input_type import VisionInputType
+from vlm.utils.paths import VLM_CONFIG_DIR
 
 
 class UnifiedVLMTrainer:
@@ -99,7 +93,7 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training Setup")
 
-        # Setup base model with quantization config if applicable
+        # Setup model, processor and tokenizer
         model = self.vlm_model.setup_model()
 
         # Apply trainable parameter configs and possibly add PEFT adapter layers
@@ -166,9 +160,17 @@ class UnifiedVLMTrainer:
                                          num_workers=self.cfg.eval.num_dataloader_workers)
 
             callbacks.append(
-                PrintEvalBatchCallback(  # type: ignore[arg-type]
+                # PrintEvalBatchCallback(  # type: ignore[arg-type]
+                #     eval_dataloader=eval_dataloader,
+                #     task_type="RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
+                #     max_new_tokens=self.cfg.eval.max_new_tokens,
+                #     eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
+                #     tokenizer=self.vlm_model.tokenizer,
+                #     processor=self.vlm_model.processor,
+                #     is_distributed=self.is_distributed
+                # )
+                PycocoevalCallback(  # type: ignore[arg-type]
                     eval_dataloader=eval_dataloader,
-                    task_type="RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
                     max_new_tokens=self.cfg.eval.max_new_tokens,
                     eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
                     tokenizer=self.vlm_model.tokenizer,
@@ -293,18 +295,18 @@ def setup_config_and_logging() -> RunConfig:
     logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
     print(f"Successfully set up output directory at {cfg.general.output_dir}")
 
-    # Reset vision-encoder-specific args in case the vision inputs are embeddings (instead of images)
-    cfg.maybe_reset_vision_encoder_specific_args()
-
-    # Reset validation-specific args in case no validation dataset JSON was provided
-    cfg.maybe_reset_validation_specific_args()
-
     # Apply CLI argument overrides to configs (intended for testing/debugging only)
     cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")
     cfg.model = merge_config_with_cli_args(cfg.model, parent_key="model")
     cfg.trainer = merge_config_with_cli_args(cfg.trainer, parent_key="trainer")
     cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
     cfg.eval = merge_config_with_cli_args(cfg.eval, parent_key="eval")
+
+    # Reset vision-related args if inputs are embeddings or text-only is enabled
+    cfg.maybe_reset_vision_related_specific_args()
+
+    # Reset validation-specific args in case no validation dataset JSON was provided
+    cfg.maybe_reset_validation_specific_args()
 
     # Resolve model_id if not provided
     if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:
@@ -441,13 +443,14 @@ def main():
     vlm_model = vlm_model_class(
         model_cfg=cfg.model,
         vision_input_type=cfg.data.vision_input_type,
-        vision_embed_dim=cfg.data.embed_dim,
+        vision_embed_dim=cfg.get_vision_embed_dim(),
+        vision_embed_size=cfg.get_vision_embed_size(),
+        text_only=cfg.data.text_only,
         local_files_only=cfg.general.local_files_only
     )
 
-    if cfg.data.vision_input_type == VisionInputType.IMAGE:
-        ve_plans = load_json(Path(cfg.model.vision_encoder.vision_encoder_path, "plans.json"))
-        vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+    if cfg.model.vision_encoder:
+        vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
     else:
         vision_encoder_patch_size = None
 
@@ -458,7 +461,7 @@ def main():
         # Use AMOSMM dataset
         train_dataset = AMOSMMDataset(
             dataset_json_path=cfg.data.train_dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split="train",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
@@ -466,6 +469,7 @@ def main():
             n_samples=cfg.data.n_train_samples,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=cfg.data.do_sentence_shuffle
@@ -473,7 +477,7 @@ def main():
 
         val_dataset = AMOSMMDataset(
             dataset_json_path=cfg.data.val_dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split="val",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
@@ -481,6 +485,7 @@ def main():
             answer_types=cfg.data.answer_types,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=False,
@@ -489,7 +494,7 @@ def main():
         # Use CTRATE dataset
         train_dataset = CTRATEDataset(
             dataset_json_path=cfg.data.train_dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split="train",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
@@ -497,6 +502,7 @@ def main():
             answer_types=cfg.data.answer_types,
             do_resize=cfg.data.do_resize,
             do_transforms=cfg.data.do_transforms,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=cfg.data.do_sentence_shuffle,
@@ -506,13 +512,14 @@ def main():
 
         val_dataset = CTRATEDataset(
             dataset_json_path=cfg.data.val_dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split="val",
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             n_samples=cfg.data.n_val_samples,  # Limit the validation set size
             answer_types=cfg.data.answer_types,
             do_resize=cfg.data.do_resize,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             # no transforms for val dataset
             vision_encoder_patch_size=vision_encoder_patch_size,
@@ -544,20 +551,6 @@ def main():
     logger.remove()
     
     if cfg.eval.run_inference:
-        # inference_args = argparse.Namespace(
-        #     run_dir=cfg.general.output_dir,
-        #     mode="final",
-        #     dataset_json=cfg.eval.dataset_json_path,    # if none is provided and split='val'
-        #     split=cfg.eval.split,                       # the validation set is used, refer to
-        #                                                 # 'RunConfig.set_default_eval_dataset_json_path()'
-        #                                                 # for more details
-        #     n_samples=cfg.eval.n_samples,
-        #     max_new_tokens=cfg.eval.max_new_tokens,
-        #     per_device_batch_size = cfg.eval.per_device_batch_size,
-        #     num_dataloader_workers = cfg.eval.num_dataloader_workers,
-        #     vision_encoder_path = None,
-        #     vision_input_path = None
-        # )
         inference_args = argparse.Namespace(
             run_dir=cfg.general.output_dir,
             mode="final"

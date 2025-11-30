@@ -2,24 +2,93 @@ import argparse
 import multiprocessing
 import random
 import re
-from collections import defaultdict
-from pathlib import Path
-from utils import logger
-from evaluation.metrics import BLEUScorer, ROUGELScorer, METEORScorer
-from utils.helper import chunkify, add_datetime_tag
-from utils.load_and_save_files import load_json, save_json
 import matplotlib.pyplot as plt
 import numpy as np
 import csv
+from collections import defaultdict
+from pathlib import Path
+from pycocoevalcap.bleu.bleu import Bleu
+from pycocoevalcap.rouge.rouge import Rouge
+from pycocoevalcap.cider.cider import Cider
+from pycocoevalcap.meteor.meteor import Meteor
 
-from utils.logging import setup_logger, log_banner
-from utils.regex_patterns import VQA_ANSWER_PATTERN
+from vlm.utils import logger
+from vlm.evaluation.hf_evaluate.scorers import BLEUScorer, ROUGELScorer, METEORScorer
+from vlm.utils.helper import add_datetime_tag, chunkify
+from vlm.utils.load_and_save_files import load_json, save_json
+from vlm.utils.logging import setup_logger, log_banner
+from vlm.utils.regex_patterns import VQA_ANSWER_PATTERN
+
+
+def eval_report_generation_pycocoeval(preds: list, gts: list) -> dict[str, list] | None:
+    assert len(preds) == len(gts)
+    if not preds:
+        raise ValueError("RG EVALUATION: received empty lists")
+
+    results = {}
+
+    bleu_scorer = Bleu(4)
+    meteor_scorer = Meteor()
+    rougel_scorer = Rouge()
+    cider_scorer = Cider()
+
+    # Remove '\n' here as this will interfere Pycocoeval (specifically METEOR)
+    preds = [pred.replace("\n", " ") for pred in preds]
+    gts = [gt.replace("\n", " ") for gt in gts]
+
+    # Put preds and gts into compatible format for Pycocoeval
+    in_res = {i: [pred] for i, pred in enumerate(preds)}
+    in_gts = {i: [gt] for i, gt in enumerate(gts)}
+
+    # === BLEU ===
+    try:
+        (bleu_score_1, bleu_score_2, bleu_score_3, bleu_score_4), _ = bleu_scorer.compute_score(gts=in_gts,
+                                                                                                res=in_res,
+                                                                                                verbose=0)
+    except Exception as e:
+        logger.error(f"BLEU score calculation failed: {e}")
+        bleu_score_1 = bleu_score_2 = bleu_score_3 = bleu_score_4 = -1.0
+
+    # === METEOR ===
+    try:
+        meteor_score, _ = meteor_scorer.compute_score(gts=in_gts, res=in_res)
+    except Exception as e:
+        logger.error(f"METEOR score calculation failed: {e}")
+        meteor_scorer.lock.release()
+        meteor_score = -1.0  # use -1 to indicate error
+
+    # === ROUGE ===
+    try:
+        rougel_score, _ = rougel_scorer.compute_score(gts=in_gts, res=in_res)
+        rougel_score = rougel_score.item()
+    except Exception as e:
+        logger.error(f"ROUGE-L score calculation failed: {e}")
+        rougel_score = -1.0  # use -1 to indicate error
+
+    # === CIDEr ===
+    try:
+        cider_score, _ = cider_scorer.compute_score(gts=in_gts, res=in_res)
+        cider_score = cider_score.item()
+    except Exception as e:
+        logger.error(f"CIDEr score calculation failed: {e}")
+        cider_score = -1.0  # use -1 to indicate error
+
+    results["bleu_score_1"] = bleu_score_1
+    results["bleu_score_2"] = bleu_score_2
+    results["bleu_score_3"] = bleu_score_3
+    results["bleu_score_4"] = bleu_score_4
+
+    results["meteor_score"] = meteor_score
+    results["rougel_score"] = rougel_score
+    results["cider_score"] = cider_score
+
+    return results
 
 
 def eval_report_generation(preds: list, gts: list) -> dict[str, list] | None:
     assert len(preds) == len(gts)
     if not preds:
-        raise ValueError("VQA EVALUATION: received empty lists")
+        raise ValueError("RG EVALUATION: received empty lists")
 
     results = {}
 
@@ -50,6 +119,7 @@ def eval_report_generation(preds: list, gts: list) -> dict[str, list] | None:
         logger.error(f"ROUGE-L score calculation failed: {e}")
         results["rougel"] = [-1.0]  # use -1 to indicate error
     return results
+
 
 def compare_report_subset(preds: list, output_dir: str | Path, num_pairs: int = 500) -> None:
     """
@@ -162,7 +232,10 @@ def main_cli():
     main(args)
 
 
-def main(args):
+def main_(args):
+    """
+    Use this main function for HF evaluate or VQA
+    """
     inference_dir = Path(args.inference_dir)
     if not inference_dir.exists():
         raise FileNotFoundError(f"Inference directory not found: {inference_dir}")
@@ -240,6 +313,42 @@ def main(args):
 
     metrics_path = inference_dir / "VLM_metrics.json"
     save_json(metric_results, metrics_path)
+    logger.info_main(f"Saved metric results to {str(metrics_path)}")
+
+    log_banner("Successfully finished Evaluation")
+
+
+def main(args):
+    """
+    Use this main function for pycocoeval
+    """
+
+    inference_dir = Path(args.inference_dir)
+    if not inference_dir.exists():
+        raise FileNotFoundError(f"Inference directory not found: {inference_dir}")
+
+    log_file_name = add_datetime_tag("eval") + ".log"
+    log_file_path = Path(inference_dir, log_file_name)
+    setup_logger(log_file_path)
+
+    inference_results_json_path = inference_dir / "inference_results.json"
+    inference_results = load_json(inference_results_json_path)
+    num_samples = len(inference_results)
+    logger.info_main(f"Loaded {num_samples} samples")
+
+    preds, gts = [], []
+    for dic in inference_results:
+        preds.append(dic["output_text_clean"])
+        gts.append(dic["answer"])
+
+    results = eval_report_generation_pycocoeval(preds, gts)
+
+    logger.info_main("[METRICS] Evaluation Summary:")
+    for metric_name, value in results.items():
+        logger.info_main(f"    > {metric_name}: {value:.4f}")
+
+    metrics_path = inference_dir / "VLM_metrics.json"
+    save_json(results, metrics_path)
     logger.info_main(f"Saved metric results to {str(metrics_path)}")
 
     log_banner("Successfully finished Evaluation")

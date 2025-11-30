@@ -34,7 +34,12 @@ dependencies = [
     "nibabel==5.3.2",
     "nnunetv2 @ git+https://git.dkfz.de/mic/personal/group4/culrich/mic_rocket_nnunete_finetuning.git@a7dbbc6a4e9841dfb4f7123bf87e1d9b714aa22e",
     "torchrun-jsc",
+    "pycocoevalcap"
 ]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 py-modules = []

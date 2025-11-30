@@ -6,19 +6,19 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
-from configs.run_config import RunConfig
-from data.datasets import AMOSMMDataset, CTRATEDataset
-from evaluation.eval_distributed_sampler import EvalDistributedSampler
-from models.abstract_vlm import AbstractVLMModel
-from utils import logger
-from utils.ddp_utils import setup_ddp, gather_inference_outputs
-from utils.filter_batch import extract_batch_prompt_only
-from utils.helper import add_datetime_tag, is_main_process, find_run_dir_in_output_dir, seed_everything, \
-    merge_config_with_cli_args
-from utils.load_and_save_files import load_json, save_json
-from utils.logging import setup_logger, log_banner
-from utils.vision_input_type import VisionInputType
+from vlm.configs.run_config import RunConfig
+from vlm.data.datasets import AMOSMMDataset, CTRATEDataset
+from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
+from vlm.models.abstract_vlm import AbstractVLMModel
+from vlm.utils import logger
+from vlm.utils.ddp_utils import setup_ddp, gather_inference_outputs
+from vlm.utils.filter_batch import extract_batch_prompt_only
+from vlm.utils.helper import is_main_process, find_run_dir_in_output_dir, seed_everything, merge_config_with_cli_args, \
+    add_datetime_tag
+from vlm.utils.load_and_save_files import load_json, save_json
+from vlm.utils.logging import setup_logger, log_banner
 from eval import main as eval_main
+from vlm.utils.vision_input_type import VisionInputType
 
 
 class UnifiedVLMInference:
@@ -221,28 +221,10 @@ def main(args, is_main=True):
 
     seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
 
-    # This is already being handled by RunConfig.set_default_eval_dataset_json_path()
-    # and RunConfig.check_eval_dataset_json()
-    # if args.dataset_json is not None:
-    #     dataset_json_path = args.dataset_json
-    #     if not Path(args.dataset_json).is_file():
-    #         raise FileNotFoundError(f"The specified dataset JSON file does not exist: {dataset_json_path}")
-    # else:
-    #     if args.split == "test":
-    #         raise ValueError("The 'dataset_json' has to be specified if 'split=test'")
-    #     else:   # if args.split == "val"
-    #         # fall back to the val dataset JSON from the config_file if none is provided
-    #         dataset_json_path = cfg.data.val_dataset_json_path
-
     if is_main:  # we don't want to merge args if this was called by train.py
         cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")
         cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
         cfg.eval = merge_config_with_cli_args(cfg.eval, parent_key="eval")
-
-    # if args.vision_encoder_path:
-    #     cfg.model.vision_encoder.vision_encoder_path = args.vision_encoder_path
-    # if args.vision_input_path:
-    #     cfg.data.vision_input_path = args.vision_input_path
 
     inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "inference_dir_suffix", ""))
 
@@ -260,14 +242,15 @@ def main(args, is_main=True):
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
             dataset_json_path=cfg.eval.dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split=cfg.eval.split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             answer_types=cfg.data.answer_types,
             n_samples=cfg.eval.n_samples,  # Limit the validation set size
             do_resize=cfg.data.do_resize,
-            do_transforms=cfg.data.do_transforms,
+            do_transforms=False,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=False
@@ -275,14 +258,15 @@ def main(args, is_main=True):
     elif cfg.data.dataset_name == "ctrate":
         test_dataset = CTRATEDataset(
             dataset_json_path=cfg.eval.dataset_json_path,
-            model_name=cfg.model.model_type,
+            model_type=cfg.model.model_type,
             split=cfg.eval.split,
             vision_input_path=cfg.data.vision_input_path,
             vision_input_type=cfg.data.vision_input_type,
             answer_types=cfg.data.answer_types,
             n_samples=cfg.eval.n_samples,  # Limit the validation set size
             do_resize=cfg.data.do_resize,
-            do_transforms=cfg.data.do_transforms,
+            do_transforms=False,
+            text_only=cfg.data.text_only,
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=False,
