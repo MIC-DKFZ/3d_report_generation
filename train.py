@@ -74,6 +74,7 @@ class UnifiedVLMTrainer:
 
         return SFTConfig(**self.cfg.trainer.model_dump(),
                          **model_args,
+                         seed=self.cfg.general.seed,
                          run_name=self.cfg.general.run_name,
                          output_dir=self.cfg.general.output_dir)
 
