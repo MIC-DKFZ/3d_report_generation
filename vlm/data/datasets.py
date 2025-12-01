@@ -703,6 +703,7 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
 
         # get image_ids of most similar
         nearest_neighbors_ids = self.retrieval_dict[query_img_id]["k_nearest_neighbor"]
+        nearest_neighbors_ids = nearest_neighbors_ids[:min(len(nearest_neighbors_ids), self.n_retrieval_samples)]
 
         # formatted_qa and formatted_qa_prompt_only reference the same "user_message" object
         # we only need to modify one of them here
@@ -766,6 +767,7 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
     def _get_vision_input_path(self, image_id: str) -> List[Path]:
         # get image_ids of most similar
         nearest_neighbors_ids = self.retrieval_dict[image_id]["k_nearest_neighbor"]
+        nearest_neighbors_ids = nearest_neighbors_ids[:min(len(nearest_neighbors_ids), self.n_retrieval_samples)]
 
         # Bind the super method to a variable outside the list comprehension as else might lead to TypeError in some python versions
         parent_get_vision_input_path = super()._get_vision_input_path
