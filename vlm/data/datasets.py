@@ -681,6 +681,12 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
         # TODO: provide this part of the cfg
         self.n_retrieval_samples = int(cfg.data.retrieval_n_samples)
         self.maybe_add_vision_tokens = ""
+        if self.split == "val":
+            self.dataset_json_path_for_retrieval = Path(cfg.data.train_dataset_json_path)
+            with open(self.dataset_json_path_for_retrieval, "r") as f:
+                self.samples_retrieval = json.load(f)
+        elif self.split == "train":
+            self.samples_retrieval = self.samples
 
         self.additional_instruction_prompt = "\nConsider those reports which were retrieved based on the query image."
         self.add_image = False
@@ -714,7 +720,7 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
             if d["role"] == "user":
                 d["content"].append({"type": "text", "text": self.additional_instruction_prompt})
                 for n_nn, nearest_neighbor_id in enumerate(nearest_neighbors_ids):
-                    case = self.get_case_from_dataset_json(self.samples, nearest_neighbor_id)
+                    case = self.get_case_from_dataset_json(self.samples_retrieval, nearest_neighbor_id)
                     answer = case["answer"]
                     if self.add_image:
                         d["content"].append({"type": "video", "vision_input_path": nearest_neighbor_id})
