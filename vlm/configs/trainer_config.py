@@ -8,6 +8,7 @@ class SFTTrainerConfig(ConfigBase):
     Configuration for all arguments that are to be passed on to the SFTTrainer class including our default values.
     """
     num_train_epochs: int = Field(3, ge=1, description="Number of training epochs to run.")
+    max_steps: int = Field(-1, ge=-1, description="Number of steps to take during training.")
     per_device_train_batch_size: int = Field(1, ge=1, description="Batch size per device during training.")
     per_device_eval_batch_size: int = Field(1, ge=1, description="Batch size per device during evaluation.")
 
