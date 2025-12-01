@@ -7,7 +7,14 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from vlm.configs.run_config import RunConfig
-from vlm.data.datasets import AMOSMMDataset, CTRATEDataset, MerlinDataset
+from vlm.data.datasets import AMOSMMDataset, CTRATEDataset
+from vlm.data.datasets import (
+        AMOSMMDataset, 
+        CTRATEDataset, 
+        MerlinDataset,
+        CTRATEDatasetRetrieval, 
+        CTRATEDatasetRetrievalWithImage
+)
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from vlm.models.abstract_vlm import AbstractVLMModel
 from vlm.utils import logger
@@ -263,8 +270,17 @@ def main(args, is_main=True):
             vision_encoder_patch_size=vision_encoder_patch_size,
         )
     elif cfg.data.dataset_name == "ctrate":
-        test_dataset = CTRATEDataset(
+        if cfg.data.retrieval_json_path is not None:
+            if cfg.data.retrieval_use_image_in_prompt:
+                ctrate_dataset_class = CTRATEDatasetRetrievalWithImage
+            else:
+                ctrate_dataset_class = CTRATEDatasetRetrieval
+        else:
+            ctrate_dataset_class = CTRATEDataset
+
+        test_dataset = ctrate_dataset_class(
             cfg=cfg,
+            split=cfg.eval.split,
             vision_encoder_patch_size=vision_encoder_patch_size,
         )
     elif cfg.data.dataset_name == "merlin":
