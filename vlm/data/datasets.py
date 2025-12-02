@@ -702,17 +702,20 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
         # 1. Create a Set of valid IDs for O(1) lookup speed
         valid_ids = {sample['image_id'] for sample in samples_retrieval}
 
-        for key, data in retrieval_dict.items():
-            # We use a list comprehension to filter the existing list.
-            # This creates a new list containing only neighbors found in valid_ids
-            # while preserving the original ranking/order.
+        for _, data in retrieval_dict.items():
+            neighbors = data.get('k_nearest_neighbor', [])
+            scores = data.get('similarity', [])
+            assert len(neighbors) == len(scores)
 
-            # FIXME also erase the index for the similarity...
-            data['k_nearest_neighbor'] = [
-                neighbor_id
-                for neighbor_id in data['k_nearest_neighbor']
-                if neighbor_id in valid_ids
-            ]
+            clean_neighbors = []
+            clean_scores = []
+
+            for neighbor_id, score in zip(neighbors, scores):
+                if neighbor_id in valid_ids:
+                    clean_neighbors.append(neighbor_id)
+                    clean_scores.append(score)
+            data['k_nearest_neighbor'] = clean_neighbors
+            data['similarity'] = clean_scores
 
         return retrieval_dict
 
