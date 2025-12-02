@@ -706,7 +706,9 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
             # We use a list comprehension to filter the existing list.
             # This creates a new list containing only neighbors found in valid_ids
             # while preserving the original ranking/order.
-            data['k_nearest_neighbors'] = [
+
+            # FIXME also erase the index for the similarity...
+            data['k_nearest_neighbor'] = [
                 neighbor_id
                 for neighbor_id in data['k_nearest_neighbor']
                 if neighbor_id in valid_ids
