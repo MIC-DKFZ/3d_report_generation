@@ -692,7 +692,27 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
         self.add_image = False
 
         with open(self.retrieval_json_path, "r") as f:
-            self.retrieval_dict = json.load(f)
+            self.retrieval_dict = self._sanatize_retrieval_dict(json.load(f), self.samples_retrieval)
+
+    @staticmethod
+    def _sanatize_retrieval_dict(
+            retrieval_dict: Dict[str, Dict],
+            samples_retrieval: List[Dict]
+        ) -> Dict[str, Dict]:
+        # 1. Create a Set of valid IDs for O(1) lookup speed
+        valid_ids = {sample['image_id'] for sample in samples_retrieval}
+
+        for key, data in retrieval_dict.items():
+            # We use a list comprehension to filter the existing list.
+            # This creates a new list containing only neighbors found in valid_ids
+            # while preserving the original ranking/order.
+            data['k_nearest_neighbors'] = [
+                neighbor_id
+                for neighbor_id in data['k_nearest_neighbor']
+                if neighbor_id in valid_ids
+            ]
+
+        return retrieval_dict
 
     @staticmethod
     def get_case_from_dataset_json(dataset_json: List[Dict], image_id: str) -> Dict[str, str]:
