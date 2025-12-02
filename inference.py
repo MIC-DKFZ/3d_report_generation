@@ -143,6 +143,10 @@ class UnifiedVLMInference:
                     trimmed_generated_ids, skip_special_tokens=True
                 )
 
+                decoded_input = self.vlm_model.tokenizer.batch_decode(
+                    inputs['input_ids'], skip_special_tokens=True
+                )
+
                 logger.info_main(
                     f"First batch sample {i + 1}/{len(test_loader)}:\n{decoded_output[0]}"
                 )
@@ -151,6 +155,7 @@ class UnifiedVLMInference:
                     [
                         {
                             **{key: value[i] for key, value in raw_samples.items()},
+                            "complete_input": decoded_input,
                             "output_text": do,
                         }
                         for i, do in enumerate(decoded_output)
