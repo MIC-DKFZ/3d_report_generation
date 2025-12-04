@@ -1,3 +1,6 @@
+from typing import Tuple
+
+from einops import rearrange
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -45,10 +48,9 @@ class QwenAdapter(GridAdapter):
             y = x[cur_pos:cur_pos+lenght]
 
             # (T*H*W, C) -> (C, T, H, W)
-            y = y.T
+            y = y.permute(1, 0)  # (T*H*W, C) -> (C, T*H*W)
             # rebuild blocks
             y = y.view(y.shape[0], grid_thw[0], grid_thw[1], grid_thw[2])
-            from einops import rearrange
             # Space-to-Depth rearrange (Depth as in Channel/hidden-dim, e.g. imagine a grid of cards which you now compress by stacking reduce block**3 cards onto each other)
             y = rearrange(
                 y,
