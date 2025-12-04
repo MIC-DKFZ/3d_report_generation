@@ -44,6 +44,10 @@ class AbstractVLMModel(ABC):
 
         self.model_cfg = model_cfg
 
+        self.forbidden_name_patterns_for_wd = [
+            r"bias", r"layernorm", r"rmsnorm", r"(?:^|\.)norm(?:$|\.)", r"_norm(?:$|\.)",
+        ]
+
     @abstractmethod
     def setup_model(self, **kwargs):
         """
@@ -200,8 +204,8 @@ class AbstractVLMModel(ABC):
 
         logger.info_main(f"Loading model from {str(ckpt_dir)}")
 
-        from vlm.registries.vlm_registry import vlm_registry
-        vlm_model_class = vlm_registry[cfg.model.model_type].model_class
+        from vlm.registries.vlm_registry import VLM_REGISTRY
+        vlm_model_class = VLM_REGISTRY[cfg.model.model_type].model_class
         vlm_model: AbstractVLMModel = vlm_model_class(
             model_cfg=cfg.model,
             vision_input_type=cfg.data.vision_input_type,

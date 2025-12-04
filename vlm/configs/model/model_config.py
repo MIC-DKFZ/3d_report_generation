@@ -2,7 +2,7 @@ import torch.nn as nn
 from typing import Literal
 from pydantic import Field
 from vlm.configs.base import ConfigBase
-from vlm.configs.model.adapter.adapter_config import AdapterDynamicClassConfig
+from vlm.configs.model.adapter.adapter_config import AdapterClassConfig
 from vlm.configs.model.trainable_params.trainable_params_config import TrainableParamsConfig
 from vlm.configs.model.vision_encoder_config import VisionEncoderConfig
 
@@ -12,7 +12,7 @@ class ModelConfig(ConfigBase):
 
     vision_encoder: VisionEncoderConfig | None = Field(None, description="Should only be None, if you train with embeddings instead of images. "
                                                                          "or have text-only inputs.")
-    adapter: AdapterDynamicClassConfig | None = Field(None, description="Should only be None, if you have text-only inputs.")
+    adapter: AdapterClassConfig | None = Field(None, description="Should only be None, if you have text-only inputs.")
 
     trainable_params: TrainableParamsConfig
 

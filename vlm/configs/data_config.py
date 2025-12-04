@@ -53,3 +53,9 @@ class DataConfig(ConfigBase):
             raise ValueError("Missing parameters for embedding mode: "
                              "please specify both 'embed_dim' and 'embed_size' when vision_input_type='embedding'.")
         return self
+
+    @model_validator(mode="after")
+    def validate_sentence_shuffle(self):
+        if not self.do_sentence_shuffle:
+            self.sentence_shuffle_p = 0.0
+        return self

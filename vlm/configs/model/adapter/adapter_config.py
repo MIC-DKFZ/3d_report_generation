@@ -1,8 +1,8 @@
 from vlm.adapters.base import AdapterBase
-from vlm.configs.base import DynamicClassConfigBase
+from vlm.configs.base import RecursiveFindClassConfigBase
 from math import prod
 
-class AdapterDynamicClassConfig(DynamicClassConfigBase):
+class AdapterClassConfig(RecursiveFindClassConfigBase):
     folder_to_search = "vlm.adapters"
 
     def to_instance(

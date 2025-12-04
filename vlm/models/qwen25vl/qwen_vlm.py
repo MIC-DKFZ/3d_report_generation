@@ -14,6 +14,11 @@ class QwenVLModel(AbstractVLMModel):
         self._model_str = "qwen"
         self.batch_count = 0
 
+        self.forbidden_name_patterns_for_wd.extend(
+            # Add LoRA layers and the token embedding layer (which is also the LM head) to forbidden name patterns.
+            ["lora", "embed_tokens", "lm_head"]
+        )
+
     @property
     def module_attr_map(self) -> dict[str, str]:
         return {

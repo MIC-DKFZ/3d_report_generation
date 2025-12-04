@@ -86,6 +86,7 @@ def setup_logger(log_file_path: str | Path | None = None):
 
 
 class MainRankLoggingProtocol(Protocol):
+    def debug_main(self, msg: str, *args, **kwargs) -> None: ...
     def info_main(self, msg: str, *args, **kwargs) -> None: ...
     def warning_main(self, msg: str, *args, **kwargs) -> None: ...
     def error_main(self, msg: str, *args, **kwargs) -> None: ...
@@ -94,10 +95,11 @@ def _build_main_rank_logger(_level: str):
     is_main = int(os.environ.get("RANK", "0")) == 0  # is_main_process() -> circular import
     def _log_main(msg, *a, **kw):
         if is_main:
+            # The line below makes sure that the source of logging is not this location but the actual log call
             loguru_logger.opt(depth=1).log(_level.upper(), msg, *a, **kw)
     return _log_main
 
-for level in ["info", "warning", "error"]:
+for level in ["debug", "info", "warning", "error"]:
     setattr(loguru_logger, f"{level}_main", _build_main_rank_logger(level))
 
 

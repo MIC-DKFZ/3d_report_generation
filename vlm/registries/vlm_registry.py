@@ -11,7 +11,7 @@ class VLMConfig(BaseModel):
     model_class: type
 
 
-vlm_registry: dict[str, VLMConfig] = {
+VLM_REGISTRY: dict[str, VLMConfig] = {
     "qwen": VLMConfig(
         model_id="Qwen/Qwen2.5-VL-3B-Instruct",
         model_class=QwenVLModel

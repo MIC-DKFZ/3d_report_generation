@@ -15,13 +15,13 @@ from vlm.data.datasets import AMOSMMDataset, CTRATEDataset
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
 from vlm.models.abstract_vlm import AbstractVLMModel
-from vlm.training.callbacks import LossLoggingCallback, PrintEvalBatchCallback, PycocoevalCallback
+from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback
 from vlm.training.trainers import VLMSFTTrainer
-from vlm.registries.vlm_registry import vlm_registry
+from vlm.registries.vlm_registry import VLM_REGISTRY
 from vlm.utils import logger
 from vlm.utils.ddp_utils import setup_ddp
-from vlm.utils.helper import seed_everything, merge_config_with_cli_args, load_config_file, print_model_parameters, \
-    is_main_process, print_param_groups
+from vlm.utils.helper import seed_everything, load_config_file, \
+    is_main_process
 from vlm.utils.load_and_save_files import save_json, save_yaml
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.memory_utils import (
@@ -99,15 +99,6 @@ class UnifiedVLMTrainer:
 
         # Apply trainable parameter configs and possibly add PEFT adapter layers
         self.vlm_model.apply_trainable_config()
-
-        # Log trainable params including their 'requires_grad' status
-        if is_main_process():
-            trainable_params_log_path = Path(self.cfg.general.output_dir, "model_parameters.log")
-
-            with open(trainable_params_log_path, "w") as f:
-                # With 'remove_duplicate=True', tied/shared parameters like 'lm_head.weight'
-                # are only listed once in named_parameters(), under their first occurrence.
-                print_model_parameters(model=model, file=f, remove_duplicate=True)
 
         # Create comprehensive config for WandB logging
         config_dict = create_comprehensive_wandb_config(
@@ -187,15 +178,13 @@ class UnifiedVLMTrainer:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=self.vlm_model.collate_fn,
-            callbacks=callbacks
+            callbacks=callbacks,
+            scheduler=self.cfg.scheduler.to_instance(
+                module_attr_map=self.vlm_model.module_attr_map,
+                forbidden_name_patterns_for_wd=self.vlm_model.forbidden_name_patterns_for_wd,
+                output_dir=self.cfg.general.output_dir
+            )
         )
-
-        # Log weight decay and params group of optimizer
-        if is_main_process():
-            params_group_log_path= Path(self.cfg.general.output_dir, "param_groups.log")
-
-            with open(params_group_log_path, "w") as f:
-                print_param_groups(trainer=self.trainer, file=f)
 
         if self.is_distributed:
             dist.barrier()
@@ -278,12 +267,11 @@ def setup_config_and_logging() -> RunConfig:
     # Merge base configs into cfg_dict
     cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
 
+    # Set to absolute path
+    cfg_dict["general"]["train_config"] = str(train_config_path)
+
     # Parse all args into their respective Pydantic models/configs
     cfg = RunConfig.model_validate(cfg_dict)
-
-    cfg.general.train_config = str(train_config_path)
-    cfg.resolve_run_name()
-    cfg.resolve_output_dir()
 
     # Setup output directory and log file
     if is_main_process():
@@ -296,23 +284,8 @@ def setup_config_and_logging() -> RunConfig:
     logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
     print(f"Successfully set up output directory at {cfg.general.output_dir}")
 
-    # Apply CLI argument overrides to configs (intended for testing/debugging only)
-    cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")
-    cfg.model = merge_config_with_cli_args(cfg.model, parent_key="model")
-    cfg.trainer = merge_config_with_cli_args(cfg.trainer, parent_key="trainer")
-    cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
-    cfg.eval = merge_config_with_cli_args(cfg.eval, parent_key="eval")
-
-    # Reset vision-related args if inputs are embeddings or text-only is enabled
-    cfg.maybe_reset_vision_related_specific_args()
-
-    # Reset validation-specific args in case no validation dataset JSON was provided
-    cfg.maybe_reset_validation_specific_args()
-
-    # Resolve model_id if not provided
-    if cfg.model.model_id is None and not cfg.model.model_type in vlm_registry:
-        raise ValueError(f"Unknown model type: {cfg.model.model_type}")
-    cfg.model.model_id = cfg.model.model_id or vlm_registry[cfg.model.model_type].model_id
+    cfg.merge_subconfigs_with_cli_args()
+    cfg.apply_conditional_resets()
 
     # Log the final configuration
     if is_main_process():
@@ -437,7 +410,7 @@ def main():
     seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
 
     try:
-        vlm_model_class = vlm_registry[cfg.model.model_type].model_class
+        vlm_model_class = VLM_REGISTRY[cfg.model.model_type].model_class
     except KeyError:
         raise ValueError(f"Unknown model type: {cfg.general.model_type}")
 
