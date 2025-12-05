@@ -8,20 +8,21 @@ from vlm.adapters.grid_adapters.base import GridAdapter
 
 
 class QwenAdapter(GridAdapter):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, hidden_dim=None, **kwargs):
+        super().__init__(**kwargs)
         r0, r1, r2 = self.reduce_block
-        input_size = self.vision_embed_dim * r0 * r1 * r2
-        hidden_size = self.vision_embed_dim * min(8, r0 * r1 * r2) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
-        # the linear layer still can become too large for large blocks greater than 8cube. In such cases better use pooling?!
-        self.rmsnorm = Qwen2RMSNorm(input_size, eps=1e-6)
+        input_dim = self.vision_embed_dim * r0 * r1 * r2
+        if hidden_dim is None:
+            hidden_dim = self.vision_embed_dim * min(8, r0 * r1 * r2)  # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
+                                                                        # the linear layer still can become too large for large blocks greater than 8cube. In such cases better use pooling?!
+        self.rmsnorm = Qwen2RMSNorm(input_dim, eps=1e-6)
         self.adapter = nn.Sequential(
             nn.Linear(
-                input_size,
-                hidden_size,
+                input_dim,
+                hidden_dim,
             ),
             nn.GELU(),
-            nn.Linear(hidden_size, self.text_embed_dim)
+            nn.Linear(hidden_dim, self.text_embed_dim)
         )
 
     def forward(self, x: torch.Tensor, adapter_args: dict):

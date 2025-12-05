@@ -1,3 +1,4 @@
+from abc import abstractmethod, ABC
 from pathlib import Path
 from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
@@ -31,7 +32,7 @@ class DiscriminatedConfigBase(ConfigBase):
         return self.model_dump(exclude={"type"})
 
 
-class DynamicClassConfigBase(ConfigBase):
+class DynamicClassConfigBase(ConfigBase, ABC):
     """
     Base class for configs that only hold the specific class name ('class_name') that is to be
     instantiated and returned via 'to_instance()' and its arguments ('class_args').
@@ -57,5 +58,12 @@ class DynamicClassConfigBase(ConfigBase):
             raise ValueError(f"Could not find {self.class_name:!r} in {vlm.__path__[0]:!r}")
         return self
 
-    def to_instance(self, **kwargs) -> Any:
-        return self._resolved_class(**kwargs, **self.class_kwargs)
+    @abstractmethod
+    def to_instance(self, **kwargs):
+        """
+        Create and return an instance of the resolved class.
+
+        Example:
+            return self._resolved_class(**self.class_kwargs, **kwargs)
+        """
+        ...

@@ -10,8 +10,8 @@ class GridAdapter(AdapterBase, ABC):
     Adapter for processing homogeneously-sized image batches.
     This class retains the spatial grid structure of the vision embeddings and implements M-RoPE.
     """
-    def __init__(self, reduce_block: tuple[int, int, int], *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, reduce_block: tuple[int, int, int], **kwargs):
+        super().__init__(**kwargs)
         self.reduce_block = reduce_block
 
     def get_adapter_args(
