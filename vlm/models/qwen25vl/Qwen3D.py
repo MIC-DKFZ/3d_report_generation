@@ -53,23 +53,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         )
 
     def setup_vision_encoder(self):
-        vision_encoder_path = self.model_cfg.vision_encoder.vision_encoder_path
-        plans_file = f"{vision_encoder_path}/plans.json"
-        checkpoint_paths = glob.glob(f"{vision_encoder_path}/fold_all/checkpoint_*.pth")
-        if len(checkpoint_paths) > 1:
-            checkpoint_path = [c for c in checkpoint_paths if "final" in c][0]
-            logger.info_main(f"Multiple VE checkpoints found, using final: {checkpoint_path}")
-            if len(checkpoint_path) == 0:
-                checkpoint_path = checkpoint_paths[0]
-                logger.info_main(f"Multiple VE checkpoints found, using first: {checkpoint_path}")
-        else:
-            checkpoint_path = checkpoint_paths[0]
-
-        config = get_config_from_plans(plans_file)
-        vision_encoder_class = vision_encoder_registry[self.model_cfg.vision_encoder.type]
-        self.vision_encoder = vision_encoder_class(
-            input_channels=1, output_channels=1, pretrained_weights_file=checkpoint_path, **config
-        )
+        self.vision_encoder = self.model_cfg.build_vision_encoder()
 
     def get_rope_index(
         self,

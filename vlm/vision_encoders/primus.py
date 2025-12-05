@@ -11,7 +11,7 @@ from vlm.vision_encoders.base import VisionEncoderBase
 
 class Primus(_Primus, VisionEncoderBase):
     @classmethod
-    def from_pretrained(cls, checkpoint_path: str | Path) -> Self:
+    def from_pretrained(cls, checkpoint_path: str | Path, **kwargs) -> Self:
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
         arch = checkpoint["nnssl_adaptation_plan"]["architecture_plans"]["arch_kwargs"]
         config = checkpoint["nnssl_adaptation_plan"]

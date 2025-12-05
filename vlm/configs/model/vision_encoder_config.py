@@ -1,12 +1,13 @@
-from pathlib import Path
 from pydantic import Field
+
+from vlm.configs.base import RecursiveFindClassConfigBase
 from vlm.vision_encoders.base import VisionEncoderBase
 
 
-class VisionEncoderClassConfig():
+class VisionEncoderClassConfig(RecursiveFindClassConfigBase):
     folder_to_search = "vlm.vision_encoders"
 
-    vision_encoder_path: str | None = Field(None, description="Path to the vision encoder checkpoint.")
+    checkpoint_path: str | None = Field(None, description="Path to the vision encoder checkpoint.")
     patch_size: tuple[int, int, int] | None = Field(
         None, description="Spatial dimension of the vision encoder input patch size (e.g. 192 x 192 x 192)."
     )
@@ -22,5 +23,8 @@ class VisionEncoderClassConfig():
         None, description="Embedding dimension of the vision encoder output (e.g. 864)."
     )
 
-    def to_instance(self, checkpoint_path: str | Path) -> VisionEncoderBase:
-        return self._resolved_class.from_pretrained(checkpoint_path=checkpoint_path)
+    def to_instance(self) -> VisionEncoderBase:
+        return self._resolved_class.from_pretrained(
+            checkpoint_path=self.checkpoint_path,
+            **self.class_kwargs
+        )

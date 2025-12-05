@@ -233,7 +233,7 @@ def main(args, is_main=True):
     setup_logger(log_file_path)
 
     if cfg.data.vision_input_type == VisionInputType.IMAGE:
-        ve_plans = load_json(Path(cfg.model.vision_encoder.vision_encoder_path, "plans.json"))
+        ve_plans = load_json(Path(cfg.model.vision_encoder.checkpoint_path, "plans.json"))
         vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
     else:
         vision_encoder_patch_size = None

@@ -35,10 +35,7 @@ class ModelConfig(ConfigBase):
             raise ValueError(f"Cannot build adapter with 'adapter=None'")
         return self.adapter.to_instance(vision_embed_dim, vision_embed_size, text_embed_dim)
 
-    def build_vision_encoder(
-            self,
-            checkpoint_path: str | Path
-    ) -> VisionEncoderBase:
+    def build_vision_encoder(self) -> VisionEncoderBase:
         if self.vision_encoder is None:
             raise ValueError(f"Cannot build vision encoder with 'vision_encoder=None'")
-        return self.vision_encoder.to_instance(checkpoint_path)
+        return self.vision_encoder.to_instance()

@@ -47,7 +47,7 @@ class QwenVLModel(AbstractVLMModel):
         model: QwenVLModel3D = self.model.model
         if self.model_cfg.vision_encoder is not None:
             model.setup_vision_encoder()
-            self.downsample_factor = model.vision_encoder.downsample_factor
+            self.downsample_factor = self.model_cfg.vision_encoder.downsample_factor
         if self.model_cfg.adapter is not None:
             model.setup_vision_adapter()
             self.vision_adapter = model.vision_adapter

@@ -185,10 +185,16 @@ class MedicalImageDataset(Dataset, ABC):
 
         else:
             raise ValueError(f"Unsupported vision input file format: {vision_input_path}")
-        
+
         if self.vision_input_type == VisionInputType.IMAGE:
             vision_input = z_score_normalization(vision_input, False, None, np.float32)
-            vision_input = preprocess_3d_image(image_array=vision_input, do_resize=self.do_resize, do_transforms=self.do_transforms, patch_size=self.vision_encoder_patch_size, split=self.split, training_transforms=self.training_transforms)
+            vision_input = preprocess_3d_image(image_array=vision_input, do_resize=self.do_resize,
+                                               do_transforms=self.do_transforms,
+                                               patch_size=self.vision_encoder_patch_size, split=self.split,
+                                               training_transforms=self.training_transforms)
+        # add channel dim if missing
+        if vision_input.ndim == 3:
+            vision_input = vision_input[None, ...]
 
         return vision_input
 

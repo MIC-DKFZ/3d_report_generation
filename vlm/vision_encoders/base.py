@@ -8,5 +8,5 @@ class VisionEncoderBase(nn.Module, ABC):
 
     @classmethod
     @abstractmethod
-    def from_pretrained(cls, checkpoint_path: str | Path) -> Self:
+    def from_pretrained(cls, checkpoint_path: str | Path, **kwargs) -> Self:
         ...
