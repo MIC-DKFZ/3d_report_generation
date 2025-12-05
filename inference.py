@@ -268,6 +268,8 @@ def main(args, is_main=True):
     logger.info_main(f"Using {cfg.eval.split} split for inference.")
     cfg.data.do_sentence_shuffle = False
     cfg.data.do_transform = False
+    if cfg.eval.split == "val":
+        cfg.data.n_val_samples = cfg.eval.n_samples
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
             cfg=cfg,
@@ -290,7 +292,8 @@ def main(args, is_main=True):
         )
     elif cfg.data.dataset_name == "merlin":
         test_dataset = MerlinDataset(
-            cfg=cfg
+            cfg=cfg,
+            split=cfg.eval.split,
             vision_encoder_patch_size=vision_encoder_patch_size,
         )
     else:

@@ -42,7 +42,7 @@ class DataConfig(ConfigBase):
     )
 
     n_train_samples: int | None = Field(None, description="Number of training samples to use.")
-    n_val_samples: int = Field(200, description="Number of validation samples to use.")
+    n_val_samples: int | None = Field(200, description="Number of validation samples to use.")
 
     do_resize: bool = Field(
         False, description="Resize images to 192x192x192 cubes (with lung crops)."
