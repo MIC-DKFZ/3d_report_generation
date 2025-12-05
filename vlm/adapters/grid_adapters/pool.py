@@ -1,6 +1,6 @@
 import torch.nn as nn
 from vlm.adapters.grid_adapters.base import GridAdapter
-from vlm.adapters.layers import MLP
+from vlm.adapters.layers.dense import MLP
 
 
 class AveragePoolMLP(GridAdapter):
