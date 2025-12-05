@@ -19,7 +19,6 @@ from transformers.utils import (
 
 from vlm.configs.model.model_config import ModelConfig
 from vlm.utils.helper import get_config_from_plans
-from vlm.registries.vision_encoder_registry import vision_encoder_registry
 from vlm.utils import logger
 
 
