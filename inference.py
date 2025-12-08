@@ -55,7 +55,7 @@ class UnifiedVLMInference:
             test_dataset: Test dataset
         """
         model = self.vlm_model.model
-        model.eval().cuda()
+        model.bfloat16().cuda().eval()
 
         if self.is_distributed:
             # Wrap the model with DDP
@@ -99,7 +99,7 @@ class UnifiedVLMInference:
                 raw_samples = inputs["raw_samples"]
                 del inputs["raw_samples"]
                 inputs = extract_batch_prompt_only(inputs)
-                inputs = inputs.to("cuda")
+                inputs = inputs.to(device="cuda", dtype=torch.bfloat16)
 
                 if "batch_count" in inputs:
                     del inputs["batch_count"]
