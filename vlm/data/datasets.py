@@ -730,6 +730,9 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
         )
 
     def modify_input(self, formatted_qa, formatted_qa_prompt_only, result):
+        if self.n_retrieval_samples == 0:
+            return formatted_qa, formatted_qa_prompt_only
+
         query_img_id = result["image_id"]
 
         # get image_ids of most similar
