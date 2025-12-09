@@ -4,32 +4,71 @@ import random
 import string
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, TypeVar, Dict
+from collections.abc import Container
 
 import numpy as np
 import torch
 import torch.nn as nn
 import transformers.trainer
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model, Field
 from transformers.trainer import TRAINER_STATE_NAME
 
+from vlm.configs.model.adapter.adapter_config import AdapterDynamicClassConfig
+from vlm.configs.base import DynamicClassConfigBase
 from vlm.utils.load_and_save_files import load_json, load_yaml
 from vlm.utils.paths import VLM_OUTPUT_DIR
 
 
+def create_and_instantiate_model_from_dict(data_dict: Dict[str, Any]) -> BaseModel:
+    """
+    Dynamically creates a Pydantic BaseModel based on the keys and inferred
+    types of the input dictionary, and then returns an instance of that model
+    populated with the dictionary data.
+    """
+
+    # 1. Infer Pydantic Field Definitions
+    # We iterate over the dictionary and create the field definitions for create_model.
+    # We use type(value) for the field's type and the value itself as the default
+    # (though we'll pass the data separately for instantiation).
+
+    # For robust type checking, it's better to treat all fields as required
+    # and infer their type based on the value's type.
+    # The format required by create_model for a required field is: (Type, ...)
+
+    field_definitions = {}
+    for key, value in data_dict.items():
+        # Get the Python type of the value
+        field_type = type(value)
+        # Define the field as a required field of that type
+        field_definitions[key] = (field_type, ...)
+
+    # 2. Dynamically Create the Model Class
+    DynamicModel = create_model(
+        'InferredModel', # Name the dynamic class
+        **field_definitions
+    )
+
+    # 3. Instantiate and Validate the Model
+    # We pass the original data_dict as keyword arguments to the new model
+    instance = DynamicModel(**data_dict)
+
+    return instance
+
+
 def seed_everything(seed: int):
-  """Sets the seed for reproducibility."""
-  random.seed(seed)
-  np.random.seed(seed)
-  torch.manual_seed(seed)
-  # If you are using CUDA (GPU)
-  if torch.cuda.is_available():
-      torch.cuda.manual_seed(seed)
-      torch.cuda.manual_seed_all(seed) # if using multi-GPU
-      # The two lines below might be needed for full reproducibility with CUDA,
-      # but can impact performance. Use them if you absolutely need deterministic behavior.
-      # torch.backends.cudnn.deterministic = True
-      # torch.backends.cudnn.benchmark = False
+    """Sets the seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    # If you are using CUDA (GPU)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed) # if using multi-GPU
+        # The two lines below might be needed for full reproducibility with CUDA,
+        # but can impact performance. Use them if you absolutely need deterministic behavior.
+        # torch.backends.cudnn.deterministic = True
+        # torch.backends.cudnn.benchmark = False
 
 
 def getattr_nested(obj, attr_path: str) -> Any:
@@ -79,6 +118,39 @@ def add_datetime_tag(s: str, sep: str = "__") -> str:
     return datetime.now().strftime(f"{s}{sep}%Y-%m-%d_%H-%M-%S")
 
 
+def unflatten_dict(d: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively transforms a flat dictionary with dot-separated keys into
+    a nested dictionary structure.
+    """
+    nested_dict: Dict[str, Any] = {}
+
+    # Group keys by the part before the first dot
+    grouped_keys: Dict[str, Dict[str, Any]] = {}
+
+    for key, value in d.items():
+        if '.' in key:
+            # Split key at the first dot
+            stem, rest = key.split('.', 1)
+
+            # Initialize the inner dictionary for the stem if it doesn't exist
+            if stem not in grouped_keys:
+                grouped_keys[stem] = {}
+
+            # Store the remaining part of the key and the value
+            grouped_keys[stem][rest] = value
+        else:
+            # Keys without a dot are added directly to the final dictionary
+            nested_dict[key] = value
+
+    # Recursively process the grouped keys
+    for stem, inner_dict in grouped_keys.items():
+        # The value for the 'stem' is the result of unflattening the inner_dict
+        nested_dict[stem] = unflatten_dict(inner_dict)
+
+    return nested_dict
+
+
 ConfigT = TypeVar("ConfigT", bound=BaseModel)
 def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[str] | None = None, parent_key: str = "") -> ConfigT:
     """
@@ -101,45 +173,85 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
         parent_key = parent_key + "."
 
     parser = argparse.ArgumentParser()
-    for key, field in default_model.model_fields.items():
 
-        if key in ignore_keys:
-            continue
+    def _iterate_config(
+            parser: argparse.ArgumentParser,
+            default_model: ConfigT,
+            ignore_keys: str | list[str],
+            parent_key: str = ""):
+        for key, field in default_model.model_fields.items():
 
-        value = getattr(default_model, key)
-        arg_type = field.annotation
+            if key in ignore_keys:
+                continue
 
-        # Pydantic models or dictionaries should not be passed via CLI.
-        # Without this check, we would replace the pydantic models by dictionaries.
-        if isinstance(arg_type, (dict, BaseModel)):
-            continue
+            value = getattr(default_model, key)
+            arg_type = field.annotation
 
-        if arg_type == bool:
-            # Handle boolean values with store_true/store_false
-            if value:
+            # Pydantic models or dictionaries should not be passed via CLI.
+            # Without this check, we would replace the pydantic models by dictionaries.
+            if isinstance(arg_type, (dict, BaseModel)):
+                continue
+
+            if isinstance(value, dict):
+                print(f"{key}")
+            if isinstance(value, DynamicClassConfigBase):
+                print("here")
+
+            # if isinstance(arg_type, type) and issubclass(arg_type, BaseModel):
+            if issubclass(type(value), BaseModel):
+                _iterate_config(
+                    parser,
+                    value,
+                    ignore_keys,
+                    parent_key + f"{key}."
+                )
+            if "kwargs" in key and issubclass(type(default_model), DynamicClassConfigBase):
+                assert isinstance(value, dict)
+                _iterate_config(
+                    parser,
+                    create_and_instantiate_model_from_dict(value),
+                    ignore_keys,
+                    parent_key + f"{key}."
+                )
+
+            elif arg_type == bool:
+                # Handle boolean values with store_true/store_false
+                if value:
+                    parser.add_argument(
+                        f"--{parent_key}no-{key}",
+                        action="store_false",
+                        dest=key,
+                        help=f"Disable {key} (default: enabled)",
+                    )
+                else:
+                    parser.add_argument(
+                        f"--{parent_key}{key}",
+                        action="store_true",
+                        help=f"Enable {key} (default: disabled)",
+                    )
+            elif issubclass(type(value), Container) and not isinstance(value, str):
                 parser.add_argument(
-                    f"--{parent_key}no-{key}",
-                    action="store_false",
-                    dest=key,
-                    help=f"Disable {key} (default: enabled)",
+                    f"--{parent_key}{key}",
+                    type=str,           # force CLI args to be parsed as strings; Pydantic will handle casting/validation.
+                                        # prevents argparse from using type=NoneType when the default value is None
+                    nargs="+",
+                    default=value,
+                    help=f"Set {key} (default: {value})",
                 )
             else:
                 parser.add_argument(
                     f"--{parent_key}{key}",
-                    action="store_true",
-                    help=f"Enable {key} (default: disabled)",
+                    type=str,           # force CLI args to be parsed as strings; Pydantic will handle casting/validation.
+                                        # prevents argparse from using type=NoneType when the default value is None
+                    default=value,
+                    help=f"Set {key} (default: {value})",
                 )
-        else:
-            parser.add_argument(
-                f"--{parent_key}{key}",
-                type=str,           # force CLI args to be parsed as strings; Pydantic will handle casting/validation.
-                                    # prevents argparse from using type=NoneType when the default value is None
-                default=value,
-                help=f"Set {key} (default: {value})",
-            )
+
+    _iterate_config(parser, default_model, ignore_keys, parent_key)
 
     args_parsed, _ = parser.parse_known_args()
     args_parsed = {k.removeprefix(parent_key): v for k, v in vars(args_parsed).items()}
+    args_parsed = unflatten_dict(args_parsed)
     return default_model.__class__.model_validate(
         {**default_model.model_dump(), **args_parsed}
     )
