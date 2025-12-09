@@ -22,7 +22,7 @@ from vlm.utils.regex_patterns import (
 )
 from vlm.utils.vision_input_type import VisionInputType
 
-from configs.run_config import RunConfig
+from vlm.configs.run_config import RunConfig
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
@@ -78,7 +78,7 @@ class MedicalImageDataset(Dataset, ABC):
 
         self.vision_input_path = Path(cfg.data.vision_input_path)
         self.vision_input_type = cfg.data.vision_input_type
-        self.model_name = cfg.model.model_type
+        self.model_type = cfg.model.model_type
         self.split = split
         if self.split == "train":
             self.n_samples = cfg.data.n_train_samples
@@ -195,8 +195,8 @@ class MedicalImageDataset(Dataset, ABC):
 
             if vision_input.ndim == 5 and vision_input.shape[0] == 1:
                 vision_input = vision_input.squeeze(0)
-            
-        elif str(vision_input_path).endswith(".nrrd"):     
+
+        elif str(vision_input_path).endswith(".nrrd"):
             vision_input, header = nrrd.read(vision_input_path)
 
         elif str(vision_input_path).endswith((".nii.gz", ".nii")):
@@ -279,7 +279,6 @@ class MedicalImageDataset(Dataset, ABC):
         formatted_qa, formatted_qa_prompt_only = self.format_into_message(
             result["question"],
             result["full_answer"],
-            self.model_name,
             system_text=sample["system_text"],
         )
 
@@ -500,7 +499,7 @@ class CTRATEDataset(MedicalImageDataset):
             return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}.b2nd")
         else:
             raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
-        
+
     def shuffle_sentences(self, question: str, answer: str) -> tuple[str, str]:
         """
         Randomly shuffle sentences within Findings and Impression sections separately
@@ -817,6 +816,8 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
         # FIXME: this function assumes that each input has the same size...
         # assert [len(r.shape) == 5 for r in res], "Each loaded vision input should be 5D (B, C, H, W, D)"
         # return np.concatenate(res, axis=0)  # concatenate along batch dimension
+        # Flatten again
+        # res = [image_in_case for same_case in res for image_in_case in same_case]
         return res
 
     # TODO is this the same as in the parent class?

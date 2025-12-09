@@ -34,7 +34,7 @@ class QwenAdapter(GridAdapter):
 
         x = x.to(torch.bfloat16)
 
-        cur_pos = 0
+        # cur_pos = 0
         # TODO reshape input to expected length note that grid_thw is the grid
         # after the reduceblock in the upstream code...
         # TODO: also keep this in mind:
@@ -43,14 +43,15 @@ class QwenAdapter(GridAdapter):
         #     x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
 
         res = torch.Tensor().to(x.device, dtype=x.dtype)
-        for grid_thw in video_grid_thw:
-            lenght = grid_thw[0] * grid_thw[1] * grid_thw[2]
-            y = x[cur_pos:cur_pos+lenght]
+        for image_idx, grid_thw in enumerate(video_grid_thw):
+            # lenght = grid_thw[0] * grid_thw[1] * grid_thw[2]
+            # y = x[cur_pos:cur_pos+lenght]
+            y = x[image_idx]
 
             # (T*H*W, C) -> (C, T, H, W)
-            y = y.permute(1, 0)  # (T*H*W, C) -> (C, T*H*W)
+            # y = y.permute(1, 0)  # (T*H*W, C) -> (C, T*H*W)
             # rebuild blocks
-            y = y.view(y.shape[0], grid_thw[0], grid_thw[1], grid_thw[2])
+            # y = y.view(y.shape[0], grid_thw[0], grid_thw[1], grid_thw[2])
             # Space-to-Depth rearrange (Depth as in Channel/hidden-dim, e.g. imagine a grid of cards which you now compress by stacking reduce block**3 cards onto each other)
             y = rearrange(
                 y,
@@ -61,7 +62,7 @@ class QwenAdapter(GridAdapter):
                 p3=self.reduce_block[2]
             ).contiguous()
             res = torch.cat((res, y), dim=0)
-            cur_pos += lenght
+            # cur_pos += lenght
         x = res
 
         # Process through adapter

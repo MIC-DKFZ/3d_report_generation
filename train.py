@@ -487,7 +487,7 @@ def train_val_data_from_config(cfg: RunConfig):
 
     logger.info_main(
         f"Loaded {len(train_dataset)} training samples and "
-        f"{len(val_dataset) if val_dataset is not None else "no"} validation samples"
+        f"{len(val_dataset) if val_dataset is not None else 'no'} validation samples"
     )
     logger.info_main(f"Using train batch size: {cfg.trainer.per_device_train_batch_size}")
     if val_dataset is not None:

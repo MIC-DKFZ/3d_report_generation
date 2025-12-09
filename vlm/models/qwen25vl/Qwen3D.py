@@ -10,8 +10,8 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLModel,
     Qwen2_5_VLModelOutputWithPast,
     Qwen2_5_VLPreTrainedModel,
-    Qwen2_5_VLTextModel, 
-    KwargsForCausalLM, 
+    Qwen2_5_VLTextModel,
+    KwargsForCausalLM,
     Qwen2_5_VLCausalLMOutputWithPast,
 )
 from transformers.processing_utils import Unpack
@@ -68,7 +68,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
 
         Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
         """
-        spatial_merge_size = self.model_cfg.adapter.reduce_block
+        # spatial_merge_size = self.model_cfg.adapter.reduce_block
         # image_token_id = self.config.image_token_id
         video_token_id = self.config.video_token_id
         vision_start_token_id = self.config.vision_start_token_id

@@ -51,11 +51,11 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
             text = [text]
         text = text.copy()  # below lines change text in-place
 
+        placeholder = "<|placeholder|>"
         if num_vision_tokens is not None:
             text_index = 0
             for i, n in enumerate(num_vision_tokens):
-                placeholder = "<|placeholder|>"
-                if self.video_token in text[text_index]
+                if self.video_token in text[text_index]:
                     text[text_index] = text[text_index].replace(self.video_token, placeholder * n, 1)
                 else:
                     text[text_index] = text[text_index].replace(placeholder, self.video_token)

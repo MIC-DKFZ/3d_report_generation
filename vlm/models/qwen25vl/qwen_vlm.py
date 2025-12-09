@@ -89,6 +89,9 @@ class QwenVLModel(AbstractVLMModel):
                  if vi.shape[-3:] == (10, 7, 7) else vi)
                 for vi in vision_inputs
             ]
+            # FIXME: This is a little hacky but should work
+            if isinstance(vision_inputs[0], list):
+                vision_inputs = [scan for case in vision_inputs for scan in case]
 
             num_vision_tokens, vision_position_ids, adapter_args = self.vision_adapter.get_adapter_args(
                 vision_inputs,
