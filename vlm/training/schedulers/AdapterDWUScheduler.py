@@ -2,14 +2,14 @@ from abc import ABC
 from enum import StrEnum
 from pathlib import Path
 
-from vlm.training.schedulers.lr_schedulers import Lin_incr_LRScheduler, Lin_incr_offset_LRScheduler, \
-    CosineAnnealingLR_offset
+from vlm.training.schedulers.lr_schedulers import LinearIncreasingLR, LinearIncreasingOffsetLR, \
+    CosineAnnealingOffsetLR
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 
 from vlm.training.schedulers.base import SchedulerBase
 from vlm.utils import logger
-from vlm.utils.optimizer_and_params import create_optimizer_with_grouped_params
+from vlm.utils.optimizer_and_params import get_param_groups
 
 
 class AdapterDWUScheduler(SchedulerBase, ABC):
@@ -23,14 +23,21 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
             self,
             optimizer_class: type[Optimizer],
             optimizer_kwargs: dict,
-            warmup_1_duration: float,
-            warmup_2_duration: float,
-
             module_attr_map: dict,
             forbidden_name_patterns_for_wd: list[str],
-            output_dir: str | Path
+            output_dir: str | Path,
+
+            adapter_lr: float,
+            lm_lr: float,
+            warmup_1_duration: float,
+            warmup_2_duration: float,
     ):
         super().__init__(optimizer_class, optimizer_kwargs, module_attr_map, forbidden_name_patterns_for_wd, output_dir)
+
+        self.lr_param_groups = [
+            ("adapter", self.module_attr_map["adapter"], adapter_lr),
+            ("default", "", lm_lr)  # Set the global default, order matters!
+        ]
 
         self.warmup_1_duration = warmup_1_duration
         self.warmup_2_duration = warmup_2_duration
@@ -82,6 +89,15 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
         if not self.new_training_stage:
             return optimizer, lr_scheduler
 
+        # These parameter groups always contain the maximum learning rates for each group, which need to
+        # be known by the learning rate scheduler.
+        param_groups = get_param_groups(
+            self.lr_param_groups,
+            self.optimizer_kwargs.get("weight_decay", 0.0),
+            model,
+            self.forbidden_name_patterns_for_wd
+        )
+
         # If we use a momentum-based optimizer (e.g. AdamW), we do not want to keep the momentum on entering
         # 'WARMUP_2' from 'WARMUP_1'.
         # The newly unfrozen parameters start with zero momentum, thus adapting more slowly than the
@@ -89,27 +105,25 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
         if optimizer is None or self.training_stage == self._Stage.WARMUP_2:
             if optimizer is not None:
                 del optimizer
-            optimizer = create_optimizer_with_grouped_params(
-                self.optimizer_class,
-                self.optimizer_kwargs,
-                model,
-                self.forbidden_name_patterns_for_wd
-            )
+            optimizer = self.optimizer_class(param_groups, **self.optimizer_kwargs)
 
         if self.training_stage == self._Stage.WARMUP_1:
             logger.info_main("[SCHEDULER] Adapter-Only Training. First Warmup.")
-            lr_scheduler = Lin_incr_LRScheduler(optimizer=optimizer,
-                                                     max_lr=self.max_lr,
-                                                     max_steps=self.warmup_1_max_step)
+            lr_scheduler = LinearIncreasingLR(optimizer=optimizer,
+                                              param_groups=param_groups,
+                                              max_steps=self.warmup_1_max_step)
         elif self.training_stage == self._Stage.WARMUP_2:
             logger.info_main("[SCHEDULER] Normal Training. Second Warmup.")
-            lr_scheduler = Lin_incr_offset_LRScheduler(optimizer=optimizer,
-                                                     max_lr=self.max_lr,
-                                                     max_steps=self.warmup_2_max_step,
-                                                     start_step=self.warmup_1_max_step)
+            lr_scheduler = LinearIncreasingOffsetLR(optimizer=optimizer,
+                                                    param_groups=param_groups,
+                                                    max_steps=self.warmup_2_max_step,
+                                                    start_step=self.warmup_1_max_step)
         elif self.training_stage == self._Stage.DEFAULT:
             logger.info_main("[SCHEDULER] Normal Training. Warmups Done.")
-            lr_scheduler = CosineAnnealingLR_offset(optimizer, T_max=self.max_steps, offset=self.warmup_2_max_step)
+            lr_scheduler = CosineAnnealingOffsetLR(optimizer=optimizer,
+                                                   param_groups=param_groups,
+                                                   max_steps=self.max_steps,
+                                                   start_step=self.warmup_2_max_step)
         else:
             raise RuntimeError(f"unknown training stage: {self.training_stage}")
 

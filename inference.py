@@ -55,7 +55,7 @@ class UnifiedVLMInference:
             test_dataset: Test dataset
         """
         model = self.vlm_model.model
-        model.eval().cuda()
+        model.bfloat16().cuda().eval()
 
         if self.is_distributed:
             # Wrap the model with DDP
@@ -99,7 +99,7 @@ class UnifiedVLMInference:
                 raw_samples = inputs["raw_samples"]
                 del inputs["raw_samples"]
                 inputs = extract_batch_prompt_only(inputs)
-                inputs = inputs.to("cuda")
+                inputs = inputs.to(device="cuda", dtype=torch.bfloat16)
 
                 if "batch_count" in inputs:
                     del inputs["batch_count"]
@@ -222,9 +222,7 @@ def main(args, is_main=True):
     seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
 
     if is_main:  # we don't want to merge args if this was called by train.py
-        cfg.general = merge_config_with_cli_args(cfg.general, parent_key="general")
-        cfg.data = merge_config_with_cli_args(cfg.data, parent_key="data")
-        cfg.eval = merge_config_with_cli_args(cfg.eval, parent_key="eval")
+        cfg.merge_subconfigs_with_cli_args()
 
     inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "inference_dir_suffix", ""))
 
@@ -232,9 +230,8 @@ def main(args, is_main=True):
     log_file_path = Path(inference_output_dir, log_file_name)
     setup_logger(log_file_path)
 
-    if cfg.data.vision_input_type == VisionInputType.IMAGE:
-        ve_plans = load_json(Path(cfg.model.vision_encoder.checkpoint_path, "plans.json"))
-        vision_encoder_patch_size = ve_plans["configurations"]["3d_fullres"]["patch_size"]
+    if cfg.model.vision_encoder:
+        vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
     else:
         vision_encoder_patch_size = None
 

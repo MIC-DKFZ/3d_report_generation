@@ -7,8 +7,8 @@ from vlm.utils.vision_input_type import VisionInputType
 
 
 class QueryAdapter(AdapterBase, ABC):
-    def __init__(self, num_query_tokens: int, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, num_query_tokens: int, **kwargs):
+        super().__init__(**kwargs)
         self.num_query_tokens = num_query_tokens
 
     def get_adapter_args(

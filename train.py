@@ -15,7 +15,7 @@ from vlm.data.datasets import AMOSMMDataset, CTRATEDataset
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
 from vlm.models.abstract_vlm import AbstractVLMModel
-from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback
+from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback
 from vlm.training.trainers import VLMSFTTrainer
 from vlm.registries.vlm_registry import VLM_REGISTRY
 from vlm.utils import logger
@@ -132,7 +132,8 @@ class UnifiedVLMTrainer:
         training_args = self.get_training_args()
 
         callbacks = [
-            LossLoggingCallback()
+            LossLoggingCallback(),
+            WandbGroupedLRCallback()
         ]
 
         if val_dataset is not None:

@@ -29,12 +29,12 @@ class SFTTrainerConfig(ConfigBase):
 
     logging_steps: int = Field(25, ge=1, description="Number of steps between logging events.")
 
-    eval_steps: int | None = Field(250, ge=1, description="Number of steps between evaluation runs.")
+    eval_steps: int | None = Field(400, ge=1, description="Number of steps between evaluation runs.")
     eval_strategy: Literal["no", "steps", "epoch"] | None = Field("steps", description="Evaluation strategy to adopt during training.")
     metric_for_best_model: str | None = Field("eval_loss", description="Metric to use for selecting the best model (e.g. eval_loss, accuracy).")
     greater_is_better: bool = Field(False, description="Whether the chosen metric should be maximized (True) or minimized (False).")
 
-    save_steps: int = Field(250, ge=1, description="Save checkpoint every X steps when using save_strategy='steps'.")
+    save_steps: int = Field(400, ge=1, description="Save checkpoint every X steps when using save_strategy='steps'.")
     save_strategy: Literal["no", "steps", "epoch"] = Field("steps", description="Checkpoint saving strategy during training.")
     save_total_limit: int = Field(2, description="Maximum number of checkpoints to keep. Older ones are deleted.")
 
@@ -44,7 +44,7 @@ class SFTTrainerConfig(ConfigBase):
     remove_unused_columns: bool = Field(False, description="Whether to remove unused columns from the dataset before training.")
     report_to: list[str] = Field(default_factory=lambda: ["wandb"], description="List of integrations to report training logs to (e.g. wandb, tensorboard).")
 
-    dataloader_num_workers: int = Field(2, description="Number of subprocesses to use for loading data in parallel.")
+    dataloader_num_workers: int = Field(6, description="Number of subprocesses to use for loading data in parallel.")
     dataloader_pin_memory: bool = Field(True, description="Whether to copy tensors into CUDA pinned memory for faster GPU transfers.")
     dataloader_prefetch_factor: int = Field(1, description="Reduce prefetch factor to minimize memory usage.")
     dataloader_persistent_workers: bool = Field(False, description="Disable persistent workers to prevent memory accumulation.")

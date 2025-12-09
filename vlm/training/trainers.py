@@ -69,6 +69,38 @@ class VLMSFTTrainer(SFTTrainer):
         pass
 
 
+    def _maybe_log_save_evaluate(
+        self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time, learning_rate=None
+    ):
+        if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
+            if is_torch_xla_available():
+                xm.mark_step()
+
+            logs: dict[str, float] = {}
+
+            # all_gather + mean() to get average loss over all processes
+            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            if grad_norm is not None:
+                logs["grad_norm"] = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
+
+            # Comment this out so we only use our custom LR logging (WandbGroupedLRCallback)
+            # if learning_rate is not None:
+            #     logs["learning_rate"] = learning_rate
+            # else:
+            #     logs["learning_rate"] = self._get_learning_rate()
+
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+            self.store_flos()
+
+            self.log(logs, start_time)
+
+
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
     ):
@@ -410,7 +442,11 @@ class VLMSFTTrainer(SFTTrainer):
                         if not getattr(self.lr_scheduler, "_is_accelerate_prepared", False):
                             # logger.warning_main("RE-WRAPPING LR-SCHEDULER")
                             self.lr_scheduler = self.accelerator.prepare(self.lr_scheduler)
-                            self.lr_scheduler.step(self.state.global_step)
+                            self.lr_scheduler.step(self.state.global_step)  # Step once to set correct LR for
+                                                                            # offset LR schedulers using 'global_step'
+
+                        self.callback_handler.optimizer = self.optimizer
+                        self.callback_handler.lr_scheduler = self.lr_scheduler
 
                         self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
 
@@ -486,7 +522,7 @@ class VLMSFTTrainer(SFTTrainer):
                         self.control = self.callback_handler.on_optimizer_step(args, self.state, self.control)
 
                         # get learning rate before update
-                        learning_rate = self._get_learning_rate()
+                        # learning_rate = self._get_learning_rate()
 
                         if not self.accelerator.optimizer_step_was_skipped:
                             # Delay optimizer scheduling until metrics are generated
@@ -505,7 +541,7 @@ class VLMSFTTrainer(SFTTrainer):
                             epoch,
                             ignore_keys_for_eval,
                             start_time,
-                            learning_rate=learning_rate,
+                            # learning_rate=learning_rate,
                         )
                     else:
                         self.control = self.callback_handler.on_substep_end(args, self.state, self.control)

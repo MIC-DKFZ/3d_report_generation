@@ -1,6 +1,7 @@
 import os
 import re
 from typing import Literal
+from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 import torch.distributed as dist
 import torch
@@ -304,7 +305,7 @@ class PrintEvalBatchCallback(TrainerCallback):
 class PycocoevalCallback(TrainerCallback):
     def __init__(
         self, eval_dataloader: DataLoader, max_new_tokens: int,
-            tokenizer=None, processor=None, eval_every_n_epochs=0.25, print_first_sample=True,
+            tokenizer=None, processor=None, eval_every_n_epochs=0.5, print_first_sample=True,
             is_distributed=False
     ):
         self.eval_dataloader = eval_dataloader
@@ -537,6 +538,35 @@ class LossLoggingCallback(TrainerCallback):
             # with open("custom_loss_log.txt", "a") as f:
             #     if 'loss' in logs:
             #         f.write(f"{global_step},{logs['loss']}\n")
+
+
+class WandbGroupedLRCallback(TrainerCallback):
+    """
+    Logs learning rates of different parameter groups.
+    """
+
+    def on_log(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        logs=None,
+        **kwargs,
+    ):
+        if state.is_world_process_zero and wandb.run is not None:
+            optimizer: Optimizer = kwargs["optimizer"]
+
+            named_lrs = {}
+            for param_group in optimizer.param_groups:
+                module_name = param_group["name"].removesuffix("_DECAY").removesuffix("_NO")
+                # It's ok if the 'NO_DECAY' overwrites the 'DECAY' learning rate of the same module or vice versa
+                # because they have the same learning rate
+                named_lrs[module_name] = param_group["lr"]
+
+            learning_rates = {f"lr/{module_name}": loss for module_name, loss in named_lrs.items()}
+
+            # Log custom metric(s) to WandB
+            wandb.log({**learning_rates, "train/global_step": state.global_step})
 
 
 class WandbCustomLoggingCallback(TrainerCallback):

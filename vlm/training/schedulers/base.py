@@ -25,7 +25,6 @@ class SchedulerBase(ABC):
 
         self.optimizer_class = optimizer_class
         self.optimizer_kwargs = optimizer_kwargs
-        self.max_lr = self.optimizer_kwargs["lr"]
 
         self.module_attr_map = module_attr_map
         self.forbidden_name_patterns_for_wd = forbidden_name_patterns_for_wd
