@@ -136,12 +136,28 @@ class DynamicClassConfigBase(ConfigBase, ABC):
     @model_validator(mode="after")
     def _resolve_target(self):
         self.resolve_target()
+        self._sanitize_class_kwargs(_get_signatures(self._resolved_class))
         return self
 
     @abstractmethod
     def resolve_target(self):
         """Resolve and store the Python object after validation."""
         ...
+
+    def _sanitize_class_kwargs(self, signatures: OrderedDict[str, Any]):
+        """
+        Checks and converts argument values in self.class_kwargs based on
+        the type hints provided in the signatures.
+        """
+        for key, value in self.class_kwargs.items():
+            if key in signatures:
+                expected_type = signatures[key]
+
+                # Convert the value
+                converted_value = _convert_value(value, expected_type)
+
+                # Update the dictionary with the converted value
+                self.class_kwargs[key] = converted_value
 
     def to_instance(self, **kwargs) -> Any:
         return self._resolved_class(**kwargs, **self.class_kwargs)
@@ -165,23 +181,7 @@ class RecursiveFindClassConfigBase(DynamicClassConfigBase):
         )
         if self._resolved_class is None:
             raise ValueError(f"Could not find {self.class_name:!r} in {vlm.__path__[0]:!r}")
-        self._sanitize_class_kwargs(_get_signatures(self._resolved_class))
         return self
-
-    def _sanitize_class_kwargs(self, signatures: OrderedDict[str, Any]):
-        """
-        Checks and converts argument values in self.class_kwargs based on
-        the type hints provided in the signatures.
-        """
-        for key, value in self.class_kwargs.items():
-            if key in signatures:
-                expected_type = signatures[key]
-
-                # Convert the value
-                converted_value = _convert_value(value, expected_type)
-
-                # Update the dictionary with the converted value
-                self.class_kwargs[key] = converted_value
 
     def to_instance(self, **kwargs) -> Any:
         return self._resolved_class(**kwargs, **self.class_kwargs)
