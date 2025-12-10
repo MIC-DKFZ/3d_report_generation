@@ -20,7 +20,7 @@ from transformers.modeling_utils import unwrap_model
 from transformers.trainer import _is_peft_model, TRAINER_STATE_NAME
 from transformers.trainer_callback import ExportableState
 from transformers.trainer_pt_utils import get_parameter_names, get_model_param_count
-from transformers.trainer_utils import speed_metrics, TrainOutput
+from transformers.trainer_utils import speed_metrics, TrainOutput, SaveStrategy
 from transformers.training_args import OptimizerNames, ParallelMode
 from transformers.utils import is_sagemaker_mp_enabled, is_accelerate_available
 from trl import SFTTrainer
@@ -99,6 +99,18 @@ class VLMSFTTrainer(SFTTrainer):
             self.store_flos()
 
             self.log(logs, start_time)
+
+        metrics = None
+        if self.control.should_evaluate:
+            metrics = self._evaluate(trial, ignore_keys_for_eval)
+            is_new_best_metric = self._determine_best_metric(metrics=metrics, trial=trial)
+
+            if self.args.save_strategy == SaveStrategy.BEST:
+                self.control.should_save = is_new_best_metric
+
+        if self.control.should_save:
+            self._save_checkpoint(model, trial)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
 
     def _inner_training_loop(
