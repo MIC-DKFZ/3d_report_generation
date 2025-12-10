@@ -191,11 +191,6 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
             if isinstance(arg_type, (dict, BaseModel)):
                 continue
 
-            if isinstance(value, dict):
-                print(f"{key}")
-            if isinstance(value, DynamicClassConfigBase):
-                print("here")
-
             # if isinstance(arg_type, type) and issubclass(arg_type, BaseModel):
             if issubclass(type(value), BaseModel):
                 _iterate_config(
@@ -219,7 +214,7 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
                     parser.add_argument(
                         f"--{parent_key}no-{key}",
                         action="store_false",
-                        dest=key,
+                        dest=f"{parent_key}{key}",
                         help=f"Disable {key} (default: enabled)",
                     )
                 else:
