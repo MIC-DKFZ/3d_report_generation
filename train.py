@@ -105,7 +105,10 @@ class UnifiedVLMTrainer:
             log_memory_usage("Before Training Setup")
 
         # Setup model, processor and tokenizer
-        model = self.vlm_model.setup_model()
+        if not self.cfg.general.continue_training:
+            model = self.vlm_model.setup_model()
+        else:
+            model = self.vlm_model.model
 
         # Apply trainable parameter configs and possibly add PEFT adapter layers
         self.vlm_model.apply_trainable_config()
@@ -213,7 +216,24 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training")
 
-        self.trainer.train()
+        if self.cfg.general.continue_training:
+            if self.cfg.general.continue_training_mode == "final":
+                self.trainer.train(resume_from_checkpoint=True)
+            elif self.cfg.general.continue_training_mode == "best":
+                self.trainer.train(
+                    resume_from_checkpoint=os.path.join(
+                        self.cfg.general.output_dir, "best_model"
+                    )
+                )
+            elif self.cfg.general.continue_training_mode == "best_metric":
+                raise NotImplementedError(
+                    "Currently not supported to continue from best metric!"
+                    " Implement yourselve or just set `best_metric` to "
+                    "`best_model`."
+                )
+
+        else:
+            self.trainer.train()
 
         if is_main_process():
             log_memory_usage("After Training")
@@ -313,12 +333,16 @@ def setup_config_and_logging() -> RunConfig:
 
     # Log the final configuration
     if is_main_process():
-        final_config_path = os.path.join(cfg.general.output_dir, "final_config.yml")
-        save_yaml(
-            {"command": " ".join(sys.argv), "run": cfg.model_dump()},
-            final_config_path,
-            sort_keys=False,
-        )
+        if not cfg.general.continue_training:
+            final_config_path = os.path.join(cfg.general.output_dir, "final_config.yml")
+            save_yaml(
+                {
+                    "command": " ".join(sys.argv),
+                    "run": cfg.model_dump()
+                },
+                final_config_path,
+                sort_keys=False
+            )
 
     return cfg
 
@@ -488,14 +512,20 @@ def main():
     except KeyError:
         raise ValueError(f"Unknown model type: {cfg.general.model_type}")
 
-    vlm_model = vlm_model_class(
-        model_cfg=cfg.model,
-        vision_input_type=cfg.data.vision_input_type,
-        vision_embed_dim=cfg.get_vision_embed_dim(),
-        vision_embed_size=cfg.get_vision_embed_size(),
-        text_only=cfg.data.text_only,
-        local_files_only=cfg.general.local_files_only
-    )
+    if cfg.general.continue_training:
+        vlm_model, cfg, ckpt_dir = AbstractVLMModel.load_from_run_dir(
+            cfg.general.output_dir,
+            mode=cfg.general.continue_training_mode
+        )
+    else:
+        vlm_model = vlm_model_class(
+            model_cfg=cfg.model,
+            vision_input_type=cfg.data.vision_input_type,
+            vision_embed_dim=cfg.get_vision_embed_dim(),
+            vision_embed_size=cfg.get_vision_embed_size(),
+            text_only=cfg.data.text_only,
+            local_files_only=cfg.general.local_files_only
+        )
 
     if cfg.model.vision_encoder:
         vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
