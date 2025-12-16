@@ -31,6 +31,7 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
             lm_lr: float,
             warmup_1_duration: float,
             warmup_2_duration: float,
+            reset_optimizer: bool = True
     ):
         super().__init__(optimizer_class, optimizer_kwargs, module_attr_map, forbidden_name_patterns_for_wd, output_dir)
 
@@ -41,6 +42,7 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
 
         self.warmup_1_duration = warmup_1_duration
         self.warmup_2_duration = warmup_2_duration
+        self.reset_optimizer = reset_optimizer
 
         self.warmup_1_max_step = None
         self.warmup_2_max_step = None
@@ -102,7 +104,7 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
         # 'WARMUP_2' from 'WARMUP_1'.
         # The newly unfrozen parameters start with zero momentum, thus adapting more slowly than the
         # decoder parameters, which could hinder overall training dynamics in the second warm-up phase.
-        if optimizer is None or self.training_stage == self._Stage.WARMUP_2:
+        if optimizer is None or (self.training_stage == self._Stage.WARMUP_2 and self.reset_optimizer):
             if optimizer is not None:
                 del optimizer
             optimizer = self.optimizer_class(param_groups, **self.optimizer_kwargs)
