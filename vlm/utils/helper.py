@@ -349,6 +349,10 @@ def log_param_groups(model: nn.Module, optimizer: Optimizer, file_path=None):
                 print_to_file(f"  - {name:100} shape={str(tuple(p.shape)):25}")
 
 
+def count_parameters(module: nn.Module) -> int:
+    return sum(p.numel() for p in module.parameters())
+
+
 def get_trainable_state_dict(model: nn.Module):
     """Return a state dict containing only parameters with requires_grad=True."""
     trainable_names = {name for name, p in model.named_parameters() if p.requires_grad}
