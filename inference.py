@@ -207,6 +207,8 @@ def main_cli():
 
 
 def main(args, is_main=True):
+    seed_everything(0)  # Set a fixed seed for reproducibility
+
     if args.run_dir:
         run_dir = Path(args.run_dir)
 
@@ -218,8 +220,6 @@ def main(args, is_main=True):
     else:  # if args.checkpoint_dir
         ckpt_dir = args.checkpoint_dir
         vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
-
-    seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
 
     if is_main:  # we don't want to merge args if this was called by train.py
         cfg.merge_subconfigs_with_cli_args()

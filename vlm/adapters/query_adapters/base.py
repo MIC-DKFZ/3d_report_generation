@@ -17,8 +17,12 @@ class QueryAdapter(AdapterBase, ABC):
             vision_input_type: VisionInputType,
             **kwargs
     ) -> tuple[list[int], list[torch.Tensor], dict]:
-        num_vision_tokens = ...
-        vision_position_ids = ...
+
+        batch_size = len(vision_inputs)
+        num_vision_tokens = [self.num_query_tokens] * batch_size
+
+        template = torch.arange(self.num_query_tokens).unsqueeze(0).repeat(3, 1)
+        vision_position_ids = [template.clone() for _ in range(batch_size)]
 
         return num_vision_tokens, vision_position_ids, {}
 

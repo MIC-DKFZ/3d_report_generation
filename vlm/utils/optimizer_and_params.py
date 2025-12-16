@@ -4,7 +4,7 @@ from vlm.models.owl.modeling_hyper_qwen2 import Qwen2RMSNorm
 
 
 def get_decay_parameter_names(model: nn.Module, forbidden_name_patterns_for_wd: list[str]) -> list[str]:
-    decay_parameters = get_parameter_names(model, [nn.LayerNorm, Qwen2RMSNorm], forbidden_name_patterns_for_wd)
+    decay_parameters = get_parameter_names(model, [nn.LayerNorm, nn.RMSNorm, Qwen2RMSNorm], forbidden_name_patterns_for_wd)
     return decay_parameters
 
 

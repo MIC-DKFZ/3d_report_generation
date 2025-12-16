@@ -7,6 +7,8 @@ import vlm
 import inspect
 from inspect import Signature, Parameter
 
+from vlm.utils.helper import get_class_from_registry
+
 
 def _get_signatures(cls: Type) -> OrderedDict[str, Any]:
     """
@@ -196,7 +198,7 @@ class RegistryClassConfigBase(DynamicClassConfigBase):
 
     def resolve_target(self):
         """Resolve and store the Python object after validation."""
-        candidates = [c for c in self.registry if c.__name__ == self.class_name]
-        if not candidates:
+        target_class = get_class_from_registry(self.class_name, self.registry)
+        if target_class is None:
             raise ValueError(f"Could not find {self.class_name:!r} in {self.registry}")
-        self._resolved_class = candidates[0]
+        self._resolved_class = target_class

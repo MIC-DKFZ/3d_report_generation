@@ -13,8 +13,7 @@ class QwenAdapter(GridAdapter):
         r0, r1, r2 = self.reduce_block
         input_dim = self.vision_embed_dim * r0 * r1 * r2
         if hidden_dim is None:
-            hidden_dim = self.vision_embed_dim * min(8, r0 * r1 * r2)  # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
-                                                                        # the linear layer still can become too large for large blocks greater than 8cube. In such cases better use pooling?!
+            hidden_dim = self.vision_embed_dim * min(8, r0 * r1 * r2)
         self.rmsnorm = Qwen2RMSNorm(input_dim, eps=1e-6)
         self.adapter = nn.Sequential(
             nn.Linear(
@@ -37,16 +36,16 @@ class QwenAdapter(GridAdapter):
             video_grid_thw = adapter_args["video_grid_thw"]
             x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
         
-        r0, r1, r2 = self.reduce_block
+        rT, rH, rW = self.reduce_block
         # Use unfold to create reduce_block
-        x = x.unfold(2, r0, r0)
-        x = x.unfold(3, r1, r1)
-        x = x.unfold(4, r2, r2)
+        x = x.unfold(2, rT, rT)
+        x = x.unfold(3, rH, rH)
+        x = x.unfold(4, rW, rW)
 
         # Reshape to combine all reduce_block
         x = x.permute(0, 2, 3, 4, 1, 5, 6, 7)  # Move embedding_dim after spatial dims
         # (B, T', H', W', C, rT, rH, rW) -> (B, T'*H'*W', C*rT*rH*rW)
-        x = x.reshape(batch_size, -1, embedding_dim * r0 * r1 * r2)
+        x = x.reshape(batch_size, -1, embedding_dim * rT * rH * rW)
 
         # Process through adapter
         # x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])

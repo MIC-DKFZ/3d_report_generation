@@ -14,7 +14,6 @@ from torch.optim import Optimizer
 from pydantic import BaseModel, create_model
 from transformers.trainer import TRAINER_STATE_NAME
 
-from vlm.configs.base import DynamicClassConfigBase
 from vlm.utils.load_and_save_files import load_json, load_yaml
 from vlm.utils.paths import VLM_OUTPUT_DIR
 
@@ -178,6 +177,8 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
             default_model: ConfigT,
             ignore_keys: str | list[str],
             parent_key: str = ""):
+        from vlm.configs.base import DynamicClassConfigBase
+
         for key, field in default_model.model_fields.items():
 
             if key in ignore_keys:
@@ -363,6 +364,13 @@ def find_run_dir_in_output_dir(run_dir: str):
     elif not matches:
         raise FileNotFoundError(f"No directory named '{run_dir}' found under {VLM_OUTPUT_DIR}")
     return matches[0]
+
+
+def get_class_from_registry(class_name: str, registry: list[type]) -> type | None:
+    candidates = [c for c in registry if c.__name__ == class_name]
+    if candidates:
+        return candidates[0]
+    return None
 
 
 def chunkify(lis: list, num_chunks: int):

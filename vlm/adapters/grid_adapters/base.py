@@ -14,6 +14,13 @@ class GridAdapter(AdapterBase, ABC):
         super().__init__(**kwargs)
         self.reduce_block = reduce_block
 
+    def _maybe_restructure_to_grid(self, x, video_grid_thw):
+        if x.ndim == 3:  # if flattened tensor (from VE, not loaded embed), restructure to original grid
+            batch_size = x.shape[0]
+            embed_dim = x.shape[1]
+            return x.reshape(batch_size, embed_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
+        return x
+
     def get_adapter_args(
             self,
             vision_inputs: list[np.ndarray],
