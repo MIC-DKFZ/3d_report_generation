@@ -5,7 +5,7 @@ from pathlib import Path
 from vlm.training.schedulers.lr_schedulers import LinearIncreasingLR, LinearIncreasingOffsetLR, \
     CosineAnnealingOffsetLR
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import _LRScheduler
+from torch.optim.lr_scheduler import LRScheduler
 
 from vlm.training.schedulers.base import SchedulerBase
 from vlm.utils import logger
@@ -86,8 +86,8 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
             self,
             model,
             optimizer: Optimizer | None,
-            lr_scheduler: _LRScheduler
-    ) -> tuple[Optimizer, _LRScheduler]:
+            lr_scheduler: LRScheduler
+    ) -> tuple[Optimizer, LRScheduler]:
         if not self.new_training_stage:
             return optimizer, lr_scheduler
 
