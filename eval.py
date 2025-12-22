@@ -1,17 +1,24 @@
 import argparse
 import multiprocessing
+import os
 import random
 import re
 import matplotlib.pyplot as plt
 import numpy as np
 import csv
+import torch
 from collections import defaultdict
 from pathlib import Path
+
+import pandas as pd
 from pycocoevalcap.bleu.bleu import Bleu
 from pycocoevalcap.rouge.rouge import Rouge
 from pycocoevalcap.cider.cider import Cider
 from pycocoevalcap.meteor.meteor import Meteor
+from torch.utils.data import SequentialSampler, DataLoader
 
+from vlm.evaluation.ctrate_radbert.calculate_metrics import calculate_metrics
+from vlm.evaluation.ctrate_radbert.utils import CTDataset, RadBertClassifier, RadBertInference, ctrate_label_cols
 from vlm.utils import logger
 from vlm.evaluation.hf_evaluate.scorers import BLEUScorer, ROUGELScorer, METEORScorer
 from vlm.utils.helper import add_datetime_tag, chunkify
@@ -20,7 +27,7 @@ from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.regex_patterns import VQA_ANSWER_PATTERN
 
 
-def eval_report_generation_pycocoeval(preds: list, gts: list) -> dict[str, list] | None:
+def eval_report_generation_pycocoeval(preds: list, gts: list) -> dict[str, list]:
     assert len(preds) == len(gts)
     if not preds:
         raise ValueError("RG EVALUATION: received empty lists")
@@ -31,10 +38,6 @@ def eval_report_generation_pycocoeval(preds: list, gts: list) -> dict[str, list]
     meteor_scorer = Meteor()
     rougel_scorer = Rouge()
     cider_scorer = Cider()
-
-    # Remove '\n' here as this will interfere Pycocoeval (specifically METEOR)
-    preds = [pred.replace("\n", " ") for pred in preds]
-    gts = [gt.replace("\n", " ") for gt in gts]
 
     # Put preds and gts into compatible format for Pycocoeval
     in_res = {i: [pred] for i, pred in enumerate(preds)}
@@ -82,6 +85,61 @@ def eval_report_generation_pycocoeval(preds: list, gts: list) -> dict[str, list]
     results["rougel_score"] = rougel_score
     results["cider_score"] = cider_score
 
+    return results
+
+
+def inference_ctrate_radbert(reports: list[str], ckpt_path: str | Path, hf_radbert_dir: str | Path):
+    df = pd.DataFrame({"reports": reports})
+    for col in ctrate_label_cols:
+        df[col] = 0
+
+    batch_size = 32
+    if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
+        batch_size = 96
+
+    # DataLoader
+    ds = CTDataset(df, len(ctrate_label_cols), ctrate_label_cols, hf_radbert_dir)
+    loader = DataLoader(
+        ds, sampler=SequentialSampler(ds), batch_size=batch_size, num_workers=4, pin_memory=True
+    )
+
+    # Model
+    model = RadBertClassifier(n_classes=len(ctrate_label_cols), hf_model_dir=hf_radbert_dir)
+
+    state_dict = torch.load(ckpt_path, map_location="cpu")
+    if "model.embeddings.position_ids" in state_dict:
+        del state_dict["model.embeddings.position_ids"]
+
+    model.load_state_dict(state_dict)
+    model = model.cuda().eval()
+
+    trainer = RadBertInference(
+        model,
+        {"test": loader},
+        len(ctrate_label_cols),
+        ctrate_label_cols,
+    )
+
+    preds = trainer.infer()  # ndarray [N, C]
+    result = pd.DataFrame(preds.astype(int), columns=ctrate_label_cols)
+    return result
+
+
+def eval_ctrate_radbert(preds: list, gts: list) -> dict[str, list]:
+    radbert_dir = os.getenv("VLM_CTRATE_RADBERT_DIR")
+    if radbert_dir is None:
+        logger.warning_main("The environment variable 'VLM_CTRATE_RADBERT_DIR' is not set. "
+                            "Cannot proceed with RadBERT inference for CT-RATE.")
+        return {}
+
+    radbert_dir = Path(radbert_dir)
+    radbert_ckpt = radbert_dir / "RadBertClassifier.pth"
+    hf_radbert_dir = radbert_dir / "RadBERT-RoBERTa-4m"
+
+    pred_classifications_csv = inference_ctrate_radbert(preds, radbert_ckpt, hf_radbert_dir)
+    gt_classifications_csv = inference_ctrate_radbert(gts, radbert_ckpt, hf_radbert_dir)
+
+    results = calculate_metrics(pred_classifications_csv, gt_classifications_csv)
     return results
 
 
@@ -204,6 +262,12 @@ def eval_vqa(preds: list, gts: list) -> dict[str, list] | None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Vision Language Model Evaluation")
 
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default="ctrate",
+        help="Name of the dataset."
+    )
     parser.add_argument(
         "--task_type",
         type=str,
@@ -341,7 +405,15 @@ def main(args):
         preds.append(dic["output_text_clean"])
         gts.append(dic["answer"])
 
-    results = eval_report_generation_pycocoeval(preds, gts)
+    # Remove '\n' here as this will interfere Pycocoeval (specifically METEOR)
+    preds = [pred.replace("\n", " ") for pred in preds]
+    gts = [gt.replace("\n", " ") for gt in gts]
+
+    results = {}
+    results.update(eval_report_generation_pycocoeval(preds, gts))
+
+    if args.dataset_name == "ctrate":
+        results.update(eval_ctrate_radbert(preds, gts))
 
     logger.info_main("[METRICS] Evaluation Summary:")
     for metric_name, value in results.items():

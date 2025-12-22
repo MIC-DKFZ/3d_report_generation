@@ -289,6 +289,7 @@ def main(args, is_main=True):
 
     if cfg.eval.run_eval and is_main_process():
         eval_args = argparse.Namespace(
+            dataset_name = cfg.data.dataset_name,
             task_type="RG" if cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
             inference_dir=inference_output_dir,
             num_processes=cfg.eval.num_eval_processes
