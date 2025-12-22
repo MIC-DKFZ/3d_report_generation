@@ -32,16 +32,16 @@ class MHXAttention(nn.Module):
 
 
 class MHAttention(nn.Module):
-    def __init__(self, model_dim: int, hidden_dim: int, head_dim: int,
+    def __init__(self, in_dim: int, hidden_dim: int, out_dim, head_dim: int,
                  qkv_bias: bool = True, out_bias: bool = False):
         super().__init__()
         assert hidden_dim % head_dim == 0, (f"'hidden_dim' must be divisible by 'head_dim': "
                                              f"hidden_dim={hidden_dim}, head_dim={head_dim}")
 
-        self.to_q = nn.Linear(model_dim, hidden_dim, bias=qkv_bias)
-        self.to_k = nn.Linear(model_dim, hidden_dim, bias=qkv_bias)
-        self.to_v = nn.Linear(model_dim, hidden_dim, bias=qkv_bias)
-        self.to_out = nn.Linear(hidden_dim, model_dim, bias=out_bias)
+        self.to_q = nn.Linear(in_dim, hidden_dim, bias=qkv_bias)
+        self.to_k = nn.Linear(in_dim, hidden_dim, bias=qkv_bias)
+        self.to_v = nn.Linear(in_dim, hidden_dim, bias=qkv_bias)
+        self.to_out = nn.Linear(hidden_dim, out_dim, bias=out_bias)
 
         self.num_heads = hidden_dim // head_dim
 
