@@ -1,5 +1,7 @@
+import math
 import os
 import re
+from pathlib import Path
 from typing import Literal
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
@@ -567,6 +569,50 @@ class WandbGroupedLRCallback(TrainerCallback):
 
             # Log custom metric(s) to WandB
             wandb.log({**learning_rates, "train/global_step": state.global_step})
+
+
+class TerminateOnNaNLossCallback(TrainerCallback):
+    def __init__(self, threshold: int = 3, filename: str = "TRAINING_FAILED.txt"):
+        self.threshold = threshold
+        self.filename = filename
+        self.bad_value_counter = 0
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None:
+            return
+
+        current_loss = logs.get("loss")
+        if current_loss is None:
+            return
+
+        is_bad_value = (
+                math.isnan(current_loss) or
+                math.isinf(current_loss) or
+                current_loss == 0.0
+        )
+
+        if is_bad_value:
+            self.bad_value_counter += 1
+        else:
+            self.bad_value_counter = 0
+
+        if self.bad_value_counter >= self.threshold:
+            file_path = Path(args.output_dir, self.filename)
+            try:
+                with open(file_path, "w") as f:
+                    f.write("Status: ABORTED\n")
+                    f.write(f"Reason: Loss instability detected for {self.threshold} consecutive logs.\n")
+                    f.write(f"Final Value: {current_loss}\n")
+                    f.write(f"Global Step: {state.global_step}\n")
+
+                logger.error_main(f"\nABORTING: Crash report written to: {file_path}")
+            except Exception as e:
+                logger.error_main(f"ABORTING: Could not write crash report: {e}")
+
+            raise RuntimeError(
+                f"Training aborted! Loss was {current_loss} for {self.threshold} consecutive logs. "
+                f"See {file_path} for details."
+            )
 
 
 class WandbCustomLoggingCallback(TrainerCallback):
