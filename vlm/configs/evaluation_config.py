@@ -16,7 +16,7 @@ class EvaluationConfig(ConfigBase):
     per_device_batch_size: int = Field(20, description="Inference batch size per device.")
 
     # 'After Training' parameters
-    run_inference: bool = Field(False, description="Run inference after training completes.")
+    run_inference: bool = Field(True, description="Run inference after training completes.")
     dataset_json_path: str | None = Field(
         None,
         description=(
@@ -32,7 +32,7 @@ class EvaluationConfig(ConfigBase):
     n_samples: int | None = Field(None, description="Number of samples. Run all if 'None'.")
     num_dataloader_workers: int | None = Field(6, description="Number of subprocesses per device to use for data loading during inference.")
 
-    run_eval: bool = Field(False, description="Run evaluation after inference (only if 'run_inference' is True).")
+    run_eval: bool = Field(True, description="Run evaluation after inference (only if 'run_inference' is True).")
     num_eval_processes: int | None = Field(None, description="Number of subprocesses to use for evaluation. "
                                                              "If None, use half the number of CPUs in the system.")
 

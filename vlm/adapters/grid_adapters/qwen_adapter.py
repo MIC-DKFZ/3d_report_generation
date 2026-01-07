@@ -4,16 +4,17 @@ from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers.activations import QuickGELUActivation
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2RMSNorm
+from einops import rearrange
 from vlm.adapters.grid_adapters.base import GridAdapter
 
 
 class QwenAdapter(GridAdapter):
     def __init__(self, hidden_dim=None, **kwargs):
         super().__init__(**kwargs)
-        r0, r1, r2 = self.reduce_block
-        input_dim = self.vision_embed_dim * r0 * r1 * r2
+        rT, rH, rW = self.reduce_block
+        input_dim = self.vision_embed_dim * rT * rH * rW
         if hidden_dim is None:
-            hidden_dim = self.vision_embed_dim * min(8, r0 * r1 * r2)
+            hidden_dim = self.vision_embed_dim * min(8, rT * rH * rW)
         self.rmsnorm = Qwen2RMSNorm(input_dim, eps=1e-6)
         self.adapter = nn.Sequential(
             nn.Linear(
@@ -25,34 +26,76 @@ class QwenAdapter(GridAdapter):
         )
 
     def forward(self, x: torch.Tensor, adapter_args: dict):
-        # Convert input to float first
-        x = x.to(torch.bfloat16)
-
-        # Input shape is (batch_size, embedding_dim, sequence_length)
-        batch_size= x.shape[0]
-        embedding_dim = x.shape[1]
-
-        if x.ndim == 3:  # if flattened tensor (from VE, not loaded embed), restructure to original grid
-            video_grid_thw = adapter_args["video_grid_thw"]
-            x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
+        # batch_size, embed_dim, T, H, W = x.shape
         
         rT, rH, rW = self.reduce_block
-        # Use unfold to create reduce_block
-        x = x.unfold(2, rT, rT)
-        x = x.unfold(3, rH, rH)
-        x = x.unfold(4, rW, rW)
-
-        # Reshape to combine all reduce_block
-        x = x.permute(0, 2, 3, 4, 1, 5, 6, 7)  # Move embedding_dim after spatial dims
-        # (B, T', H', W', C, rT, rH, rW) -> (B, T'*H'*W', C*rT*rH*rW)
-        x = x.reshape(batch_size, -1, embedding_dim * rT * rH * rW)
+        x = rearrange(x, "B C (t rT) (h rH) (w rW) -> B (t h w) (C rT rH rW)", rT=rT, rH=rH, rW=rW).contiguous()
 
         # Process through adapter
-        # x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
         x = self.rmsnorm(x)
         x = self.adapter(x)
 
         return x
+
+
+class QwenAdapterCuria(GridAdapter):
+    def __init__(self, hidden_dim=None, n_bins: int = 12, **kwargs):
+        super().__init__(**kwargs)
+        self.n_bins = n_bins
+        rT, rH, rW = self.reduce_block
+        input_dim = self.vision_embed_dim * rT * rH * rW
+        if hidden_dim is None:
+            hidden_dim = self.vision_embed_dim * min(8, rT * rH * rW)
+        self.rmsnorm = Qwen2RMSNorm(input_dim, eps=1e-6)
+        self.adapter = nn.Sequential(
+            nn.Linear(
+                input_dim,
+                hidden_dim,
+            ),
+            nn.GELU(),
+            nn.Linear(hidden_dim, self.text_embed_dim)
+        )
+
+    def forward(self, x: torch.Tensor, adapter_args: dict):
+        # batch_size, singleton channel_dim, n_slices, class_token + n_patch_tokens, embed_dim = x.shape
+        print(x.shape)
+
+        # remove singleton channel_dim
+        x = x.squeeze(dim=1)
+        print(x.shape)
+
+        # remove class token
+        x = x[:, :, 1:]
+        print(x.shape)
+
+        batch_size, n_slices, n_patch_tokens, embed_dim = x.shape
+
+        # reshape patch_tokens to 2D
+        n_patch_tokens_per_axis = int(n_patch_tokens**0.5)
+        x = rearrange(x, "b s (pH pW) c -> b s pH pW c", pH=n_patch_tokens_per_axis, pW=n_patch_tokens_per_axis)
+        print(x.shape)
+
+        # do average pooling to 'self.n_bins' along slice dimension
+        bins = [(i * n_slices + self.n_bins - 1) // self.n_bins for i in range(self.n_bins + 1)]
+        x = torch.stack([
+            x[:, bins[i]:bins[i+1]].mean(dim=1)
+            for i in range(self.n_bins)
+        ], dim=1)
+        print(x.shape)
+
+        rT, rH, rW = self.reduce_block
+        x = rearrange(x, "b (t rT) (h rH) (w rW) c -> b (t h w) (c rT rH rW)", rT=rT, rH=rH, rW=rW).contiguous()
+        print(x.shape)
+
+        # Process through adapter
+        x = self.rmsnorm(x)
+        x = self.adapter(x)
+        print(x.shape)
+        print("Done")
+
+        return x
+
+
 
 
 class QwenAdapterHeterogeneous(nn.Module):
