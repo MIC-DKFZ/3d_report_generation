@@ -1,5 +1,4 @@
 import json
-import os
 from abc import ABC, abstractmethod
 from numbers import Number
 from pathlib import Path
@@ -11,6 +10,7 @@ import nrrd
 import numpy as np
 import SimpleITK as sitk
 import torch
+from einops import rearrange
 from torch.utils.data import Dataset
 
 from vlm.utils import logger
@@ -75,6 +75,8 @@ class MedicalImageDataset(Dataset, ABC):
         vision_encoder_patch_size=None,
         do_sentence_shuffle=False,
         sentence_shuffle_p=None,
+        is_stacked_2d_embedding=False,
+        reduce_to_n_slices=None,
         image_id_suffix=""
     ):
         super().__init__()
@@ -92,6 +94,8 @@ class MedicalImageDataset(Dataset, ABC):
         self.vision_encoder_patch_size = vision_encoder_patch_size
         self.do_sentence_shuffle = do_sentence_shuffle
         self.sentence_shuffle_p = sentence_shuffle_p
+        self.is_stacked_2d_embedding = is_stacked_2d_embedding
+        self.reduce_to_n_slices = reduce_to_n_slices
         self.image_id_suffix = image_id_suffix
 
         if isinstance(answer_types, str):
@@ -149,7 +153,7 @@ class MedicalImageDataset(Dataset, ABC):
 
         return filtered_samples
 
-    def _load_vision_input(self, vision_input_path:Path):
+    def _load_vision_input(self, vision_input_path: Path):
         """Load vision input from file"""
         if str(vision_input_path).endswith(".npy"):
             vision_input = np.load(vision_input_path)
@@ -192,8 +196,28 @@ class MedicalImageDataset(Dataset, ABC):
                                                do_transforms=self.do_transforms,
                                                patch_size=self.vision_encoder_patch_size, split=self.split,
                                                training_transforms=self.training_transforms)
-        # add channel dim if missing
-        if vision_input.ndim == 3:
+
+        if self.is_stacked_2d_embedding:
+            # remove class token
+            vision_input = vision_input[:, 1:, :]
+
+            n_slices, n_patch_tokens, embed_dim = vision_input.shape
+            n_side = int(n_patch_tokens ** 0.5)
+
+            vision_input = rearrange(vision_input, "s (h w) c -> s h w c", h=n_side, w=n_side)
+
+            bins = np.linspace(0, n_slices, self.reduce_to_n_slices + 1).astype(int)
+
+            # do 'average pooling' to compress slice dimension
+            pooled_slices = [
+                vision_input[bins[i]:bins[i + 1]].mean(axis=0)
+                for i in range(self.reduce_to_n_slices)
+            ]
+            vision_input = np.stack(pooled_slices, axis=0)
+            vision_input = rearrange(vision_input, "s h w c -> c s h w")
+
+        elif vision_input.ndim == 3:
+            # add channel dim if missing
             vision_input = vision_input[None, ...]
 
         return vision_input

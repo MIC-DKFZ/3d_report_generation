@@ -491,6 +491,8 @@ def main():
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=cfg.data.do_sentence_shuffle,
             sentence_shuffle_p=cfg.data.sentence_shuffle_p,
+            is_stacked_2d_embedding=cfg.data.is_stacked_2d_embedding,
+            reduce_to_n_slices=cfg.data.reduce_to_n_slices,
             image_id_suffix=cfg.data.image_id_suffix
         )
 
@@ -508,6 +510,8 @@ def main():
             # no transforms for val dataset
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=False,
+            is_stacked_2d_embedding=cfg.data.is_stacked_2d_embedding,
+            reduce_to_n_slices=cfg.data.reduce_to_n_slices,
             image_id_suffix=cfg.data.image_id_suffix
         ) if do_validation else None
     else:

@@ -38,6 +38,11 @@ class DataConfig(ConfigBase):
     do_sentence_shuffle: bool = Field(True, description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.")
     sentence_shuffle_p: float = Field(0.5, description="Probability of randomly shuffling the order of sentences.")
 
+    is_stacked_2d_embedding: bool = Field(False, description="Set to True for vision encoders such as 'Curia' "
+                                                             "where the input embeddings are shaped "
+                                                             "(n_slices, class_token + n_patch_tokens, embed_dim).")
+    reduce_to_n_slices: int | None = Field(None, description="The number of slices to reduce the stacked 2D embeddings to.")
+
     image_id_suffix: str = Field("", description="Add a suffix to the image IDs provided in the dataset JSON. "
                                                  "WARNING: Only works for CTRATE embeddings.")
 
@@ -58,4 +63,11 @@ class DataConfig(ConfigBase):
     def validate_sentence_shuffle(self):
         if not self.do_sentence_shuffle:
             self.sentence_shuffle_p = 0.0
+        return self
+
+    @model_validator(mode="after")
+    def validate_if_stacked_2d_embeddings(self):
+        if self.is_stacked_2d_embedding and self.reduce_to_n_slices is None:
+            raise ValueError("Missing parameters for stacked 2D embeddings input: "
+                             "please specify 'reduce_to_n_slices' when is_stacked_2d_embedding=True.")
         return self
