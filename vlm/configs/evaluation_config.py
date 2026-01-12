@@ -35,6 +35,7 @@ class EvaluationConfig(ConfigBase):
     run_eval: bool = Field(True, description="Run evaluation after inference (only if 'run_inference' is True).")
     num_eval_processes: int | None = Field(None, description="Number of subprocesses to use for evaluation. "
                                                              "If None, use half the number of CPUs in the system.")
+    calculate_radbert_score: bool = Field(False, description="Additionally calculate the radbert metrics on evaluation.")
 
     @model_validator(mode="after")
     def check_inference_eval(self):

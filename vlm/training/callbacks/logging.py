@@ -308,7 +308,7 @@ class PycocoevalCallback(TrainerCallback):
     def __init__(
         self, eval_dataloader: DataLoader, max_new_tokens: int,
             tokenizer=None, processor=None, eval_every_n_epochs=0.5, print_first_sample=True,
-            is_distributed=False
+            is_distributed=False, calculate_radbert_score=True
     ):
         self.eval_dataloader = eval_dataloader
         self.max_new_tokens = max_new_tokens
@@ -333,6 +333,11 @@ class PycocoevalCallback(TrainerCallback):
         self.meteor_scorer = Meteor()
         self.rougel_scorer = Rouge()
         self.cider_scorer = Cider()
+
+        self.calculate_radbert_score = calculate_radbert_score
+        if self.calculate_radbert_score:
+            from eval import eval_ctrate_radbert
+            self.radbert_scorer = eval_ctrate_radbert
 
 
     def on_evaluate(
@@ -449,6 +454,21 @@ class PycocoevalCallback(TrainerCallback):
                 logger.error(f"CIDEr score calculation failed: {e}")
                 cider_score = -1.0  # use -1 to indicate error
 
+            # === RadBert ===
+            if self.calculate_radbert_score:
+                try:
+                    radbert_score = self.radbert_scorer(preds=in_res, gts=in_gts)  # returns dict
+                except Exception as e:
+                    logger.error(f"radbert score calculation failed: {e}")
+                    radbert_score = {
+                        "accuracy": -1.0,
+                        "balanced_accuracy": -1.0,
+                        "precision": -1.0,
+                        "recall": -1.0,
+                        "f1": -1.0,
+                        "crg": -1.0
+                    }  # use -1 to indicate error
+
             # Log the BLEU scores
             logger.info_main(f"BLEU-1 score: {bleu_score_1:.4f}")
             logger.info_main(f"BLEU-2 score: {bleu_score_2:.4f}")
@@ -470,6 +490,12 @@ class PycocoevalCallback(TrainerCallback):
             # Log the CIDEr score
             logger.info_main(f"CIDEr score: {cider_score}")
             wandb.log({"cider_score": cider_score})
+
+            # Log RadBert
+            if self.calculate_radbert_score:
+                for key, value in radbert_score.items():
+                    logger.info_main(f"radbert_{key}: {value:.4f}")
+                    wandb.log({f"radbert_{key}": value})
 
             # === Log and optionally save best model ===
             if bleu_score_1 > self.best_bleu_score_1:

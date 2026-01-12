@@ -186,7 +186,8 @@ class UnifiedVLMTrainer:
                     eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
                     tokenizer=self.vlm_model.tokenizer,
                     processor=self.vlm_model.processor,
-                    is_distributed=self.is_distributed
+                    is_distributed=self.is_distributed,
+                    calculate_radbert_score=self.cfg.eval.calculate_radbert_score
                 )
             )
 
