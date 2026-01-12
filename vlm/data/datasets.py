@@ -843,3 +843,96 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
             result["vision_input"] = vision_input
 
         return result
+
+
+class CTRATEDatasetRetrievalWithImagePrompt1(CTRATEDatasetRetrievalWithImage):
+    def __init__(
+        self,
+        cfg: RunConfig,
+        vision_encoder_patch_size: Tuple[int, ...],
+        split: Literal["train", "val", "test"] = "train",
+        image_id_suffix="",
+    ):
+        super().__init__(
+            cfg=cfg,
+            vision_encoder_patch_size=vision_encoder_patch_size,
+            split=split,
+            image_id_suffix=image_id_suffix,
+        )
+        # self.maybe_add_vision_tokens = "<|vision_start|><|video_pad|><|vision_end|>"
+        self.maybe_add_vision_tokens = ""
+        self.additional_instruction_prompt = "\nRetrieved Similar Cases:"
+        self.add_image = True
+
+    def format_into_message(
+            self, question, answer, system_text=SYSTEM_TEXT
+    ):
+
+        assert not self.text_only
+        system_text = "You are a medical imaging AI assistant specialized in analyzing CT scans. Your task is to generate a structured radiology report based on the provided CT scan, using retrieved similar cases as contextual guidance."
+        system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
+
+        question_p1 = """
+Carefully analyze the query image and consider the retrieved image-report pairs. Use the retrieved reports to:
+- Understand common language and structure for describing findings.
+- Identify potential pathologies that may appear in similar scans.
+- Avoid contradicting visual evidence in the query image.
+
+However, do **not** copy findings verbatim. Always base your analysis on the **query image**. If the retrieved cases differ significantly, prioritize what you observe.
+
+Output a report in the following format:
+
+**Findings:**
+- Describe observed abnormalities (e.g., location, size, density, morphology).
+- Mention normal findings when relevant for context.
+- Use precise anatomical terminology.
+
+**Impression:**
+- Summarize the most significant findings.
+- Suggest possible diagnoses or differential considerations if supported by imaging.
+- Avoid overinterpretation or speculation beyond visual evidence.
+
+Now analyze the following:
+        """
+
+        if self.model_type in ["qwen", "qwen3"]:
+            user_message = {
+                "role": "user",
+                "content": [{"type": "text", "text": question_p1}] + ([{"type": "video"}] if not self.text_only else [])
+            }
+        else:
+            raise ValueError(f"Unsupported model name: {self.model_type}")
+
+        answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
+
+        full_conversation = [system_message, user_message, answer_message]
+        prompt_only_conversation = [system_message, user_message]
+        return full_conversation, prompt_only_conversation
+
+    def modify_input(self, formatted_qa, formatted_qa_prompt_only, result):
+        if self.n_retrieval_samples == 0:
+            return formatted_qa, formatted_qa_prompt_only
+
+        query_img_id = result["image_id"]
+
+        # get image_ids of most similar
+        nearest_neighbors_ids = self.retrieval_dict[query_img_id]["k_nearest_neighbor"]
+        nearest_neighbors_ids = nearest_neighbors_ids[:min(len(nearest_neighbors_ids), self.n_retrieval_samples)]
+
+        # formatted_qa and formatted_qa_prompt_only reference the same "user_message" object
+        # we only need to modify one of them here
+        assert formatted_qa[1] is formatted_qa_prompt_only[1]
+        # for input_prompt in [formatted_qa, formatted_qa_prompt_only]:
+        # get user input
+        for d in formatted_qa:
+            if d["role"] == "user":
+                d["content"].append({"type": "text", "text": self.additional_instruction_prompt})
+                for n_nn, nearest_neighbor_id in enumerate(nearest_neighbors_ids):
+                    case = self.get_case_from_dataset_json(self.samples_retrieval, nearest_neighbor_id)
+                    answer = case["answer"]
+                    d["content"].append({"type": "text", "text": f"[Case {n_nn + 1}]\n"})
+                    if self.add_image:
+                        d["content"].append({"type": "video", "vision_input_path": nearest_neighbor_id})
+                    d["content"].append({"type": "text", "text": f"Report:\n{answer}"})
+
+        return formatted_qa, formatted_qa_prompt_only
