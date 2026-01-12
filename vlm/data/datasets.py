@@ -290,6 +290,8 @@ class MedicalImageDataset(Dataset, ABC):
         if not self.text_only:
             # Load embedding
             result = self._load_embeddings(sample, result)
+        else:
+            result["vision_input"] = None
         return result
 
     def _load_embeddings(self, sample, result: Dict) -> Dict:
@@ -308,7 +310,7 @@ class MedicalImageDataset(Dataset, ABC):
                     f"Unsupported embedding constant type: {type(self.embedding_constant)}"
                 )
         else:
-            result["vision_input"] = None
+            result["vision_input"] = vision_input
 
         return result
 
