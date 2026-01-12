@@ -429,57 +429,36 @@ def train_val_data_from_config(cfg: RunConfig):
     do_validation = cfg.data.val_dataset_json_path is not None
 
     # Create datasets
-    if cfg.data.dataset_name == "amosmm":
+    if cfg.data.dataset_class_name:
+        dataset_class = cfg.data.get_dataset_class()
+    elif cfg.data.dataset_name == "amosmm":
         # Use AMOSMM dataset
-        train_dataset = AMOSMMDataset(
-            cfg=cfg,
-            split="train",
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
-
-        val_dataset = AMOSMMDataset(
-            cfg=cfg,
-            split="val",
-            vision_encoder_patch_size=vision_encoder_patch_size,
-            do_sentence_shuffle=False,
-        ) if do_validation else None
+        dataset_class = AMOSMMDataset
     elif cfg.data.dataset_name == "ctrate":
+        # Use CTRATE dataset
         if cfg.data.retrieval_json_path is not None:
             if cfg.data.retrieval_use_image_in_prompt:
-                ctrate_dataset_class = CTRATEDatasetRetrievalWithImage
+                dataset_class = CTRATEDatasetRetrievalWithImage
             else:
-                ctrate_dataset_class = CTRATEDatasetRetrieval
+                dataset_class = CTRATEDatasetRetrieval
         else:
-            ctrate_dataset_class = CTRATEDataset
-
-        ctrate_dataset_class
-        # Use CTRATE dataset
-        train_dataset = ctrate_dataset_class(
-            cfg=cfg,
-            split="train",
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
-
-        val_dataset = ctrate_dataset_class(
-            cfg=cfg,
-            split="val",
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        ) if do_validation else None
+            dataset_class = CTRATEDataset
     elif cfg.data.dataset_name == "merlin":
-        from vlm.data.datasets import MerlinDataset
-        train_dataset = MerlinDataset(
-            cfg=cfg,
-            split="train",
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
-
-        val_dataset = MerlinDataset(
-            cfg=cfg,
-            split="val",
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        ) if do_validation else None
+        dataset_class = MerlinDataset 
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
+
+    train_dataset = dataset_class(
+        cfg=cfg,
+        split="train",
+        vision_encoder_patch_size=vision_encoder_patch_size,
+    )
+
+    val_dataset = dataset_class(
+        cfg=cfg,
+        split="val",
+        vision_encoder_patch_size=vision_encoder_patch_size,
+    ) if do_validation else None
 
     if cfg.data.embedding_constant is not None:
         logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")

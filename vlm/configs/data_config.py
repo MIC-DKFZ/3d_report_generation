@@ -1,7 +1,13 @@
 from typing import Literal
 from pydantic import Field, model_validator
+from pathlib import Path
+import vlm
+
+from torch.utils.data import Dataset
+
 from vlm.configs.base import ConfigBase
 from vlm.utils.vision_input_type import VisionInputType
+from vlm.utils.find_class_by_name import recursive_find_python_class
 
 
 class DataConfig(ConfigBase):
@@ -101,3 +107,16 @@ class DataConfig(ConfigBase):
             raise ValueError("Missing parameters for stacked 2D embeddings input: "
                              "please specify 'reduce_to_n_slices' when is_stacked_2d_embedding=True.")
         return self
+
+    dataset_class_name: str | None = Field(
+        None, description="Name of the dataset class."
+    )
+
+    folder_to_search: str = "vlm.data"
+
+    def get_dataset_class(self) -> Dataset:
+        return recursive_find_python_class(
+            folder=str(Path(vlm.__path__[0], *self.folder_to_search.split(".")[1:])),
+            class_name=self.dataset_class_name,
+            current_module=self.folder_to_search
+        )
