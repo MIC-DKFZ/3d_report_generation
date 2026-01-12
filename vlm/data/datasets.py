@@ -80,15 +80,6 @@ class MedicalImageDataset(Dataset, ABC):
         self.vision_input_type = cfg.data.vision_input_type
         self.model_type = cfg.model.model_type
         self.split = split
-        if self.split == "train":
-            self.n_samples = cfg.data.n_train_samples
-            self.dataset_json_path = Path(cfg.data.train_dataset_json_path)
-        elif self.split == "val":
-            self.n_samples = cfg.data.n_val_samples
-            self.dataset_json_path = Path(cfg.data.val_dataset_json_path)
-        elif self.split == "test":
-            # TODO: which dataset_json_path to add here..?
-            self.n_samples = cfg.eval.n_samples
         self.text_only = cfg.data.text_only
         self.embedding_constant = cfg.data.embedding_constant
         self.do_resize = cfg.data.do_resize
@@ -96,7 +87,17 @@ class MedicalImageDataset(Dataset, ABC):
         self.vision_encoder_patch_size = vision_encoder_patch_size
         self.is_stacked_2d_embedding = cfg.data.is_stacked_2d_embedding
         self.reduce_to_n_slices = cfg.data.reduce_to_n_slices
-        self.do_sentence_shuffle = cfg.data.do_sentence_shuffle
+        if self.split == "train":
+            self.n_samples = cfg.data.n_train_samples
+            self.dataset_json_path = Path(cfg.data.train_dataset_json_path)
+            self.do_sentence_shuffle = cfg.data.do_sentence_shuffle
+        elif self.split == "val":
+            self.n_samples = cfg.data.n_val_samples
+            self.dataset_json_path = Path(cfg.data.val_dataset_json_path)
+            self.do_sentence_shuffle = False
+        elif self.split == "test":
+            # TODO: which dataset_json_path to add here..?
+            self.n_samples = cfg.eval.n_samples
         self.sentence_shuffle_p = cfg.data.sentence_shuffle_p
         self.image_id_suffix = cfg.data.image_id_suffix
 
