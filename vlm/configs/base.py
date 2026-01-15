@@ -182,7 +182,7 @@ class RecursiveFindClassConfigBase(DynamicClassConfigBase):
             current_module=self.folder_to_search
         )
         if self._resolved_class is None:
-            raise ValueError(f"Could not find {self.class_name:!r} in {vlm.__path__[0]:!r}")
+            raise ValueError(f"Could not find {self.class_name!r} in {vlm.__path__[0]!r}")
         return self
 
     def to_instance(self, **kwargs) -> Any:
