@@ -3,6 +3,28 @@ from typing import List
 from torch.optim.lr_scheduler import LRScheduler
 
 
+class ConstantLR(LRScheduler):
+    def __init__(self, optimizer, param_groups: list[dict], current_step: int = None):
+        self.optimizer = optimizer
+        self.max_lrs = [param_group["lr"] for param_group in param_groups]
+        self.ctr = 0
+        self.has_stepped_once = False
+        super().__init__(optimizer, current_step if current_step is not None else -1)
+
+    def step(self, current_step=None):
+        if current_step is None or current_step == -1:
+            self.ctr += 1
+
+        if not self.has_stepped_once:
+            self.has_stepped_once = True
+
+            for param_group, max_lr in zip(self.optimizer.param_groups, self.max_lrs):
+                param_group["lr"] = max_lr
+
+            self._last_lr: List[float] = [group["lr"] for group in self.optimizer.param_groups]
+
+
+
 class LinearIncreasingLR(LRScheduler):
     def __init__(self, optimizer, param_groups: list[dict], max_steps: int, current_step: int = None):
         self.optimizer = optimizer
