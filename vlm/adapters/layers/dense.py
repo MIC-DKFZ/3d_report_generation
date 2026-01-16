@@ -29,7 +29,7 @@ class MLP(nn.Sequential):
 
 class MixerBlock(nn.Module):
     def __init__(self, in_features: int, out_features: int, in_vision_tokens: int, out_vision_tokens: int,
-                 hidden_dim_factor: int, norm_layer_class: type, bias: bool):
+                 token_mix_factor: int, channel_mix_factor: int, norm_layer_class: type, bias: bool):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -37,11 +37,29 @@ class MixerBlock(nn.Module):
         self.out_vision_tokens = out_vision_tokens
 
         self.pre_token_mix_norm = norm_layer_class(in_features)
-        self.token_mix_mlp = MLP(features=[in_vision_tokens, hidden_dim_factor * in_vision_tokens, out_vision_tokens], bias=bias)
+        self.token_mix_mlp = MLP(features=[in_vision_tokens, token_mix_factor * out_vision_tokens, out_vision_tokens], bias=bias)
 
         self.pre_channel_mix_norm = norm_layer_class(in_features)
-        self.channel_mix_mlp = MLP(features=[in_features, hidden_dim_factor*in_features, out_features], bias=bias)
+        self.channel_mix_mlp = MLP(features=[in_features, channel_mix_factor * out_features, out_features], bias=bias)
 
+    def forward(self, x):
+        skip = x
+        x = self.pre_token_mix_norm(x)
+
+        x = rearrange(x, "b n d -> b d n")
+
+        x = self.token_mix_mlp(x)
+
+        x = skip + rearrange(x, "b d n -> b n d")
+        skip = x
+
+        x = self.pre_channel_mix_norm(x)
+        x = skip + self.channel_mix_mlp(x)
+
+        return x
+
+
+class MixerBlockNoSkips(MixerBlock):
     def forward(self, x):
         x = self.pre_token_mix_norm(x)
 
