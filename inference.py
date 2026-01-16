@@ -267,6 +267,8 @@ def main(args, is_main=True):
             embedding_constant=cfg.data.embedding_constant,
             vision_encoder_patch_size=vision_encoder_patch_size,
             do_sentence_shuffle=False,
+            is_stacked_2d_embedding=cfg.data.is_stacked_2d_embedding,
+            reduce_to_n_slices=cfg.data.reduce_to_n_slices,
             image_id_suffix=cfg.data.image_id_suffix
         )
     else:
