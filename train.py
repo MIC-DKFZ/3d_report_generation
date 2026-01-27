@@ -331,7 +331,7 @@ def setup_config_and_logging() -> RunConfig:
     cfg.merge_subconfigs_with_cli_args()
     cfg.apply_conditional_resets()
 
-    # Log the final configuration
+    # Log the final configuration if we are not continuing training
     if is_main_process():
         if not cfg.general.continue_training:
             final_config_path = os.path.join(cfg.general.output_dir, "final_config.yml")
@@ -513,10 +513,13 @@ def main():
         raise ValueError(f"Unknown model type: {cfg.general.model_type}")
 
     if cfg.general.continue_training:
+        cfg_continue_training_mode = cfg.general.continue_training_mode
         vlm_model, cfg, ckpt_dir = AbstractVLMModel.load_from_run_dir(
             cfg.general.output_dir,
             mode=cfg.general.continue_training_mode
         )
+        cfg.general.continue_training_mode = cfg_continue_training_mode
+        cfg.general.continue_training = True
     else:
         vlm_model = vlm_model_class(
             model_cfg=cfg.model,
