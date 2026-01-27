@@ -19,10 +19,10 @@ from transformers.integrations.tpu import tpu_spmd_dataloader
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer import _is_peft_model, TRAINER_STATE_NAME
 from transformers.trainer_callback import ExportableState
-from transformers.trainer_pt_utils import get_parameter_names, get_model_param_count
+from transformers.trainer_pt_utils import get_model_param_count
 from transformers.trainer_utils import speed_metrics, TrainOutput, SaveStrategy
 from transformers.training_args import OptimizerNames, ParallelMode
-from transformers.utils import is_sagemaker_mp_enabled, is_accelerate_available
+from transformers.utils import is_sagemaker_mp_enabled, is_accelerate_available, check_torch_load_is_safe
 from trl import SFTTrainer
 
 from vlm.training.schedulers.base import SchedulerBase
@@ -111,7 +111,6 @@ class VLMSFTTrainer(SFTTrainer):
         if self.control.should_save:
             self._save_checkpoint(model, trial)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
-
 
     # def _inner_training_loop(
     #     self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
@@ -663,6 +662,7 @@ class VLMSFTTrainer(SFTTrainer):
         1. Log to our log files.
         2. Allow integration of our own callback to support our custom schedulers.
         """
+        scheduler_is_initialized = False
         self.accelerator.free_memory()
         self._train_batch_size = batch_size
         if self.args.auto_find_batch_size:
@@ -817,7 +817,10 @@ class VLMSFTTrainer(SFTTrainer):
                 self._load_from_checkpoint(resume_from_checkpoint, self.model_wrapped)
 
         # Check if saved optimizer or scheduler states exist
-        self._load_optimizer_and_scheduler(resume_from_checkpoint)
+        # NOTE:
+        # For continuing training with our custom trainer we have to delay the lr_scheduler creation
+        # therefore we skip the function here and load them in the SchedulerBase's update fct.
+        # self._load_optimizer_and_scheduler(resume_from_checkpoint)
         self._load_scaler(resume_from_checkpoint)
 
         # important: at this point:
@@ -979,13 +982,26 @@ class VLMSFTTrainer(SFTTrainer):
 
                     if step % args.gradient_accumulation_steps == 0:
                         # Call our own scheduler
-                        self.optimizer, self.lr_scheduler, changed_requires_grad_state = self.scheduler.update(
-                            model=self.model,
-                            optimizer=self.optimizer,
-                            lr_scheduler=self.lr_scheduler,
-                            global_step=self.state.global_step,
-                            max_steps=self.state.max_steps
-                        )
+                        if resume_from_checkpoint and not scheduler_is_initialized:
+                            scheduler_is_initialized = True
+                            check_torch_load_is_safe()
+                            self.optimizer, self.lr_scheduler, changed_requires_grad_state = self.scheduler.update(
+                                model=self.model,
+                                optimizer=self.optimizer,
+                                lr_scheduler=self.lr_scheduler,
+                                global_step=self.state.global_step,
+                                max_steps=self.state.max_steps,
+                                load_opt_scheduler_from_ckpt=resume_from_checkpoint
+                            )
+
+                        else:
+                            self.optimizer, self.lr_scheduler, changed_requires_grad_state = self.scheduler.update(
+                                model=self.model,
+                                optimizer=self.optimizer,
+                                lr_scheduler=self.lr_scheduler,
+                                global_step=self.state.global_step,
+                                max_steps=self.state.max_steps
+                            )
 
                         if changed_requires_grad_state:
                             # logger.warning_main("RE-WRAPPING MODEL")
