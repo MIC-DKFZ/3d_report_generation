@@ -107,11 +107,11 @@ class UnifiedVLMTrainer:
         # Setup model, processor and tokenizer
         if not self.cfg.general.continue_training:
             model = self.vlm_model.setup_model()
+            # Apply trainable parameter configs and possibly add PEFT adapter layers
+            self.vlm_model.apply_trainable_config()
         else:
+            # The loaded model should already have the trainable parameters applied
             model = self.vlm_model.model
-
-        # Apply trainable parameter configs and possibly add PEFT adapter layers
-        self.vlm_model.apply_trainable_config()
 
         # Log adapter-specific numbers (e.g. number of params)
         if self.vlm_model.vision_adapter is not None:
@@ -206,7 +206,7 @@ class UnifiedVLMTrainer:
                 module_attr_map=self.vlm_model.module_attr_map,
                 forbidden_name_patterns_for_wd=self.vlm_model.forbidden_name_patterns_for_wd,
                 output_dir=self.cfg.general.output_dir
-            )
+            ),
         )
 
         if self.is_distributed:
