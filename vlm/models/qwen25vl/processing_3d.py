@@ -23,11 +23,22 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
 
     def __init__(self, image_processor=None, tokenizer=None, chat_template=None, **kwargs):
         super().__init__(image_processor, tokenizer, chat_template=chat_template)
+        self.max_length = None
+
+    def _find_sublist(self, lis: list, sub: list):
+        m = len(sub)
+        for i in range(len(lis) - m + 1):
+            if lis[i:i + m] == sub:
+                return i
+        return -1
 
     def __call__(
         self,
         text: Union[TextInput, PreTokenizedInput, list[TextInput], list[PreTokenizedInput]] = None,
         num_vision_tokens: list[int] = None,
+        do_truncation: bool = False,
+        truncate_after: str | None = "<|im_start|>assistant",
+        truncate_at: int | None = 939, # 3*median of entire train set, affects 66 cases
         **kwargs: Unpack[Qwen2_5_VLProcessorKwargs],
     ) -> BatchFeature:
         output_kwargs = self._merge_kwargs(
@@ -44,10 +55,29 @@ class QwenVLProcessor3D(Qwen2_5_VLProcessor):
             for i, n in enumerate(num_vision_tokens):
                 text[i] = text[i].replace(self.video_token, self.video_token * n, 1)
 
+        if do_truncation and self.max_length is None:
+            # TODO: we assume that 'truncate_after' appears at the same position across the entire dataset
+            _tokenized_truncate_after = self.tokenizer(truncate_after)["input_ids"]
+
+            return_tensors = output_kwargs["text_kwargs"].pop("return_tensors", None)
+            return_mm_token_type_ids = output_kwargs["text_kwargs"].pop("return_mm_token_type_ids", None)
+            _text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
+
+            _tokenized_sample = _text_inputs["input_ids"][0]
+            marker_start_idx = self._find_sublist(_tokenized_sample, _tokenized_truncate_after)
+            assert marker_start_idx >= 0, f"'truncate_after' not found in sample"
+            self.max_length = marker_start_idx + len(_tokenized_truncate_after) + truncate_at
+        else:
+            return_tensors = output_kwargs["text_kwargs"].pop("return_tensors", None)
+            return_mm_token_type_ids = output_kwargs["text_kwargs"].pop("return_mm_token_type_ids", None)
+
         # Original Qwen25VL stuff
-        return_tensors = output_kwargs["text_kwargs"].pop("return_tensors", None)
-        return_mm_token_type_ids = output_kwargs["text_kwargs"].pop("return_mm_token_type_ids", None)
-        text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
+        # text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"], truncation=do_truncation, max_length=self.max_length)
+        if not do_truncation:
+            text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"], truncation=False)
+        else:
+            text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"], truncation=True, max_length=self.max_length)
+
         self._check_special_mm_tokens(text, text_inputs, modalities=["image", "video"])
 
         if return_mm_token_type_ids:

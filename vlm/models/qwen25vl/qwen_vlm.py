@@ -95,7 +95,8 @@ class QwenVLModel(AbstractVLMModel):
             num_vision_tokens=num_vision_tokens,
             return_tensors="pt",
             padding=True,
-            padding_side="right"
+            padding_side="right",
+            do_truncation=True  # TODO: add truncation argument to configs
         )
 
         batch_prompt_only = self.processor(
