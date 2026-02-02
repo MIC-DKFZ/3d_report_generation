@@ -7,7 +7,7 @@ from vlm.adapters.layers.dense import MLP
 from vlm.adapters.query_adapters.base import QueryAdapter
 
 
-class PerceiverBlock(nn.Module):
+class PerceiverBlockPreNorm(nn.Module):
     def __init__(self, model_dim: int, context_dim: int, head_dim: int, ffw_mult: int, norm_layer_class: type, bias: bool):
         super().__init__()
         self.latents_norm = norm_layer_class(model_dim)
@@ -39,16 +39,19 @@ class PerceiverBlock(nn.Module):
         return latents
 
 
-class PerceiverResampler(QueryAdapter):
-    def __init__(self, head_dim: int, depth: int, q_init_scale: float, **kwargs):
+class PerceiverResamplerPreNorm(QueryAdapter):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float = None, **kwargs):
         super().__init__(**kwargs)
+
+        if q_init_scale is None:
+            q_init_scale = self.vision_embed_dim ** (-0.5)
 
         self.query_tokens = nn.Parameter(
             # torch.randn(self.num_query_tokens, self.vision_embed_dim) / self.vision_embed_dim ** 0.5
             torch.randn(self.num_query_tokens, self.vision_embed_dim) * q_init_scale
         )
         self.blocks = nn.ModuleList([
-            PerceiverBlock(self.vision_embed_dim, self.vision_embed_dim, head_dim, 4, self.norm_layer_class, self.bias) for _ in range(depth)
+            PerceiverBlockPreNorm(self.vision_embed_dim, self.vision_embed_dim, head_dim, 4, self.norm_layer_class, self.bias) for _ in range(depth)
         ])
         self.pre_dense_norm = self.norm_layer_class(self.vision_embed_dim)
         self.dense_projector = nn.Linear(self.vision_embed_dim, self.text_embed_dim, bias=True)
@@ -100,12 +103,16 @@ class PerceiverBlockPostNorm(nn.Module):
         return latents
 
 
-class PerceiverResamplerPostNorm(QueryAdapter):
-    def __init__(self, head_dim: int, depth: int, **kwargs):
+class PerceiverResamplerPostNormQueryInitNorm(QueryAdapter):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float = None, **kwargs):
         super().__init__(**kwargs)
 
+        if q_init_scale is None:
+            q_init_scale = self.vision_embed_dim ** (-0.5)
+
         self.query_tokens = nn.Parameter(
-            torch.randn(self.num_query_tokens, self.vision_embed_dim) * 1e-2
+            # torch.randn(self.num_query_tokens, self.vision_embed_dim) / self.vision_embed_dim ** 0.5
+            torch.randn(self.num_query_tokens, self.vision_embed_dim) * q_init_scale
         )
         self.latents_init_norm = self.norm_layer_class(self.vision_embed_dim)
         self.blocks = nn.ModuleList([
@@ -121,6 +128,37 @@ class PerceiverResamplerPostNorm(QueryAdapter):
         latents = repeat(self.query_tokens, "n d -> b n d", b=batch_size)
 
         latents = self.latents_init_norm(latents)
+        for perceiver_block in self.blocks:
+            latents = perceiver_block(latents, vision_tokens)
+
+        latents = self.dense_projector(latents)
+
+        return latents
+
+
+class PerceiverResamplerPostNorm(QueryAdapter):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float = None, **kwargs):
+        super().__init__(**kwargs)
+
+        if q_init_scale is None:
+            q_init_scale = self.vision_embed_dim ** (-0.5)
+
+        self.query_tokens = nn.Parameter(
+            # torch.randn(self.num_query_tokens, self.vision_embed_dim) / self.vision_embed_dim ** 0.5
+            torch.randn(self.num_query_tokens, self.vision_embed_dim) * q_init_scale
+        )
+        self.blocks = nn.ModuleList([
+            PerceiverBlockPostNorm(self.vision_embed_dim, self.vision_embed_dim, head_dim, 4, self.norm_layer_class, self.bias) for _ in range(depth)
+        ])
+        self.dense_projector = nn.Linear(self.vision_embed_dim, self.text_embed_dim, bias=True)
+
+    def forward(self, x: torch.Tensor, adapter_args: dict):
+        batch_size, embed_dim, T, H, W = x.shape
+        x = x.reshape(batch_size, embed_dim, -1).permute(0, 2, 1)
+
+        vision_tokens = x
+        latents = repeat(self.query_tokens, "n d -> b n d", b=batch_size)
+
         for perceiver_block in self.blocks:
             latents = perceiver_block(latents, vision_tokens)
 
@@ -162,8 +200,11 @@ class PerceiverBlockWrong(nn.Module):
 
 
 class PerceiverResamplerWrong(QueryAdapter):
-    def __init__(self, head_dim: int, depth: int, q_init_scale: float, **kwargs):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float = None, **kwargs):
         super().__init__(**kwargs)
+
+        if q_init_scale is None:
+            q_init_scale = self.vision_embed_dim ** (-0.5)
 
         self.query_tokens = nn.Parameter(
             # torch.randn(self.num_query_tokens, self.vision_embed_dim) / self.vision_embed_dim ** 0.5
@@ -192,15 +233,18 @@ class PerceiverResamplerWrong(QueryAdapter):
 
 
 class PerceiverResamplerLLM(QueryAdapter):
-    def __init__(self, head_dim: int, depth: int, **kwargs):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float = None, **kwargs):
         super().__init__(**kwargs)
 
+        if q_init_scale is None:
+            q_init_scale = self.text_embed_dim ** (-0.5)
+
         self.query_tokens = nn.Parameter(
-            torch.randn(self.num_query_tokens, self.text_embed_dim) / self.text_embed_dim ** 0.5
+            torch.randn(self.num_query_tokens, self.text_embed_dim) * q_init_scale
         )
         self.vision_proj = nn.Linear(self.vision_embed_dim, self.text_embed_dim)
         self.blocks = nn.ModuleList([
-            PerceiverBlock(self.text_embed_dim, self.text_embed_dim, head_dim, 2, self.norm_layer_class, self.bias) for _ in range(depth)
+            PerceiverBlockWrong(self.text_embed_dim, self.text_embed_dim, head_dim, 2, self.norm_layer_class, self.bias) for _ in range(depth)
         ])
         self.pre_dense_norm = self.norm_layer_class(self.text_embed_dim)
         self.dense_projector = nn.Linear(self.text_embed_dim, self.text_embed_dim, bias=True)
