@@ -160,6 +160,10 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
         clinical_info = row.get('ClinicalInformation_EN', '')
         technique = row.get('Technique_EN', '')
 
+        # Exclude cases with missing 'Findings' sections
+        if pd.isna(findings):
+            return None
+
         sample = {
             "image_id": image_id,
             "tasks": {
@@ -299,10 +303,10 @@ def parse_args():
     arg_parser.add_argument("--error_path_txt", type=str, default=None, help="Path to txt file with error cases, i.e. brain images (for CTRATE only)")
     args = arg_parser.parse_args()
 
-    if args.dataset == "ctrate" and args.vqa_path is None:
-        arg_parser.error("The --vqa_path argument is required for the CTRATE dataset.")
-    elif args.dataset != "ctrate" and args.vqa_path is not None:
-        arg_parser.error("The --vqa_path argument is only applicable for the CTRATE dataset.")
+    # if args.dataset == "ctrate" and args.vqa_path is None:
+    #     arg_parser.error("The --vqa_path argument is required for the CTRATE dataset.")
+    # elif args.dataset != "ctrate" and args.vqa_path is not None:
+    #     arg_parser.error("The --vqa_path argument is only applicable for the CTRATE dataset.")
 
     return args
 
