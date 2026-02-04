@@ -6,7 +6,7 @@ from vlm.adapters.layers.attention import MHXAttention, MHAttention
 from vlm.adapters.layers.dense import MLP
 from vlm.adapters.query_adapters.base import QueryAdapter
 
-class DecoupledPerceiverBlock(nn.Module):
+class DecoupledPerceiverBlockWrong(nn.Module):
     def __init__(self, model_dim: int, context_dim: int, head_dim: int, ffw_mult: int, norm_layer_class: type, bias: bool):
         super().__init__()
         self.context_norm = norm_layer_class(context_dim)
@@ -34,8 +34,8 @@ class DecoupledPerceiverBlock(nn.Module):
     def forward(self, latents: torch.Tensor, context: torch.Tensor):
         norm_context = self.context_norm(context)
 
-        norm_latents = self.pre_cross_attn_norm(latents)
-        latents = latents + self.cross_attn(norm_latents, norm_context)
+        latents = self.pre_cross_attn_norm(latents)
+        latents = latents + self.cross_attn(latents, norm_context)
 
         norm_latents = self.pre_self_attn_norm(latents)
         latents = latents + self.self_attn(norm_latents, norm_latents, norm_latents)
@@ -46,14 +46,17 @@ class DecoupledPerceiverBlock(nn.Module):
         return latents
 
 
-class DecoupledPerceiverResampler(QueryAdapter):
-    def __init__(self, head_dim: int, depth: int, **kwargs):
+class DecoupledPerceiverResamplerWrong(QueryAdapter):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float | None = None, **kwargs):
         super().__init__(**kwargs)
+        if q_init_scale is None:
+            q_init_scale = self.vision_embed_dim ** (-0.5)
+
         self.query_tokens = nn.Parameter(
-            torch.randn(self.num_query_tokens, self.vision_embed_dim) / self.vision_embed_dim ** 0.5
+            torch.randn(self.num_query_tokens, self.vision_embed_dim) * q_init_scale
         )
         self.blocks = nn.ModuleList([
-            DecoupledPerceiverBlock(self.vision_embed_dim, self.vision_embed_dim, head_dim, 4, self.norm_layer_class, self.bias) for _ in range(depth)
+            DecoupledPerceiverBlockWrong(self.vision_embed_dim, self.vision_embed_dim, head_dim, 4, self.norm_layer_class, self.bias) for _ in range(depth)
         ])
         self.pre_dense_norm = self.norm_layer_class(self.vision_embed_dim)
         self.dense_projector = nn.Linear(self.vision_embed_dim, self.text_embed_dim, bias=True)

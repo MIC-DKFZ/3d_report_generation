@@ -40,7 +40,7 @@ class PerceiverBlockPreNorm(nn.Module):
 
 
 class PerceiverResamplerPreNorm(QueryAdapter):
-    def __init__(self, head_dim: int, depth: int, q_init_scale: float = None, **kwargs):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float | None = None, **kwargs):
         super().__init__(**kwargs)
 
         if q_init_scale is None:
@@ -104,7 +104,7 @@ class PerceiverBlockPostNorm(nn.Module):
 
 
 class PerceiverResamplerPostNormQueryInitNorm(QueryAdapter):
-    def __init__(self, head_dim: int, depth: int, q_init_scale: float = None, **kwargs):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float | None = None, **kwargs):
         super().__init__(**kwargs)
 
         if q_init_scale is None:
@@ -137,7 +137,7 @@ class PerceiverResamplerPostNormQueryInitNorm(QueryAdapter):
 
 
 class PerceiverResamplerPostNorm(QueryAdapter):
-    def __init__(self, head_dim: int, depth: int, q_init_scale: float = None, **kwargs):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float | None = None, **kwargs):
         super().__init__(**kwargs)
 
         if q_init_scale is None:
@@ -200,7 +200,7 @@ class PerceiverBlockWrong(nn.Module):
 
 
 class PerceiverResamplerWrong(QueryAdapter):
-    def __init__(self, head_dim: int, depth: int, q_init_scale: float = None, **kwargs):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float | None = None, **kwargs):
         super().__init__(**kwargs)
 
         if q_init_scale is None:
@@ -233,7 +233,7 @@ class PerceiverResamplerWrong(QueryAdapter):
 
 
 class PerceiverResamplerLLM(QueryAdapter):
-    def __init__(self, head_dim: int, depth: int, q_init_scale: float = None, **kwargs):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float | None = None, **kwargs):
         super().__init__(**kwargs)
 
         if q_init_scale is None:
