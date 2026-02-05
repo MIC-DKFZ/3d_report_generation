@@ -98,6 +98,8 @@ class MedicalImageDataset(Dataset, ABC):
         elif self.split == "test":
             # TODO: which dataset_json_path to add here..?
             self.n_samples = cfg.eval.n_samples
+            self.do_sentence_shuffle = False
+            self.dataset_json_path = Path(cfg.eval.dataset_json_path)
         self.sentence_shuffle_p = cfg.data.sentence_shuffle_p
         self.image_id_suffix = cfg.data.image_id_suffix
 
