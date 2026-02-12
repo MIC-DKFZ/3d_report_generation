@@ -483,3 +483,12 @@ class CTRATEDataset(MedicalImageDataset):
                     result.append(part)
 
         return question, ''.join(result)
+
+class MerlinDataset(CTRATEDataset):
+    def _get_vision_input_path(self, image_id):
+        if self.vision_input_type == VisionInputType.EMBEDDING:
+            return Path(self.vision_input_path / f"{image_id}{self.image_id_suffix}_embedding.bl2")
+        elif self.vision_input_type == VisionInputType.IMAGE:
+            return Path(self.vision_input_path / f"{image_id}.b2nd")
+        else:
+            raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
