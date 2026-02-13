@@ -102,11 +102,12 @@ class UnifiedVLMTrainer:
         self.vlm_model.apply_trainable_config()
 
         # Log adapter-specific numbers (e.g. number of params)
-        adapter_parameter_count = count_parameters(self.vlm_model.vision_adapter)
-        _stats = {
-            "parameter_count": adapter_parameter_count
-        }
-        save_json(_stats, Path(self.cfg.general.output_dir, "adapter_stats.json"))
+        if self.vlm_model.vision_adapter is not None:
+            adapter_parameter_count = count_parameters(self.vlm_model.vision_adapter)
+            _stats = {
+                "parameter_count": adapter_parameter_count
+            }
+            save_json(_stats, Path(self.cfg.general.output_dir, "adapter_stats.json"))
 
         # Create comprehensive config for WandB logging
         config_dict = create_comprehensive_wandb_config(
