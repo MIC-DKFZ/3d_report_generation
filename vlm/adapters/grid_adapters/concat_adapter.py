@@ -1,3 +1,4 @@
+from math import prod
 import torch
 from einops import rearrange
 
@@ -8,8 +9,7 @@ from vlm.adapters.layers.dense import MLP
 class ConcatAdapter(GridAdapter):
     def __init__(self, depth: int, **kwargs):
         super().__init__(**kwargs)
-        reduce_factor = self.reduce_block[0]
-        input_dim = self.vision_embed_dim * reduce_factor ** 3
+        input_dim = self.vision_embed_dim * prod(self.reduce_block)
         self.norm = self.norm_layer_class(input_dim)
 
         bottleneck_dims = [
