@@ -508,7 +508,7 @@ class MerlinDataset(CTRATEDataset):
             - Shuffles lines (each is an independent diagnostic point)
             """
 
-            print("answer before shuffling:", answer)
+            # print("answer before shuffling:", answer)
             if answer is None or not str(answer).strip():
                 return question, ""
 
@@ -609,6 +609,6 @@ class MerlinDataset(CTRATEDataset):
                     random.shuffle(impression_sentences)
                 result += f"\n{impression_header}\n" + "\n".join(impression_sentences)
 
-            print("answer after shuffling:", result)
+            # print("answer after shuffling:", result)
 
             return question, result
