@@ -32,7 +32,7 @@ class ConcatAdapter(GridAdapter):
         The result is rounded up to a multiple of 'multiple' and clamped between
         text_embed_dim and (max_mult * text_embed_dim).
         """
-        raw_dim = self.vision_embed_dim * (self.reduce_block[0] ** power)
+        raw_dim = self.vision_embed_dim * (self.reduce_block[-1] ** power)
         rounded_raw_dim = ((raw_dim + multiple - 1) // multiple) * multiple
 
         lower_bound = self.text_embed_dim
