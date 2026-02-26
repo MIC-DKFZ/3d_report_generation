@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.nn.functional as F
 import numpy as np
 from vlm.models.qwen25vl.processing_3d import QwenVLProcessor3D
 from vlm.models.qwen25vl.Qwen3D import QwenVLForConditionalGeneration3D, QwenVLModel3D
@@ -81,6 +82,14 @@ class QwenVLModel(AbstractVLMModel):
                 example["vision_input"]
                 for example in examples
             ]
+
+            # TODO: MERLIN HACKING SHHHH DON'T TELL ANYONE
+            vision_inputs = [
+                (np.pad(vi, ((0, 0), (0, 0), (0, 1), (0, 1)), mode="edge")
+                 if vi.shape[-3:] == (10, 7, 7) else vi)
+                for vi in vision_inputs
+            ]
+
             num_vision_tokens, vision_position_ids, adapter_args = self.vision_adapter.get_adapter_args(
                 vision_inputs,
                 self.vision_input_type,
