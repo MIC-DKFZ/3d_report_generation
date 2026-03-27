@@ -1,3 +1,5 @@
+import os
+import sys
 import argparse
 from argparse import Namespace
 from pathlib import Path
@@ -28,11 +30,14 @@ from vlm.utils.helper import (
     is_main_process,
     find_run_dir_in_output_dir,
     seed_everything,
+    load_config_file,
+    recursive_dict_merge,
     merge_config_with_cli_args,
 )
-from vlm.utils.load_and_save_files import load_json, save_json
+from vlm.utils.load_and_save_files import load_json, save_json, save_yaml
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.vision_input_type import VisionInputType
+from vlm.utils.paths import VLM_CONFIG_DIR
 from eval import main as eval_main
 
 
@@ -229,6 +234,13 @@ def parse_args() -> Namespace:
         default="",
         help="An optional suffix to append to the 'inference' output directory."
     )
+    parser.add_argument(
+        "--overwrite_config_from_files",
+        type=str,
+        nargs="+",
+        default=[],
+        help="Optional list of base config files",
+    )
 
     args, _ = parser.parse_known_args()
     return args
@@ -254,14 +266,48 @@ def main(args, is_main=True):
         ckpt_dir = args.checkpoint_dir
         vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
 
-    if is_main:  # we don't want to merge args if this was called by train.py
-        cfg.merge_subconfigs_with_cli_args()
-
+    # Moved this bevor `is_main`
     inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "inference_dir_suffix", ""))
 
     log_file_name = add_datetime_tag("inference") + ".log"
     log_file_path = Path(inference_output_dir, log_file_name)
     setup_logger(log_file_path)
+
+    if is_main:  # we don't want to merge args if this was called by train.py
+        if getattr(args, "overwrite_config_from_files", None):
+            # 1. Dump the current config to a dictionary
+            # We don't need to exclude defaults here because we WANT the overrides
+            # to crush anything currently existing in the config.
+            cfg_dict = cfg.model_dump()
+
+            # 2. Process each override file in the order they were provided
+            for override_file in args.overwrite_config_from_files:
+                override_path = Path(VLM_CONFIG_DIR, override_file)
+
+                # Load the YAML file
+                override_cfg_dict = load_config_file(override_path)
+
+                # Optional but safe: If the override file itself defines base_configs, resolve them
+                override_cfg_dict = RunConfig.apply_base_configs(
+                    cfg_dict=override_cfg_dict,
+                    config_dir=VLM_CONFIG_DIR
+                )
+
+                # 3. Merge the override ON TOP OF the current config dict
+                # recursive_dict_merge(base, override) -> override wins
+                cfg_dict = recursive_dict_merge(cfg_dict, override_cfg_dict)
+
+            logger.info_main(f"Applied overrides from: {args.overwrite_config_from_files}")
+
+            # 4. Re-instantiate the model!
+            # This forces Pydantic to parse all nested dicts and validate the new types.
+            cfg = RunConfig.model_validate(cfg_dict)
+
+            logger.info_main(f"Cfg: {cfg}")
+
+        # 5. Apply explicit CLI arguments (e.g., --batch_size 8)
+        # This remains at the end so explicit CLI args take absolute final precedence
+        cfg.merge_subconfigs_with_cli_args()
 
     if cfg.model.vision_encoder:
         vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
@@ -321,9 +367,9 @@ def main(args, is_main=True):
 
     if cfg.data.embedding_constant is not None:
         logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
-        print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     # Create inference object and run inference
+    logger.info_main(f"Config:\n{cfg}")
     inference = UnifiedVLMInference(
         vlm_model,
         cfg=cfg,
@@ -335,6 +381,19 @@ def main(args, is_main=True):
 
     inference.inference(test_dataset)
     logger.remove()
+
+    # Save configuration used for inference
+    # Currenlty mostly dataset related configs could change - e.g. to evaluate OOD data etc
+    if is_main_process():
+        final_config_path = os.path.join(inference_output_dir, "final_config.yml")
+        save_yaml(
+            {
+                "command": " ".join(sys.argv),
+                "run": cfg.model_dump()
+            },
+            final_config_path,
+            sort_keys=False
+        )
 
     if cfg.eval.run_eval and is_main_process():
         eval_args = argparse.Namespace(
