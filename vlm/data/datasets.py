@@ -687,7 +687,7 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
         # TODO: provide this part of the cfg
         self.n_retrieval_samples = int(cfg.data.retrieval_n_samples)
         self.maybe_add_vision_tokens = ""
-        if self.split == "val":
+        if self.split in ["val", "test"]:
             self.dataset_json_path_for_retrieval = Path(cfg.data.train_dataset_json_path)
             with open(self.dataset_json_path_for_retrieval, "r") as f:
                 self.samples_retrieval = json.load(f)
@@ -812,7 +812,8 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
         # Bind the super method to a variable outside the list comprehension as else might lead to TypeError in some python versions
         parent_get_vision_input_path = super()._get_vision_input_path
 
-        paths = [parent_get_vision_input_path(nn_id) for nn_id in nearest_neighbors_ids]
+        # TODO: the fix with split path is VERY hacky and not sure if it is correct overall...
+        paths = [parent_get_vision_input_path(nn_id, split_path="train") for nn_id in nearest_neighbors_ids]
 
         paths.insert(0, parent_get_vision_input_path(image_id))  # add query image at first position
         return paths
