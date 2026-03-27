@@ -14,7 +14,8 @@ class DataConfig(ConfigBase):
     """
     Dataset configuration.
     """
-    dataset_name: Literal["amosmm", "ctrate"] | None = Field(
+
+    dataset_name: Literal["amosmm", "ctrate", "bonn", "merlin"] | None = Field(
         None, description="Name of the dataset."
     )
     train_dataset_json_path: str | None = Field(

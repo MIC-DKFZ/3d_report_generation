@@ -14,6 +14,9 @@ from vlm.data.datasets import (
         MerlinDataset,
         CTRATEDatasetRetrieval, 
         CTRATEDatasetRetrievalWithImage
+        BonnDataset,
+        BonnDatasetRetrieval,
+        BonnDatasetRetrievalWithImage
 )
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from vlm.models.abstract_vlm import AbstractVLMModel
@@ -296,6 +299,21 @@ def main(args, is_main=True):
             split=cfg.eval.split,
             vision_encoder_patch_size=vision_encoder_patch_size,
         )
+    elif cfg.data.dataset_name == "bonn":
+        if cfg.data.retrieval_json_path is not None:
+            if cfg.data.retrieval_use_image_in_prompt:
+                bonn_dataset_class = BonnDatasetRetrievalWithImage
+            else:
+                bonn_dataset_class = BonnDatasetRetrieval
+        else:
+            bonn_dataset_class = BonnDataset
+
+        test_dataset = bonn_dataset_class(
+            cfg=cfg,
+            split=cfg.eval.split,
+            vision_encoder_patch_size=vision_encoder_patch_size,
+        )
+
     else:
         raise ValueError(f"Unsupported dataset name: {cfg.data.dataset_name}")
 

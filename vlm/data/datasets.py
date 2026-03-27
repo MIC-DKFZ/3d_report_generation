@@ -484,16 +484,17 @@ class CTRATEDataset(MedicalImageDataset):
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
 
-    def _get_vision_input_path(self, image_id) -> Path:
+    def _get_vision_input_path(self, image_id, split_path=None) -> Path:
         """Load vision input path for a given image ID"""
-        if self.split == "train":
-            split_path = "train"
-        elif self.split == "val":
-            split_path = "train"
-        elif self.split == "test":
-            split_path = "valid"
-        else:
-            raise ValueError(f"Unknown split: {self.split}")
+        if not split_path:
+            if self.split == "train":
+                split_path = "train"
+            elif self.split == "val":
+                split_path = "train"
+            elif self.split == "test":
+                split_path = "valid"
+            else:
+                raise ValueError(f"Unknown split: {self.split}")
 
         if self.vision_input_type == VisionInputType.EMBEDDING:
             return Path(
@@ -939,3 +940,19 @@ Now analyze the following:
                     d["content"].append({"type": "text", "text": f"Report:\n{answer}"})
 
         return formatted_qa, formatted_qa_prompt_only
+
+
+class BonnDataset(CTRATEDataset):
+    def shuffle_sentences(self, question: str, answer: str) -> tuple[str, str]:
+        """
+        Randomly shuffle sentences within Findings and Impression sections separately
+        """
+        return question, answer
+
+
+class BonnDatasetRetrieval(BonnDataset, CTRATEDatasetRetrieval):
+    pass
+
+
+class BonnDatasetRetrievalWithImage(BonnDataset, CTRATEDatasetRetrievalWithImage):
+    pass
