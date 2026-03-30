@@ -113,6 +113,12 @@ class UnifiedVLMTrainer:
             # The loaded model should already have the trainable parameters applied
             model = self.vlm_model.model
 
+        if self.cfg.general.init_from_checkpoint_dir:
+            self.vlm_model.load_from_checkpoint_dir(
+                self.cfg.general.init_from_checkpoint_dir,
+                allow_unexpected_keys=True,  # Needed if Stage N+1 needs additional modules
+            )
+
         # Log adapter-specific numbers (e.g. number of params)
         if self.vlm_model.vision_adapter is not None:
             adapter_parameter_count = count_parameters(self.vlm_model.vision_adapter)
