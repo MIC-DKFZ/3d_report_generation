@@ -673,13 +673,11 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
         cfg: RunConfig,
         vision_encoder_patch_size: Tuple[int, ...],
         split: Literal["train", "val", "test"] = "train",
-        image_id_suffix="",
     ):
         super().__init__(
             cfg=cfg,
             vision_encoder_patch_size=vision_encoder_patch_size,
             split=split,
-            image_id_suffix=image_id_suffix,
         )
         # FIXME: not sure how to handle the case where the training samples are limited by `n_train_samples`
         # E.g. a check would be needed that the image IDs of thre retrieval json are all included in the training subset
@@ -789,13 +787,11 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
         cfg: RunConfig,
         vision_encoder_patch_size: Tuple[int, ...],
         split: Literal["train", "val", "test"] = "train",
-        image_id_suffix="",
     ):
         super().__init__(
             cfg=cfg,
             vision_encoder_patch_size=vision_encoder_patch_size,
             split=split,
-            image_id_suffix=image_id_suffix,
         )
         # self.maybe_add_vision_tokens = "<|vision_start|><|video_pad|><|vision_end|>"
         self.maybe_add_vision_tokens = ""
@@ -856,13 +852,11 @@ class CTRATEDatasetRetrievalWithImagePrompt1(CTRATEDatasetRetrievalWithImage):
         cfg: RunConfig,
         vision_encoder_patch_size: Tuple[int, ...],
         split: Literal["train", "val", "test"] = "train",
-        image_id_suffix="",
     ):
         super().__init__(
             cfg=cfg,
             vision_encoder_patch_size=vision_encoder_patch_size,
             split=split,
-            image_id_suffix=image_id_suffix,
         )
         # self.maybe_add_vision_tokens = "<|vision_start|><|video_pad|><|vision_end|>"
         self.maybe_add_vision_tokens = ""

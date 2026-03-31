@@ -11,11 +11,11 @@ from tqdm import tqdm
 from vlm.configs.run_config import RunConfig
 from vlm.data.datasets import AMOSMMDataset, CTRATEDataset
 from vlm.data.datasets import (
-        AMOSMMDataset, 
-        CTRATEDataset, 
+        AMOSMMDataset,
+        CTRATEDataset,
         MerlinDataset,
-        CTRATEDatasetRetrieval, 
-        CTRATEDatasetRetrievalWithImage
+        CTRATEDatasetRetrieval,
+        CTRATEDatasetRetrievalWithImage,
         BonnDataset,
         BonnDatasetRetrieval,
         BonnDatasetRetrievalWithImage
@@ -316,7 +316,7 @@ def main(args, is_main=True):
 
     logger.info_main(f"Using {cfg.eval.split} split for inference.")
     cfg.data.do_sentence_shuffle = False
-    cfg.data.do_transform = False
+    cfg.data.do_transforms = False
     if cfg.eval.split == "val":
         cfg.data.n_val_samples = cfg.eval.n_samples
     if cfg.data.dataset_name == "amosmm":

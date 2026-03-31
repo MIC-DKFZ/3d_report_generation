@@ -12,10 +12,10 @@ from trl import SFTConfig
 import wandb
 from vlm.configs.run_config import RunConfig
 from vlm.data.datasets import (
-        AMOSMMDataset, 
-        CTRATEDataset, 
+        AMOSMMDataset,
+        CTRATEDataset,
         MerlinDataset,
-        CTRATEDatasetRetrieval, 
+        CTRATEDatasetRetrieval,
         CTRATEDatasetRetrievalWithImage
 )
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
@@ -174,7 +174,7 @@ class UnifiedVLMTrainer:
             else:
                 sampler = None
 
-            eval_dataloader = DataLoader(val_dataset, batch_size=self.cfg.eval.per_device_batch_size, shuffle=False,
+            eval_dataloader = DataLoader(val_dataset, batch_size=self.cfg.trainer.per_device_eval_batch_size, shuffle=False,
                                          sampler=sampler,
                                          collate_fn=self.vlm_model.collate_fn,
                                          num_workers=self.cfg.eval.num_dataloader_workers)
@@ -475,7 +475,7 @@ def train_val_data_from_config(cfg: RunConfig):
         else:
             dataset_class = CTRATEDataset
     elif cfg.data.dataset_name == "merlin":
-        dataset_class = MerlinDataset 
+        dataset_class = MerlinDataset
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
 
