@@ -11,11 +11,12 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLModelOutputWithPast,
     Qwen2_5_VLPreTrainedModel,
     Qwen2_5_VLTextModel,
+    KwargsForCausalLM,
     Qwen2_5_VLCausalLMOutputWithPast,
 )
 from transformers.processing_utils import Unpack
 from transformers.utils import (
-    is_torchdynamo_compiling, can_return_tuple, TransformersKwargs
+    is_torchdynamo_compiling, can_return_tuple
 )
 
 from vlm.configs.model.model_config import ModelConfig
@@ -210,7 +211,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
 
-        **kwargs: Unpack[TransformersKwargs],
+        **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[tuple, Qwen2_5_VLModelOutputWithPast]:
         r"""
         image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
@@ -361,7 +362,7 @@ class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, Gener
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
 
-        **kwargs: Unpack[TransformersKwargs],
+        **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[tuple, Qwen2_5_VLCausalLMOutputWithPast]:
         """
         Our additional forward kwargs 'vision_position_ids' and 'adapter_kwargs' are passed on via the kwargs argument,
