@@ -698,6 +698,8 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
         with open(self.retrieval_json_path, "r") as f:
             self.retrieval_dict = self._sanatize_retrieval_dict(json.load(f), self.samples_retrieval)
 
+        self._validate_retrieval_dict_covers_samples(self.samples, self.retrieval_dict)
+
     @staticmethod
     def _sanatize_retrieval_dict(
             retrieval_dict: Dict[str, Dict],
@@ -722,6 +724,33 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
             data['similarity'] = clean_scores
 
         return retrieval_dict
+
+    @staticmethod
+    def _validate_retrieval_dict_covers_samples(
+            samples: List[Dict],
+            retrieval_dict: Dict[str, Dict],
+        ) -> None:
+        missing_image_ids = []
+
+        for sample in samples:
+            if "image_id" not in sample:
+                raise KeyError(
+                    "Encountered a training sample without an `image_id` key while validating retrieval coverage."
+                )
+
+            image_id = sample["image_id"]
+            if image_id not in retrieval_dict:
+                missing_image_ids.append(image_id)
+
+        if missing_image_ids:
+            n_missing = len(missing_image_ids)
+            n_samples = len(samples)
+            preview_missing = missing_image_ids[:10]
+            raise KeyError(
+                "Retrieval dictionary is missing entries for training samples. "
+                f"Missing {n_missing}/{n_samples} image_ids. "
+                f"First missing ids: {preview_missing}"
+            )
 
     @staticmethod
     def get_case_from_dataset_json(dataset_json: List[Dict], image_id: str) -> Dict[str, str]:
