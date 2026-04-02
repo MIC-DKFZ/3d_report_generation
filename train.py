@@ -114,10 +114,64 @@ class UnifiedVLMTrainer:
             model = self.vlm_model.model
 
         if self.cfg.general.init_from_checkpoint_dir:
-            self.vlm_model.load_from_checkpoint_dir(
+            missing_keys, unexpected_keys = self.vlm_model.load_weights_from_checkpoint_dir(
                 self.cfg.general.init_from_checkpoint_dir,
                 allow_unexpected_keys=True,  # Needed if Stage N+1 needs additional modules
             )
+            preview_limit = 20
+
+            model_for_key_check = self.vlm_model.model
+            if model_for_key_check is None:
+                logger.warning_main(
+                    "Checkpoint load: could not classify missing keys because model is None"
+                )
+                trainable_param_names = set()
+            else:
+                trainable_param_names = {
+                    name for name, p in model_for_key_check.named_parameters() if p.requires_grad
+                }
+
+            if missing_keys:
+                missing_trainable = [k for k in missing_keys if k in trainable_param_names]
+                missing_non_trainable = [k for k in missing_keys if k not in trainable_param_names]
+
+                if missing_trainable:
+                    missing_trainable_preview = missing_trainable[:preview_limit]
+                    missing_trainable_suffix = "" if len(missing_trainable) <= preview_limit else " ..."
+                    logger.warning_main(
+                        f"Checkpoint load: {len(missing_trainable)} trainable keys are missing from "
+                        f"{self.cfg.general.init_from_checkpoint_dir}. "
+                        f"Preview (first {len(missing_trainable_preview)}): "
+                        f"{missing_trainable_preview}{missing_trainable_suffix}"
+                    )
+
+                if missing_non_trainable:
+                    missing_non_trainable_preview = missing_non_trainable[:preview_limit]
+                    missing_non_trainable_suffix = (
+                        "" if len(missing_non_trainable) <= preview_limit else " ..."
+                    )
+                    logger.info_main(
+                        f"Checkpoint load: {len(missing_non_trainable)} non-trainable keys are missing from "
+                        f"{self.cfg.general.init_from_checkpoint_dir} (usually expected for trainable-only checkpoints). "
+                        f"Preview (first {len(missing_non_trainable_preview)}): "
+                        f"{missing_non_trainable_preview}{missing_non_trainable_suffix}"
+                    )
+
+            if unexpected_keys:
+                unexpected_preview = unexpected_keys[:preview_limit]
+                unexpected_suffix = "" if len(unexpected_keys) <= preview_limit else " ..."
+                logger.warning_main(
+                    f"Checkpoint load: {len(unexpected_keys)} unexpected keys in "
+                    f"{self.cfg.general.init_from_checkpoint_dir}. "
+                    f"Preview (first {len(unexpected_preview)}): {unexpected_preview}{unexpected_suffix}"
+                )
+            if not missing_keys and not unexpected_keys:
+                logger.warning_main(
+                    "Checkpoint load: no missing/unexpected keys when initializing from "
+                    f"{self.cfg.general.init_from_checkpoint_dir}"
+                )
+            # Keep trainer input explicit after checkpoint weight load
+            model = self.vlm_model.model
 
         # Log adapter-specific numbers (e.g. number of params)
         if self.vlm_model.vision_adapter is not None:
