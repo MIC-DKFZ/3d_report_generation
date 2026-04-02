@@ -255,6 +255,14 @@ class UnifiedVLMTrainer:
             )
 
         # Initialize SFT trainer
+        init_opt_scheduler_ckpt = None
+        if (
+            self.cfg.general.init_optimizer_scheduler_from_checkpoint
+            and self.cfg.general.init_from_checkpoint_dir
+            and not self.cfg.general.continue_training
+        ):
+            init_opt_scheduler_ckpt = self.cfg.general.init_from_checkpoint_dir
+
         self.trainer = VLMSFTTrainer(
             model=model,
             args=training_args,
@@ -262,6 +270,7 @@ class UnifiedVLMTrainer:
             eval_dataset=val_dataset,
             data_collator=self.vlm_model.collate_fn,
             callbacks=callbacks,
+            init_opt_scheduler_from_ckpt=init_opt_scheduler_ckpt,
             scheduler=self.cfg.scheduler.to_instance(
                 module_attr_map=self.vlm_model.module_attr_map,
                 forbidden_name_patterns_for_wd=self.vlm_model.forbidden_name_patterns_for_wd,

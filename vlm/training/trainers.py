@@ -17,7 +17,7 @@ from transformers.debug_utils import DebugOption
 from transformers.integrations import deepspeed_init, deepspeed_load_checkpoint
 from transformers.integrations.tpu import tpu_spmd_dataloader
 from transformers.modeling_utils import unwrap_model
-from transformers.trainer import _is_peft_model, TRAINER_STATE_NAME
+from transformers.trainer import _is_peft_model, TRAINER_STATE_NAME, SCHEDULER_NAME, OPTIMIZER_NAME
 from transformers.trainer_callback import ExportableState
 from transformers.trainer_pt_utils import get_model_param_count
 from transformers.trainer_utils import speed_metrics, TrainOutput, SaveStrategy
@@ -32,15 +32,41 @@ from vlm.utils.helper import get_trainable_state_dict
 
 class VLMSFTTrainer(SFTTrainer):
 
-    def __init__(self, scheduler: SchedulerBase | None = None, **kwargs):
+    def __init__(
+        self,
+        scheduler: SchedulerBase | None = None,
+        init_opt_scheduler_from_ckpt: str | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
 
         # Our custom scheduler
         self.scheduler = scheduler
+        self.init_opt_scheduler_from_ckpt = init_opt_scheduler_from_ckpt
 
         # This flag is typically True by default.
         # For some reason, this can result in the training loss not being normalized by the batch size.
         self.model_accepts_loss_kwargs = False
+
+    def _resolve_opt_scheduler_ckpt_dir(self, resume_from_checkpoint: str | None) -> str | None:
+        """
+        Determine checkpoint directory for loading optimizer/scheduler states.
+        Resume checkpoint takes precedence over init checkpoint.
+        """
+        ckpt_dir = resume_from_checkpoint or self.init_opt_scheduler_from_ckpt
+        if not ckpt_dir:
+            return None
+
+        scheduler_path = os.path.join(ckpt_dir, SCHEDULER_NAME)
+        optimizer_path = os.path.join(ckpt_dir, OPTIMIZER_NAME)
+        if not os.path.isfile(scheduler_path) or not os.path.isfile(optimizer_path):
+            logger.warning_main(
+                f"Skipping optimizer/scheduler initialization from checkpoint '{ckpt_dir}' because "
+                f"'{SCHEDULER_NAME}' or '{OPTIMIZER_NAME}' is missing."
+            )
+            return None
+
+        return ckpt_dir
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         """
@@ -662,6 +688,7 @@ class VLMSFTTrainer(SFTTrainer):
         1. Log to our log files.
         2. Allow integration of our own callback to support our custom schedulers.
         """
+        optimizer_scheduler_ckpt_dir = self._resolve_opt_scheduler_ckpt_dir(resume_from_checkpoint)
         scheduler_is_initialized = False
         self.accelerator.free_memory()
         self._train_batch_size = batch_size
@@ -982,7 +1009,7 @@ class VLMSFTTrainer(SFTTrainer):
 
                     if step % args.gradient_accumulation_steps == 0:
                         # Call our own scheduler
-                        if resume_from_checkpoint and not scheduler_is_initialized:
+                        if optimizer_scheduler_ckpt_dir and not scheduler_is_initialized:
                             scheduler_is_initialized = True
                             check_torch_load_is_safe()
                             self.optimizer, self.lr_scheduler, changed_requires_grad_state = self.scheduler.update(
@@ -991,7 +1018,7 @@ class VLMSFTTrainer(SFTTrainer):
                                 lr_scheduler=self.lr_scheduler,
                                 global_step=self.state.global_step,
                                 max_steps=self.state.max_steps,
-                                load_opt_scheduler_from_ckpt=resume_from_checkpoint
+                                load_opt_scheduler_from_ckpt=optimizer_scheduler_ckpt_dir,
                             )
 
                         else:
