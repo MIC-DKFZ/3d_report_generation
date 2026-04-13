@@ -779,6 +779,21 @@ class VLMSFTTrainer(SFTTrainer):
         # Compute absolute values for logging, eval, and save if given as ratio
         self.state.compute_steps(args, max_steps)
 
+        # Ensure scheduler metadata is initialized and an optimizer exists before
+        # the first accelerator/deepspeed prepare call.
+        self.scheduler.initialize(
+            model=self.model,
+            max_steps=max_steps
+        )
+        if self.optimizer is None:
+            self.optimizer, self.lr_scheduler, _ = self.scheduler.update(
+                model=self.model,
+                optimizer=self.optimizer,
+                lr_scheduler=self.lr_scheduler,
+                global_step=self.state.global_step,
+                max_steps=max_steps,
+            )
+
         # Activate gradient checkpointing if needed
         if args.gradient_checkpointing:
             self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs)
@@ -917,11 +932,6 @@ class VLMSFTTrainer(SFTTrainer):
         if args.eval_on_start:
             self._evaluate(trial, ignore_keys_for_eval, skip_scheduler=True)
 
-        self.scheduler.initialize(
-            model=self.model,
-            max_steps=self.state.max_steps
-        )
-
         for epoch in range(epochs_trained, num_train_epochs):
             epoch_dataloader = train_dataloader
             if hasattr(epoch_dataloader, "set_epoch"):
@@ -1039,11 +1049,11 @@ class VLMSFTTrainer(SFTTrainer):
                             self.accelerator.wait_for_everyone()
                             model = self.model_wrapped = self.accelerator.prepare(self.model)
 
-                        if not getattr(self.optimizer, "_is_accelerate_prepared", False):
+                        if not self.is_deepspeed_enabled and not getattr(self.optimizer, "_is_accelerate_prepared", False):
                             # logger.warning_main("RE-WRAPPING OPTIMIZER")
                             self.optimizer = self.accelerator.prepare(self.optimizer)
 
-                        if not getattr(self.lr_scheduler, "_is_accelerate_prepared", False):
+                        if not self.is_deepspeed_enabled and not getattr(self.lr_scheduler, "_is_accelerate_prepared", False):
                             # logger.warning_main("RE-WRAPPING LR-SCHEDULER")
                             self.lr_scheduler = self.accelerator.prepare(self.lr_scheduler)
                             self.lr_scheduler.step(self.state.global_step)  # Step once to set correct LR for

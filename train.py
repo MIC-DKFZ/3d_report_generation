@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -77,6 +78,38 @@ class UnifiedVLMTrainer:
 
         # TODO: Do calculation before final_config.yml is logged
         self.cfg.trainer.dataloader_num_workers = num_workers
+
+        # Normalize legacy placeholder values so non-DeepSpeed runs do not try
+        # to parse "deepspeed" as a config/path.
+        deepspeed_cfg_path = self.cfg.trainer.deepspeed
+        if isinstance(deepspeed_cfg_path, str):
+            normalized_ds = deepspeed_cfg_path.strip().lower()
+            if normalized_ds in {"", "none", "null", "false", "off", "deepspeed"}:
+                logger.warning_main(
+                    "Ignoring placeholder value for trainer.deepspeed "
+                    f"({deepspeed_cfg_path!r}) and disabling DeepSpeed."
+                )
+                self.cfg.trainer.deepspeed = None
+                deepspeed_cfg_path = None
+
+        # Keep HF/Accelerate and DeepSpeed gradient accumulation in sync to avoid
+        # "Gradient accumulation steps mismatch" warnings.
+        if deepspeed_cfg_path:
+            ds_path = Path(deepspeed_cfg_path)
+            if not ds_path.is_absolute():
+                ds_path = Path.cwd() / ds_path
+            if ds_path.exists():
+                with open(ds_path, "r", encoding="utf-8") as f:
+                    ds_cfg = json.load(f)
+                ds_grad_accum = ds_cfg.get("gradient_accumulation_steps")
+                if isinstance(ds_grad_accum, int) and ds_grad_accum >= 1:
+                    if self.cfg.trainer.gradient_accumulation_steps != ds_grad_accum:
+                        logger.warning_main(
+                            "Overriding trainer.gradient_accumulation_steps "
+                            f"({self.cfg.trainer.gradient_accumulation_steps}) with DeepSpeed value "
+                            f"({ds_grad_accum}) from {ds_path}."
+                        )
+                    self.cfg.trainer.gradient_accumulation_steps = ds_grad_accum
 
         # Add model-specific arguments
         model_args = self.vlm_model.get_model_specific_training_args()

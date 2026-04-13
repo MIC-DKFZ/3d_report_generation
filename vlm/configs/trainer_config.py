@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import Field
+from pydantic import Field, field_validator
 from vlm.configs.base import ConfigBase
 
 
@@ -52,3 +52,22 @@ class SFTTrainerConfig(ConfigBase):
     torch_empty_cache_steps: int = Field(10, description="Clear PyTorch CUDA cache every X steps to manage GPU memory.")
     ddp_find_unused_parameters: bool = Field(False, description="Whether to enable detection of unused parameters in DDP training.")
     ddp_bucket_cap_mb: int = Field(25, description="Bucket size in MB for gradient synchronization in DDP.")
+    deepspeed: str | None = Field(None, description="Path to DeepSpeed config JSON.")
+
+    @field_validator("deepspeed", mode="before")
+    @classmethod
+    def normalize_deepspeed_placeholder(cls, value):
+        # Keep backward compatibility with old placeholder values while
+        # making "not configured" explicit.
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip().lower() in {
+            "",
+            "none",
+            "null",
+            "false",
+            "off",
+            "deepspeed",
+        }:
+            return None
+        return value

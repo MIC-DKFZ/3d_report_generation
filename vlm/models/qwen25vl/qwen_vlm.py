@@ -83,12 +83,12 @@ class QwenVLModel(AbstractVLMModel):
                 for example in examples
             ]
 
-            # TODO: MERLIN HACKING SHHHH DON'T TELL ANYONE
-            vision_inputs = [
-                (np.pad(vi, ((0, 0), (0, 0), (0, 1), (0, 1)), mode="edge")
-                 if vi.shape[-3:] == (10, 7, 7) else vi)
-                for vi in vision_inputs
-            ]
+            # # TODO: MERLIN HACKING SHHHH DON'T TELL ANYONE
+            # vision_inputs = [
+            #     (np.pad(vi, ((0, 0), (0, 0), (0, 1), (0, 1)), mode="edge")
+            #      if vi.shape[-3:] == (10, 7, 7) else vi)
+            #     for vi in vision_inputs
+            # ]
             # FIXME: This is a little hacky but should work
             if isinstance(vision_inputs[0], list):
                 vision_inputs = [scan for case in vision_inputs for scan in case]
@@ -108,7 +108,6 @@ class QwenVLModel(AbstractVLMModel):
             return_tensors="pt",
             padding=True,
             padding_side="right",
-            do_truncation=True  # TODO: add truncation argument to configs
         )
 
         batch_prompt_only = self.processor(
@@ -116,7 +115,7 @@ class QwenVLModel(AbstractVLMModel):
             num_vision_tokens=num_vision_tokens,
             return_tensors="pt",
             padding=True,
-            padding_side="left"
+            padding_side="left",
         )
 
         labels = batch["input_ids"].clone()
