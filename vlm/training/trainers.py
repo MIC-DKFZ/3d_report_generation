@@ -1042,12 +1042,48 @@ class VLMSFTTrainer(SFTTrainer):
 
                         if changed_requires_grad_state:
                             # logger.warning_main("RE-WRAPPING MODEL")
+                            old_model_wrapped = self.model_wrapped
+
+                            if self.is_deepspeed_enabled:
+                                # When switching stages mid-training, we rebuild the DeepSpeed engine.
+                                # Tear down stale engine references first, otherwise old ZeRO hooks can
+                                # remain active and trigger duplicate gradient reductions.
+                                if old_model_wrapped is not None and hasattr(old_model_wrapped, "destroy"):
+                                    try:
+                                        old_model_wrapped.destroy()
+                                    except Exception as err:
+                                        logger.warning_main(
+                                            f"[SCHEDULER] Failed to destroy old DeepSpeed engine cleanly: {err}"
+                                        )
+
+                                if getattr(self.accelerator, "deepspeed_engine_wrapped", None) is not None:
+                                    self.accelerator.deepspeed_engine_wrapped = None
+
                             del self.model_wrapped
                             gc.collect()
                             torch.cuda.empty_cache()
 
                             self.accelerator.wait_for_everyone()
-                            model = self.model_wrapped = self.accelerator.prepare(self.model)
+                            if self.is_deepspeed_enabled:
+                                # DeepSpeed ZeRO stage >= 2 requires a real optimizer during prepare.
+                                # Passing only the model can trigger DummyOptim creation and fail.
+                                if hasattr(self.lr_scheduler, "step"):
+                                    model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
+                                else:
+                                    model, self.optimizer, self.lr_scheduler = self.accelerator.prepare(
+                                        self.model, self.optimizer, self.lr_scheduler
+                                    )
+                            else:
+                                model = self.accelerator.prepare(self.model)
+
+                            self.model_wrapped = model
+
+                            if self.is_deepspeed_enabled:
+                                self.deepspeed = self.model_wrapped
+
+                            # Keep all ranks in lockstep after model/optimizer re-prepare,
+                            # especially for DeepSpeed engine transitions on multi-node runs.
+                            self.accelerator.wait_for_everyone()
 
                         if not self.is_deepspeed_enabled and not getattr(self.optimizer, "_is_accelerate_prepared", False):
                             # logger.warning_main("RE-WRAPPING OPTIMIZER")

@@ -72,20 +72,32 @@ class AdapterExtendedDWUScheduler(SchedulerBase, ABC):
             self.training_stage = next_training_stage
             self.new_training_stage = True
 
+    def _restore_orig_trainable_params_state_with_change_flag(self, model) -> bool:
+        changed = False
+        for name, param in model.named_parameters():
+            if name in self.orig_trainable_params_state:
+                new_state = self.orig_trainable_params_state[name]
+                if param.requires_grad != new_state:
+                    changed = True
+                    param.requires_grad = new_state
+        return changed
+
     def set_trainable_params(self, model) -> bool:
         if not self.new_training_stage:
             return False
 
         if self.training_stage == self._Stage.WARMUP_1_1:
+            changed = False
             for name, param in model.named_parameters():
                 if not name.startswith(self.module_attr_map["adapter"]):
-                    param.requires_grad = False
-            return True
+                    if param.requires_grad:
+                        changed = True
+                        param.requires_grad = False
+            return changed
         elif self.training_stage in {self._Stage.WARMUP_2, self._Stage.DEFAULT}:
             # IMPORTANT for resume: if we jump directly to WARMUP_2/DEFAULT from step 0,
             # restore the original trainable state so optimizer param groups match checkpoints.
-            self._restore_orig_trainable_params_state(model)
-            return True
+            return self._restore_orig_trainable_params_state_with_change_flag(model)
         else:
             pass
 
@@ -121,6 +133,20 @@ class AdapterExtendedDWUScheduler(SchedulerBase, ABC):
             logger.warning_main(
                 "[SCHEDULER] Rebuilding optimizer due to param-group mismatch "
                 f"(current={len(optimizer.param_groups)}, expected={len(param_groups)})."
+            )
+            should_rebuild_optimizer = True
+
+        # Guard against wrapped optimizers (e.g. DeepSpeedOptimizerWrapper). For stage transitions
+        # we need a base torch optimizer so `accelerator.prepare(model, optimizer)` can rebuild
+        # engine/param mappings from scratch.
+        if (
+                optimizer is not None
+                and not isinstance(optimizer, self.optimizer_class)
+                and self.training_stage == self._Stage.WARMUP_2
+        ):
+            logger.warning_main(
+                "[SCHEDULER] Rebuilding optimizer due to non-base optimizer type "
+                f"({type(optimizer).__name__} != {self.optimizer_class.__name__})."
             )
             should_rebuild_optimizer = True
 
