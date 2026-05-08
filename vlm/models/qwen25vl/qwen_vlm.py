@@ -78,20 +78,26 @@ class QwenVLModel(AbstractVLMModel):
         num_vision_tokens, vision_position_ids, adapter_args = None, None, {}
 
         if not self.text_only:
-            vision_inputs = [
+            raw_vision_inputs = [
                 example["vision_input"]
                 for example in examples
             ]
 
-            # # TODO: MERLIN HACKING SHHHH DON'T TELL ANYONE
-            # vision_inputs = [
-            #     (np.pad(vi, ((0, 0), (0, 0), (0, 1), (0, 1)), mode="edge")
-            #      if vi.shape[-3:] == (10, 7, 7) else vi)
-            #     for vi in vision_inputs
-            # ]
-            # FIXME: This is a little hacky but should work
-            if isinstance(vision_inputs[0], list):
-                vision_inputs = [scan for case in vision_inputs for scan in case]
+            # Support both single scans and list/tuple batches of scans.
+            vision_inputs = []
+            for vi in raw_vision_inputs:
+                if isinstance(vi, (list, tuple)):
+                    vision_inputs.extend(vi)
+                else:
+                    vision_inputs.append(vi)
+
+            vision_inputs = [
+                vi.detach().cpu().numpy() if isinstance(vi, torch.Tensor) else np.asarray(vi)
+                for vi in vision_inputs
+            ]
+
+            if len(vision_inputs) == 0:
+                raise ValueError("Received an empty vision input list in QwenVLModel.collate_fn")
 
             num_vision_tokens, vision_position_ids, adapter_args = self.vision_adapter.get_adapter_args(
                 vision_inputs,
