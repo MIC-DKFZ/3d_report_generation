@@ -16,6 +16,8 @@ from vlm.data.datasets import (
         AMOSMMDataset,
         CTRATEDataset,
         MerlinDataset,
+        MerlinDatasetRetrieval,
+        MerlinDatasetRetrievalWithImage,
         CTRATEDatasetRetrieval,
         CTRATEDatasetRetrievalWithImage
 )
@@ -571,7 +573,13 @@ def train_val_data_from_config(cfg: RunConfig):
         else:
             dataset_class = CTRATEDataset
     elif cfg.data.dataset_name == "merlin":
-        dataset_class = MerlinDataset
+        if cfg.data.retrieval_json_path is not None:
+            if cfg.data.retrieval_use_image_in_prompt:
+                dataset_class = MerlinDatasetRetrievalWithImage
+            else:
+                dataset_class = MerlinDatasetRetrieval
+        else:
+            dataset_class = MerlinDataset
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
 

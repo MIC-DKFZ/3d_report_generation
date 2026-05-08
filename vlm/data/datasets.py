@@ -1,4 +1,5 @@
 import json
+import os
 from abc import ABC, abstractmethod
 from numbers import Number
 from pathlib import Path
@@ -100,6 +101,11 @@ class MedicalImageDataset(Dataset, ABC):
             self.n_samples = cfg.eval.n_samples
             self.do_sentence_shuffle = False
             self.dataset_json_path = Path(cfg.eval.dataset_json_path)
+
+        logger.info_main(
+            f"Using vision_input_path for {self.__class__.__name__} ({self.split}): {self.vision_input_path}"
+        )
+
         self.sentence_shuffle_p = cfg.data.sentence_shuffle_p
         self.image_id_suffix = cfg.data.image_id_suffix
 
@@ -538,7 +544,7 @@ class CTRATEDataset(MedicalImageDataset):
         return question, ''.join(result)
 
 class MerlinDataset(CTRATEDataset):
-    def _get_vision_input_path(self, image_id):
+    def _get_vision_input_path(self, image_id, split_path=None) -> Path:
         if self.vision_input_type == VisionInputType.EMBEDDING:
             return Path(self.vision_input_path / f"{image_id}{self.image_id_suffix}_embedding.bl2")
         elif self.vision_input_type == VisionInputType.IMAGE:
@@ -972,6 +978,23 @@ class BonnDataset(CTRATEDataset):
         Randomly shuffle sentences within Findings and Impression sections separately
         """
         return question, answer
+
+
+class MerlinDatasetRetrieval(MerlinDataset, CTRATEDatasetRetrieval):
+    pass
+
+
+class MerlinDatasetRetrievalWithImage(MerlinDataset, CTRATEDatasetRetrievalWithImage):
+    # Use Merlin path conventions for both query and retrieved neighbor images.
+    def _get_vision_input_path(self, image_id: str, split_path=None) -> List[Path]:
+        nearest_neighbors_ids = self.retrieval_dict[image_id]["k_nearest_neighbor"]
+        nearest_neighbors_ids = nearest_neighbors_ids[
+            : min(len(nearest_neighbors_ids), self.n_retrieval_samples)
+        ]
+
+        paths = [MerlinDataset._get_vision_input_path(self, nn_id) for nn_id in nearest_neighbors_ids]
+        paths.insert(0, MerlinDataset._get_vision_input_path(self, image_id))
+        return paths
 
 
 class BonnDatasetRetrieval(BonnDataset, CTRATEDatasetRetrieval):

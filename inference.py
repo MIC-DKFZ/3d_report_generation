@@ -14,6 +14,8 @@ from vlm.data.datasets import (
         AMOSMMDataset,
         CTRATEDataset,
         MerlinDataset,
+        MerlinDatasetRetrieval,
+        MerlinDatasetRetrievalWithImage,
         CTRATEDatasetRetrieval,
         CTRATEDatasetRetrievalWithImage,
         BonnDataset,
@@ -340,7 +342,15 @@ def main(args, is_main=True):
             vision_encoder_patch_size=vision_encoder_patch_size,
         )
     elif cfg.data.dataset_name == "merlin":
-        test_dataset = MerlinDataset(
+        if cfg.data.retrieval_json_path is not None:
+            if cfg.data.retrieval_use_image_in_prompt:
+                merlin_dataset_class = MerlinDatasetRetrievalWithImage
+            else:
+                merlin_dataset_class = MerlinDatasetRetrieval
+        else:
+            merlin_dataset_class = MerlinDataset
+
+        test_dataset = merlin_dataset_class(
             cfg=cfg,
             split=cfg.eval.split,
             vision_encoder_patch_size=vision_encoder_patch_size,
