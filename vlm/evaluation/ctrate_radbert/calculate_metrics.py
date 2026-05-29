@@ -46,15 +46,19 @@ def calculate_metrics(pred_classifications_csv: pd.DataFrame, gt_classifications
     A = int(gt[ctrate_label_cols].sum().sum())
 
     if A == 0:
-        crg = 0
-        # raise ValueError("Ground-truth contains zero positive labels; CRG undefined.")
-    else:
-        r = (X - A) / (2 * A)
-        U = (X - A) / 2
-        s = r * TP - r * FN - FP
-        crg = U / (2 * U - s) if (2 * U - s) != 0 else 0
+        raise ValueError("CRG undefined: ground truth contains zero positive labels.")
 
-    results["crg"] = crg
+    r = (X - A) / (2 * A)
+    U = (X - A) / 2
+    s = r * TP - r * FN - FP
 
+    denom = 2 * U - s
 
+    if U == 0:
+        raise ValueError("CRG undefined: ground truth contains only positive labels.")
+
+    if denom == 0:
+        raise ValueError("CRG undefined: denominator is zero.")
+
+    results["crg"] = U / denom
     return results
