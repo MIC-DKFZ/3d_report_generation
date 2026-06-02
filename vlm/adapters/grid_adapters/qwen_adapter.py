@@ -1,3 +1,6 @@
+from typing import Tuple
+
+from einops import rearrange
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -26,10 +29,41 @@ class QwenAdapter(GridAdapter):
         )
 
     def forward(self, x: torch.Tensor, adapter_args: dict):
-        # batch_size, embed_dim, T, H, W = x.shape
-        
-        rT, rH, rW = self.reduce_block
-        x = rearrange(x, "B C (t rT) (h rH) (w rW) -> B (t h w) (C rT rH rW)", rT=rT, rH=rH, rW=rW).contiguous()
+        # Convert input to float first
+        video_grid_thw = adapter_args['video_grid_thw']
+
+        x = x.to(torch.bfloat16)
+
+        # cur_pos = 0
+        # TODO reshape input to expected length note that grid_thw is the grid
+        # after the reduceblock in the upstream code...
+        # TODO: also keep this in mind:
+        # if x.ndim == 3:  # if flattened tensor (from VE, not loaded embed), restructure to original grid
+        #     video_grid_thw = adapter_args["video_grid_thw"]
+        #     x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
+
+        res = torch.Tensor().to(x.device, dtype=x.dtype)
+        for image_idx, grid_thw in enumerate(video_grid_thw):
+            # lenght = grid_thw[0] * grid_thw[1] * grid_thw[2]
+            # y = x[cur_pos:cur_pos+lenght]
+            y = x[image_idx]
+
+            # (T*H*W, C) -> (C, T, H, W)
+            # y = y.permute(1, 0)  # (T*H*W, C) -> (C, T*H*W)
+            # rebuild blocks
+            # y = y.view(y.shape[0], grid_thw[0], grid_thw[1], grid_thw[2])
+            # Space-to-Depth rearrange (Depth as in Channel/hidden-dim, e.g. imagine a grid of cards which you now compress by stacking reduce block**3 cards onto each other)
+            y = rearrange(
+                y,
+                # 'b c (t p1) (h p2) (w p3) -> b (t h w) (c p1 p2 p3)',
+                'c (t p1) (h p2) (w p3) -> (t h w) (c p1 p2 p3)',
+                p1=self.reduce_block[0],
+                p2=self.reduce_block[1],
+                p3=self.reduce_block[2]
+            ).contiguous()
+            res = torch.cat((res, y), dim=0)
+            # cur_pos += lenght
+        x = res
 
         # Process through adapter
         x = self.rmsnorm(x)

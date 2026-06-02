@@ -183,6 +183,46 @@ class AbstractVLMModel(ABC):
 
         return AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir) + (ckpt_dir,)
 
+    def load_weights_from_checkpoint_dir(
+        self,
+        ckpt_dir: str | Path,
+        allow_unexpected_keys: bool = False,
+    ) -> tuple[list[str], list[str]]:
+        """
+        Load only model weights into an already constructed model.
+        Assumes self.model exists and trainable wrappers (e.g. PEFT) are already applied.
+        """
+        if self.model is None:
+            raise RuntimeError("self.model is None. Call setup_model() first.")
+
+        ckpt_dir = Path(ckpt_dir)
+        single_path = ckpt_dir / SAFE_WEIGHTS_NAME
+        index_path = ckpt_dir / SAFE_WEIGHTS_INDEX_NAME
+        checkpoint_conversion_mapping = getattr(self.model, "_checkpoint_conversion_mapping", {})
+
+        if single_path.exists():
+            state_dict = safetensors.torch.load_file(single_path)
+            state_dict = apply_regex_subs(state_dict, checkpoint_conversion_mapping)
+            missing_keys, unexpected_keys = self.model.load_state_dict(state_dict, strict=False)
+
+            if unexpected_keys and not allow_unexpected_keys:
+                raise KeyError(f"Unexpected keys in loaded checkpoint: {unexpected_keys}")
+
+            return missing_keys, unexpected_keys
+
+        if index_path.exists():
+            load_sharded_checkpoint(
+                model=self.model,
+                folder=ckpt_dir,
+                allow_unexpected_keys=allow_unexpected_keys,
+                key_mapping=checkpoint_conversion_mapping
+            )
+            return [], []
+
+        raise FileNotFoundError(
+            f"Neither {SAFE_WEIGHTS_NAME!r} nor {SAFE_WEIGHTS_INDEX_NAME!r} found in {ckpt_dir}"
+        )
+
     @staticmethod
     def load_from_checkpoint_dir(ckpt_dir: str | Path, allow_unexpected_keys=False) -> tuple[AbstractVLMModel, RunConfig]:
         """
@@ -216,35 +256,11 @@ class AbstractVLMModel(ABC):
         )
         vlm_model.setup_model()
         vlm_model.apply_trainable_config()
-        # keys_to_ignore = vlm_model.model._tied_weights_keys
-
-        # Try to restore model weights from the checkpoint directory:
-        # 1. If a single safetensors file exists (model.safetensors), load it directly.
-        # 2. Otherwise, if a sharded safetensors index exists (model.safetensors.index.json),
-        #    load all shard files referenced in the index.
-        # 3. If neither exists, raise an error because no valid checkpoint was found.
-        single_path = ckpt_dir / SAFE_WEIGHTS_NAME
-        index_path = ckpt_dir / SAFE_WEIGHTS_INDEX_NAME
-        checkpoint_conversion_mapping = vlm_model.model._checkpoint_conversion_mapping
-
-        if single_path.exists():
-            state_dict = safetensors.torch.load_file(single_path)
-            state_dict = apply_regex_subs(state_dict, checkpoint_conversion_mapping)
-
-            missing_keys, unexpected_keys = vlm_model.model.load_state_dict(state_dict, strict=False)
-            if unexpected_keys and not allow_unexpected_keys:
-                raise KeyError(f"Unexpected keys in loaded checkpoint: {unexpected_keys}")
-
-            return vlm_model, cfg
-
-        if index_path.exists():
-            load_sharded_checkpoint(model=vlm_model.model, folder=ckpt_dir, allow_unexpected_keys=allow_unexpected_keys,
-                                    key_mapping=checkpoint_conversion_mapping)
-            return vlm_model, cfg
-
-        raise FileNotFoundError(
-            f"Neither {SAFE_WEIGHTS_NAME!r} nor {SAFE_WEIGHTS_INDEX_NAME!r} found in {ckpt_dir}"
+        vlm_model.load_weights_from_checkpoint_dir(
+            ckpt_dir=ckpt_dir,
+            allow_unexpected_keys=allow_unexpected_keys
         )
+        return vlm_model, cfg
 
     def clear_memory(self):
         """Clear GPU memory and cached objects"""

@@ -1,11 +1,15 @@
 import os
+from typing import Optional
 from abc import ABC, abstractmethod
 from enum import StrEnum
 from pathlib import Path
 
+import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
+
+from transformers.trainer import SCHEDULER_NAME, OPTIMIZER_NAME
 
 from vlm.utils import logger
 from vlm.utils.helper import log_param_groups, is_main_process
@@ -58,7 +62,7 @@ class SchedulerBase(ABC):
         log_param_groups(model, optimizer, file_path)
 
     def update(
-            self, model, optimizer, lr_scheduler, global_step: int, max_steps: int
+            self, model, optimizer, lr_scheduler, global_step: int, max_steps: int, load_opt_scheduler_from_ckpt: Optional[str] = None
     ) -> tuple[Optimizer, _LRScheduler, bool]:
         self.update_training_stage(global_step=global_step, max_steps=max_steps)
         changed_requires_grad_status = self.set_trainable_params(model=model)
@@ -71,6 +75,13 @@ class SchedulerBase(ABC):
             if is_main_process():
                 self._log_param_groups(model, optimizer)
             self.new_training_stage = False
+
+        if load_opt_scheduler_from_ckpt:
+            scheduler_state = torch.load(os.path.join(load_opt_scheduler_from_ckpt, SCHEDULER_NAME), weights_only=True)
+            lr_scheduler.load_state_dict(scheduler_state)
+            device = model.device
+            optimizer_state = torch.load(os.path.join(load_opt_scheduler_from_ckpt, OPTIMIZER_NAME), map_location=device, weights_only=True)
+            optimizer.load_state_dict(optimizer_state)
 
         return optimizer, lr_scheduler, changed_requires_grad_status
 

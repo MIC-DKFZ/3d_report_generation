@@ -263,3 +263,11 @@ class PerceiverResamplerLLM(QueryAdapter):
         latents = self.dense_projector(self.pre_dense_norm(latents))
 
         return latents
+
+class PerceiverResamplerLLMProjectorInitZero(PerceiverResamplerLLM):
+    def __init__(self, head_dim: int, depth: int, q_init_scale: float | None = None, **kwargs):
+        super().__init__(head_dim=head_dim, depth=depth, q_init_scale=q_init_scale, **kwargs)
+
+        nn.init.normal_(self.dense_projector.weight, mean=0.0, std=0.001)
+        if self.dense_projector.bias is not None:
+            nn.init.zeros_(self.dense_projector.bias)
