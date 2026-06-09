@@ -1,45 +1,87 @@
 from typing import Literal
 from pydantic import Field, model_validator
+from pathlib import Path
+import vlm
+
+from torch.utils.data import Dataset
+
 from vlm.configs.base import ConfigBase
 from vlm.utils.vision_input_type import VisionInputType
+from vlm.utils.find_class_by_name import recursive_find_python_class
 
 
 class DataConfig(ConfigBase):
     """
     Dataset configuration.
     """
-    dataset_name: Literal["amosmm", "ctrate"] | None = Field(None, description="Name of the dataset.")
-    train_dataset_json_path: str | None = Field(None, description="Path to the train dataset JSON file.")
-    val_dataset_json_path: str | None = Field(None, description="Path to the validation dataset JSON file.")
-    vision_input_path: str | None = Field(None, description="Path to the vision input (either embeddings or images).")
-    vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
 
-    embed_dim: int | None = Field(None, description="Embedding dimension when using embeddings as input (e.g. 864).")
+    dataset_name: Literal["amosmm", "ctrate", "bonn", "merlin"] | None = Field(
+        None, description="Name of the dataset."
+    )
+    train_dataset_json_path: str | None = Field(
+        None, description="Path to the train dataset JSON file."
+    )
+    val_dataset_json_path: str | None = Field(
+        None, description="Path to the validation dataset JSON file."
+    )
+    vision_input_path: str | None = Field(
+        None, description="Path to the vision input (either embeddings or images)."
+    )
+    vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
+    embed_dim: int | None = Field(
+        None, description="Embedding dimension of the embeddings if using"
+        " embeddings as input (e.g. 864.)"
+    )
     embed_size: tuple[int, int, int] | None = Field(
         None, description="Embedding size if using embeddings as input (e.g. 24x24x24)."
     )
 
-    answer_types: str | list = Field(..., description="Which answer types and subtypes to include during training.")
+    answer_types: str | list = Field(
+        ..., description="Which answer types and subtypes to include during training."
+    )
 
     text_only: bool = Field(
         False,
         description="Whether to only input text and omit any vision tokens."
     )
     embedding_constant: float | Literal["random"] | None = Field(
-        None,
-        description="Constant value for language-only baseline. Either a float or 'random'."
+        None, description="Constant value for language-only baseline. Either a float or 'random'."
     )
 
     n_train_samples: int | None = Field(None, description="Number of training samples to use.")
-    n_val_samples: int = Field(200, description="Number of validation samples to use.")
+    n_val_samples: int | None = Field(200, description="Number of validation samples to use.")
 
-    do_resize: bool = Field(False, description="Resize images to 192x192x192 cubes (with lung crops).")
+    do_resize: bool = Field(
+        False, description="Resize images to 192x192x192 cubes (with lung crops)."
+    )
     do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
-    do_sentence_shuffle: bool = Field(True, description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.")
+    do_sentence_shuffle: bool = Field(
+        True,
+        description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.",
+    )
     sentence_shuffle_p: float = Field(0.5, description="Probability of randomly shuffling the order of sentences.")
 
-    image_id_suffix: str = Field("", description="Add a suffix to the image IDs provided in the dataset JSON. "
-                                                 "WARNING: Only works for CTRATE embeddings.")
+    is_stacked_2d_embedding: bool = Field(False, description="Set to True for vision encoders such as 'Curia' "
+                                                             "where the input embeddings are shaped "
+                                                             "(n_slices, class_token + n_patch_tokens, embed_dim).")
+    reduce_to_n_slices: int | None = Field(None, description="The number of slices to reduce the stacked 2D embeddings to.")
+
+    image_id_suffix: str = Field(
+        "",
+        description="Add a suffix to the image IDs provided in the dataset JSON. "
+        "WARNING: Only works for CTRATE embeddings.",
+    )
+    retrieval_json_path: str | None = Field(
+        None, description="Path to the retrieval JSON file mapping for the respective dataset."
+    )
+
+    retrieval_n_samples: int = Field(
+        2, description="How many retrieval samples to use from the retrieval JSON file."
+    )
+
+    retrieval_use_image_in_prompt: bool = Field(
+        False, description="Whether to use the retrieved image in the prompt."
+    )
 
     @model_validator(mode="after")
     def validate_vision_input_modifiers(self):
@@ -53,3 +95,29 @@ class DataConfig(ConfigBase):
             raise ValueError("Missing parameters for embedding mode: "
                              "please specify both 'embed_dim' and 'embed_size' when vision_input_type='embedding'.")
         return self
+
+    @model_validator(mode="after")
+    def validate_sentence_shuffle(self):
+        if not self.do_sentence_shuffle:
+            self.sentence_shuffle_p = 0.0
+        return self
+
+    @model_validator(mode="after")
+    def validate_if_stacked_2d_embeddings(self):
+        if self.is_stacked_2d_embedding and self.reduce_to_n_slices is None:
+            raise ValueError("Missing parameters for stacked 2D embeddings input: "
+                             "please specify 'reduce_to_n_slices' when is_stacked_2d_embedding=True.")
+        return self
+
+    dataset_class_name: str | None = Field(
+        None, description="Name of the dataset class."
+    )
+
+    folder_to_search: str = "vlm.data"
+
+    def get_dataset_class(self) -> Dataset:
+        return recursive_find_python_class(
+            folder=str(Path(vlm.__path__[0], *self.folder_to_search.split(".")[1:])),
+            class_name=self.dataset_class_name,
+            current_module=self.folder_to_search
+        )

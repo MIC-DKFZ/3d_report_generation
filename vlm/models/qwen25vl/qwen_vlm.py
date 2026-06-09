@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.nn.functional as F
 import numpy as np
 from vlm.models.qwen25vl.processing_3d import QwenVLProcessor3D
 from vlm.models.qwen25vl.Qwen3D import QwenVLForConditionalGeneration3D, QwenVLModel3D
@@ -13,6 +14,11 @@ class QwenVLModel(AbstractVLMModel):
         super().__init__(*args, **kwargs)
         self._model_str = "qwen"
         self.batch_count = 0
+
+        self.forbidden_name_patterns_for_wd.extend(
+            # Add LoRA layers and the token embedding layer (which is also the LM head) to forbidden name patterns.
+            ["lora", "embed_tokens", "lm_head"]
+        )
 
     @property
     def module_attr_map(self) -> dict[str, str]:
@@ -42,7 +48,7 @@ class QwenVLModel(AbstractVLMModel):
         model: QwenVLModel3D = self.model.model
         if self.model_cfg.vision_encoder is not None:
             model.setup_vision_encoder()
-            self.downsample_factor = model.vision_encoder.downsample_factor
+            self.downsample_factor = self.model_cfg.vision_encoder.downsample_factor
         if self.model_cfg.adapter is not None:
             model.setup_vision_adapter()
             self.vision_adapter = model.vision_adapter
@@ -72,10 +78,27 @@ class QwenVLModel(AbstractVLMModel):
         num_vision_tokens, vision_position_ids, adapter_args = None, None, {}
 
         if not self.text_only:
-            vision_inputs = [
+            raw_vision_inputs = [
                 example["vision_input"]
                 for example in examples
             ]
+
+            # Support both single scans and list/tuple batches of scans.
+            vision_inputs = []
+            for vi in raw_vision_inputs:
+                if isinstance(vi, (list, tuple)):
+                    vision_inputs.extend(vi)
+                else:
+                    vision_inputs.append(vi)
+
+            vision_inputs = [
+                vi.detach().cpu().numpy() if isinstance(vi, torch.Tensor) else np.asarray(vi)
+                for vi in vision_inputs
+            ]
+
+            if len(vision_inputs) == 0:
+                raise ValueError("Received an empty vision input list in QwenVLModel.collate_fn")
+
             num_vision_tokens, vision_position_ids, adapter_args = self.vision_adapter.get_adapter_args(
                 vision_inputs,
                 self.vision_input_type,
@@ -90,7 +113,7 @@ class QwenVLModel(AbstractVLMModel):
             num_vision_tokens=num_vision_tokens,
             return_tensors="pt",
             padding=True,
-            padding_side="right"
+            padding_side="right",
         )
 
         batch_prompt_only = self.processor(
@@ -98,7 +121,7 @@ class QwenVLModel(AbstractVLMModel):
             num_vision_tokens=num_vision_tokens,
             return_tensors="pt",
             padding=True,
-            padding_side="left"
+            padding_side="left",
         )
 
         labels = batch["input_ids"].clone()

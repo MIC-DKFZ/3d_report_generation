@@ -10,9 +10,16 @@ class GridAdapter(AdapterBase, ABC):
     Adapter for processing homogeneously-sized image batches.
     This class retains the spatial grid structure of the vision embeddings and implements M-RoPE.
     """
-    def __init__(self, reduce_block: tuple[int, int, int], *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, reduce_block: tuple[int, int, int], **kwargs):
+        super().__init__(**kwargs)
         self.reduce_block = reduce_block
+
+    def _maybe_restructure_to_grid(self, x, video_grid_thw):
+        if x.ndim == 3:  # if flattened tensor (from VE, not loaded embed), restructure to original grid
+            batch_size = x.shape[0]
+            embed_dim = x.shape[1]
+            return x.reshape(batch_size, embed_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
+        return x
 
     def get_adapter_args(
             self,

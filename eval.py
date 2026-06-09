@@ -1,17 +1,24 @@
 import argparse
 import multiprocessing
+import os
 import random
 import re
 import matplotlib.pyplot as plt
 import numpy as np
 import csv
+import torch
 from collections import defaultdict
 from pathlib import Path
+
+import pandas as pd
 from pycocoevalcap.bleu.bleu import Bleu
 from pycocoevalcap.rouge.rouge import Rouge
 from pycocoevalcap.cider.cider import Cider
 from pycocoevalcap.meteor.meteor import Meteor
+from torch.utils.data import SequentialSampler, DataLoader
 
+from vlm.evaluation.ctrate_radbert.calculate_metrics import calculate_metrics
+from vlm.evaluation.ctrate_radbert.utils import CTDataset, RadBertClassifier, RadBertInference, ctrate_label_cols
 from vlm.utils import logger
 from vlm.evaluation.hf_evaluate.scorers import BLEUScorer, ROUGELScorer, METEORScorer
 from vlm.utils.helper import add_datetime_tag, chunkify
@@ -20,21 +27,24 @@ from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.regex_patterns import VQA_ANSWER_PATTERN
 
 
-def eval_report_generation_pycocoeval(preds: list, gts: list) -> dict[str, list] | None:
+def eval_report_generation_pycocoeval(preds: list, gts: list) -> tuple[dict, dict]:
+    """
+    Returns (aggregate_results, per_case_results).
+    per_case_results maps metric names to lists of per-sample scores (same order as preds/gts).
+    Failures are indicated by -1.0 in per_case_results and -1.0 in aggregate_results.
+    """
     assert len(preds) == len(gts)
     if not preds:
         raise ValueError("RG EVALUATION: received empty lists")
 
-    results = {}
+    n = len(preds)
+    aggregate = {}
+    per_case = {}
 
     bleu_scorer = Bleu(4)
     meteor_scorer = Meteor()
     rougel_scorer = Rouge()
     cider_scorer = Cider()
-
-    # Remove '\n' here as this will interfere Pycocoeval (specifically METEOR)
-    preds = [pred.replace("\n", " ") for pred in preds]
-    gts = [gt.replace("\n", " ") for gt in gts]
 
     # Put preds and gts into compatible format for Pycocoeval
     in_res = {i: [pred] for i, pred in enumerate(preds)}
@@ -42,47 +52,116 @@ def eval_report_generation_pycocoeval(preds: list, gts: list) -> dict[str, list]
 
     # === BLEU ===
     try:
-        (bleu_score_1, bleu_score_2, bleu_score_3, bleu_score_4), _ = bleu_scorer.compute_score(gts=in_gts,
-                                                                                                res=in_res,
-                                                                                                verbose=0)
+        (bleu_score_1, bleu_score_2, bleu_score_3, bleu_score_4), bleu_per_image = bleu_scorer.compute_score(
+            gts=in_gts, res=in_res, verbose=0
+        )
+        # bleu_per_image: list of 4 arrays, one per n-gram order
+        for order, (agg, per) in enumerate(
+            zip(
+                [bleu_score_1, bleu_score_2, bleu_score_3, bleu_score_4],
+                bleu_per_image,
+            ),
+            start=1,
+        ):
+            aggregate[f"bleu_score_{order}"] = agg
+            per_case[f"bleu_score_{order}"] = list(per)
     except Exception as e:
         logger.error(f"BLEU score calculation failed: {e}")
-        bleu_score_1 = bleu_score_2 = bleu_score_3 = bleu_score_4 = -1.0
+        for order in range(1, 5):
+            aggregate[f"bleu_score_{order}"] = -1.0
+            per_case[f"bleu_score_{order}"] = [-1.0] * n
 
     # === METEOR ===
     try:
-        meteor_score, _ = meteor_scorer.compute_score(gts=in_gts, res=in_res)
+        meteor_score, meteor_per_image = meteor_scorer.compute_score(gts=in_gts, res=in_res)
+        aggregate["meteor_score"] = meteor_score
+        per_case["meteor_score"] = list(meteor_per_image)
     except Exception as e:
         logger.error(f"METEOR score calculation failed: {e}")
         meteor_scorer.lock.release()
-        meteor_score = -1.0  # use -1 to indicate error
+        aggregate["meteor_score"] = -1.0
+        per_case["meteor_score"] = [-1.0] * n
 
     # === ROUGE ===
     try:
-        rougel_score, _ = rougel_scorer.compute_score(gts=in_gts, res=in_res)
-        rougel_score = rougel_score.item()
+        rougel_score, rougel_per_image = rougel_scorer.compute_score(gts=in_gts, res=in_res)
+        aggregate["rougel_score"] = rougel_score.item()
+        per_case["rougel_score"] = list(rougel_per_image)
     except Exception as e:
         logger.error(f"ROUGE-L score calculation failed: {e}")
-        rougel_score = -1.0  # use -1 to indicate error
+        aggregate["rougel_score"] = -1.0
+        per_case["rougel_score"] = [-1.0] * n
 
     # === CIDEr ===
     try:
-        cider_score, _ = cider_scorer.compute_score(gts=in_gts, res=in_res)
-        cider_score = cider_score.item()
+        cider_score, cider_per_image = cider_scorer.compute_score(gts=in_gts, res=in_res)
+        aggregate["cider_score"] = cider_score.item()
+        per_case["cider_score"] = list(cider_per_image)
     except Exception as e:
         logger.error(f"CIDEr score calculation failed: {e}")
-        cider_score = -1.0  # use -1 to indicate error
+        aggregate["cider_score"] = -1.0
+        per_case["cider_score"] = [-1.0] * n
 
-    results["bleu_score_1"] = bleu_score_1
-    results["bleu_score_2"] = bleu_score_2
-    results["bleu_score_3"] = bleu_score_3
-    results["bleu_score_4"] = bleu_score_4
+    return aggregate, per_case
 
-    results["meteor_score"] = meteor_score
-    results["rougel_score"] = rougel_score
-    results["cider_score"] = cider_score
 
-    return results
+def inference_ctrate_radbert(reports: list[str], ckpt_path: str | Path, hf_radbert_dir: str | Path):
+    df = pd.DataFrame({"reports": reports})
+    for col in ctrate_label_cols:
+        df[col] = 0
+
+    batch_size = 32
+    if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
+        batch_size = 96
+
+    # DataLoader
+    ds = CTDataset(df, len(ctrate_label_cols), ctrate_label_cols, hf_radbert_dir)
+    loader = DataLoader(
+        ds, sampler=SequentialSampler(ds), batch_size=batch_size, num_workers=4, pin_memory=True
+    )
+
+    # Model
+    model = RadBertClassifier(n_classes=len(ctrate_label_cols), hf_model_dir=hf_radbert_dir)
+
+    state_dict = torch.load(ckpt_path, map_location="cpu")
+    if "model.embeddings.position_ids" in state_dict:
+        del state_dict["model.embeddings.position_ids"]
+
+    model.load_state_dict(state_dict)
+    model = model.cuda().eval()
+
+    trainer = RadBertInference(
+        model,
+        {"test": loader},
+        len(ctrate_label_cols),
+        ctrate_label_cols,
+    )
+
+    preds = trainer.infer()  # ndarray [N, C]
+    result = pd.DataFrame(preds.astype(int), columns=ctrate_label_cols)
+    return result
+
+
+def eval_ctrate_radbert(preds: list, gts: list) -> tuple[dict, pd.DataFrame | None, pd.DataFrame | None]:
+    """
+    Returns (aggregate_metrics, pred_df, gt_df).
+    pred_df / gt_df are [N, C] DataFrames of binary class predictions; None when RadBERT is unavailable.
+    """
+    radbert_dir = os.getenv("VLM_CTRATE_RADBERT_DIR")
+    if radbert_dir is None:
+        logger.warning_main("The environment variable 'VLM_CTRATE_RADBERT_DIR' is not set. "
+                            "Cannot proceed with RadBERT inference for CT-RATE.")
+        return {}, None, None
+
+    radbert_dir = Path(radbert_dir)
+    radbert_ckpt = radbert_dir / "RadBertClassifier.pth"
+    hf_radbert_dir = radbert_dir / "RadBERT-RoBERTa-4m"
+
+    pred_df = inference_ctrate_radbert(preds, radbert_ckpt, hf_radbert_dir)
+    gt_df = inference_ctrate_radbert(gts, radbert_ckpt, hf_radbert_dir)
+
+    results = calculate_metrics(pred_df, gt_df)
+    return results, pred_df, gt_df
 
 
 def eval_report_generation(preds: list, gts: list) -> dict[str, list] | None:
@@ -204,6 +283,12 @@ def eval_vqa(preds: list, gts: list) -> dict[str, list] | None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Vision Language Model Evaluation")
 
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default="ctrate",
+        help="Name of the dataset."
+    )
     parser.add_argument(
         "--task_type",
         type=str,
@@ -336,20 +421,51 @@ def main(args):
     num_samples = len(inference_results)
     logger.info_main(f"Loaded {num_samples} samples")
 
-    preds, gts = [], []
+    image_ids, preds, gts = [], [], []
     for dic in inference_results:
+        image_ids.append(dic["image_id"])
         preds.append(dic["output_text_clean"])
         gts.append(dic["answer"])
 
-    results = eval_report_generation_pycocoeval(preds, gts)
+    # Remove '\n' here as this will interfere Pycocoeval (specifically METEOR)
+    preds = [pred.replace("\n", " ") for pred in preds]
+    gts = [gt.replace("\n", " ") for gt in gts]
+
+    aggregate_results = {}
+    nlp_aggregate, nlp_per_case = eval_report_generation_pycocoeval(preds, gts)
+    aggregate_results.update(nlp_aggregate)
+
+    radbert_pred_df = radbert_gt_df = None
+    if args.dataset_name == "ctrate":
+        radbert_metrics, radbert_pred_df, radbert_gt_df = eval_ctrate_radbert(preds, gts)
+        aggregate_results.update(radbert_metrics)
 
     logger.info_main("[METRICS] Evaluation Summary:")
-    for metric_name, value in results.items():
+    for metric_name, value in aggregate_results.items():
         logger.info_main(f"    > {metric_name}: {value:.4f}")
 
     metrics_path = inference_dir / "VLM_metrics.json"
-    save_json(results, metrics_path)
+    save_json(aggregate_results, metrics_path)
     logger.info_main(f"Saved metric results to {str(metrics_path)}")
+
+    # --- per-case NLP metrics ---
+    per_case_df = pd.DataFrame({"image_id": image_ids, "pred": preds, "gt": gts})
+    for metric_name, scores in nlp_per_case.items():
+        per_case_df[metric_name] = scores
+    per_case_path = inference_dir / "metrics_per_case.csv"
+    per_case_df.to_csv(per_case_path, index=False)
+    logger.info_main(f"Saved per-case NLP metrics to {str(per_case_path)}")
+
+    # --- RadBERT class predictions ---
+    if radbert_pred_df is not None:
+        radbert_out = pd.DataFrame({"image_id": image_ids})
+        for col in radbert_pred_df.columns:
+            radbert_out[f"pred_{col}"] = radbert_pred_df[col].values
+        for col in radbert_gt_df.columns:
+            radbert_out[f"gt_{col}"] = radbert_gt_df[col].values
+        radbert_path = inference_dir / "radbert_predictions.csv"
+        radbert_out.to_csv(radbert_path, index=False)
+        logger.info_main(f"Saved RadBERT class predictions to {str(radbert_path)}")
 
     log_banner("Successfully finished Evaluation")
 

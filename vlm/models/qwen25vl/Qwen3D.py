@@ -10,16 +10,17 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLModel,
     Qwen2_5_VLModelOutputWithPast,
     Qwen2_5_VLPreTrainedModel,
-    Qwen2_5_VLTextModel, KwargsForCausalLM, Qwen2_5_VLCausalLMOutputWithPast,
+    Qwen2_5_VLTextModel,
+    KwargsForCausalLM,
+    Qwen2_5_VLCausalLMOutputWithPast,
 )
 from transformers.processing_utils import Unpack
 from transformers.utils import (
-    is_torchdynamo_compiling, can_return_tuple,
+    is_torchdynamo_compiling, can_return_tuple
 )
 
 from vlm.configs.model.model_config import ModelConfig
 from vlm.utils.helper import get_config_from_plans
-from vlm.registries.vision_encoder_registry import vision_encoder_registry
 from vlm.utils import logger
 
 
@@ -35,7 +36,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         self.vision_adapter = None  # init in self.setup_vision_adapter()
         self.vision_encoder = None  # init in self.setup_vision_encoder()
         self.language_model = Qwen2_5_VLTextModel._from_config(config.text_config)
-        self.rope_deltas = None     # cache rope_deltas here
+        self.rope_deltas = None  # cache rope_deltas here
 
         self.model_cfg = ModelConfig(**model_cfg)
 
@@ -54,23 +55,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         )
 
     def setup_vision_encoder(self):
-        vision_encoder_path = self.model_cfg.vision_encoder.vision_encoder_path
-        plans_file = f"{vision_encoder_path}/plans.json"
-        checkpoint_paths = glob.glob(f"{vision_encoder_path}/fold_all/checkpoint_*.pth")
-        if len(checkpoint_paths) > 1:
-            checkpoint_path = [c for c in checkpoint_paths if "final" in c][0]
-            logger.info_main(f"Multiple VE checkpoints found, using final: {checkpoint_path}")
-            if len(checkpoint_path) == 0:
-                checkpoint_path = checkpoint_paths[0]
-                logger.info_main(f"Multiple VE checkpoints found, using first: {checkpoint_path}")
-        else:
-            checkpoint_path = checkpoint_paths[0]
-
-        config = get_config_from_plans(plans_file)
-        vision_encoder_class = vision_encoder_registry[self.model_cfg.vision_encoder.type]
-        self.vision_encoder = vision_encoder_class(
-            input_channels=1, output_channels=1, pretrained_weights_file=checkpoint_path, **config
-        )
+        self.vision_encoder = self.model_cfg.build_vision_encoder()
 
     def get_rope_index(
         self,
@@ -83,7 +68,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
 
         Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
         """
-        # spatial_merge_size = self.config.vision_config.spatial_merge_size
+        # spatial_merge_size = self.model_cfg.adapter.reduce_block
         # image_token_id = self.config.image_token_id
         video_token_id = self.config.video_token_id
         vision_start_token_id = self.config.vision_start_token_id
@@ -100,12 +85,14 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
                 dtype=input_ids.dtype,
                 device=input_ids.device,
             )
-            image_index, video_index = 0, 0 #
+            image_index, video_index = 0, 0  #
             attention_mask = attention_mask.to(total_input_ids.device)
             for i, input_ids in enumerate(total_input_ids):
                 input_ids = input_ids[attention_mask[i] == 1]
                 # image_nums, video_nums = 0, 0 #
-                vision_start_indices = torch.argwhere(input_ids == vision_start_token_id).squeeze(1)
+                vision_start_indices = torch.argwhere(input_ids == vision_start_token_id).squeeze(
+                    1
+                )
                 vision_tokens = input_ids[vision_start_indices + 1]
                 # image_nums = (vision_tokens == image_token_id).sum() #
                 video_nums = (vision_tokens == video_token_id).sum()
@@ -131,7 +118,9 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
 
                     text_len = ed - st
                     st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-                    llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
+                    llm_pos_ids_list.append(
+                        torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx
+                    )
 
                     # llm_grid_t, llm_grid_h, llm_grid_w = adapter_args["video_grid_thw"][video_index]
                     #
@@ -164,18 +153,26 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
                 if st < len(input_tokens):
                     st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
                     text_len = len(input_tokens) - st
-                    llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
+                    llm_pos_ids_list.append(
+                        torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx
+                    )
 
                 llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(3, -1)
-                position_ids[..., i, attention_mask[i] == 1] = llm_positions.to(position_ids.device)
+                position_ids[..., i, attention_mask[i] == 1] = llm_positions.to(
+                    position_ids.device
+                )
                 mrope_position_deltas.append(llm_positions.max() + 1 - len(total_input_ids[i]))
-            mrope_position_deltas = torch.tensor(mrope_position_deltas, device=input_ids.device).unsqueeze(1)
+            mrope_position_deltas = torch.tensor(
+                mrope_position_deltas, device=input_ids.device
+            ).unsqueeze(1)
             return position_ids, mrope_position_deltas
         else:
             if attention_mask is not None:
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
-                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1).to(attention_mask.device)
+                position_ids = (
+                    position_ids.unsqueeze(0).expand(3, -1, -1).to(attention_mask.device)
+                )
                 max_position_ids = position_ids.max(0, keepdim=False)[0].max(-1, keepdim=True)[0]
                 mrope_position_deltas = max_position_ids + 1 - attention_mask.shape[-1]
             else:
@@ -227,9 +224,13 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
             The time interval (in seconds) for each grid along the temporal dimension in the 3D position IDs.
         """
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
+        )
         output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -317,7 +318,6 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
             rope_deltas=self.rope_deltas,
         )
         return output if return_dict else output.to_tuple()
-    
 
 
 class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, GenerationMixin):

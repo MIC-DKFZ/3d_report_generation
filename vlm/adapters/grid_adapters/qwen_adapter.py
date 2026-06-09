@@ -1,54 +1,71 @@
+from typing import Tuple
+
+from einops import rearrange
 import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers.activations import QuickGELUActivation
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2RMSNorm
+from einops import rearrange
 from vlm.adapters.grid_adapters.base import GridAdapter
 
 
 class QwenAdapter(GridAdapter):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        r0, r1, r2 = self.reduce_block
-        input_size = self.vision_embed_dim * r0 * r1 * r2
-        hidden_size = self.vision_embed_dim * min(8, r0 * r1 * r2) # without min, this quickly becomes too large for e.g. 8cube. Original Qwen25VL uses blocksize**2=4
-        # the linear layer still can become too large for large blocks greater than 8cube. In such cases better use pooling?!
-        self.rmsnorm = Qwen2RMSNorm(input_size, eps=1e-6)
+    def __init__(self, hidden_dim=None, **kwargs):
+        super().__init__(**kwargs)
+        rT, rH, rW = self.reduce_block
+        input_dim = self.vision_embed_dim * rT * rH * rW
+        if hidden_dim is None:
+            hidden_dim = self.vision_embed_dim * min(8, rT * rH * rW)
+        self.rmsnorm = Qwen2RMSNorm(input_dim, eps=1e-6)
         self.adapter = nn.Sequential(
             nn.Linear(
-                input_size,
-                hidden_size,
+                input_dim,
+                hidden_dim,
             ),
             nn.GELU(),
-            nn.Linear(hidden_size, self.text_embed_dim)
+            nn.Linear(hidden_dim, self.text_embed_dim)
         )
 
     def forward(self, x: torch.Tensor, adapter_args: dict):
         # Convert input to float first
+        video_grid_thw = adapter_args['video_grid_thw']
+
         x = x.to(torch.bfloat16)
 
-        # Input shape is (batch_size, embedding_dim, sequence_length)
-        batch_size= x.shape[0]
-        embedding_dim = x.shape[1]
+        # cur_pos = 0
+        # TODO reshape input to expected length note that grid_thw is the grid
+        # after the reduceblock in the upstream code...
+        # TODO: also keep this in mind:
+        # if x.ndim == 3:  # if flattened tensor (from VE, not loaded embed), restructure to original grid
+        #     video_grid_thw = adapter_args["video_grid_thw"]
+        #     x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
 
-        if x.ndim == 3:  # if flattened tensor (from VE, not loaded embed), restructure to original grid
-            video_grid_thw = adapter_args["video_grid_thw"]
-            x = x.reshape(batch_size, embedding_dim, *(video_grid_thw[0] * torch.tensor(self.reduce_block).to(video_grid_thw.device)))
-        
-        r0, r1, r2 = self.reduce_block
-        # Use unfold to create reduce_block
-        x = x.unfold(2, r0, r0)
-        x = x.unfold(3, r1, r1)
-        x = x.unfold(4, r2, r2)
+        res = torch.Tensor().to(x.device, dtype=x.dtype)
+        for image_idx, grid_thw in enumerate(video_grid_thw):
+            # lenght = grid_thw[0] * grid_thw[1] * grid_thw[2]
+            # y = x[cur_pos:cur_pos+lenght]
+            y = x[image_idx]
 
-        # Reshape to combine all reduce_block
-        x = x.permute(0, 2, 3, 4, 1, 5, 6, 7)  # Move embedding_dim after spatial dims
-        # (B, T', H', W', C, rT, rH, rW) -> (B, T'*H'*W', C*rT*rH*rW)
-        x = x.reshape(batch_size, -1, embedding_dim * r0 * r1 * r2)
+            # (T*H*W, C) -> (C, T, H, W)
+            # y = y.permute(1, 0)  # (T*H*W, C) -> (C, T*H*W)
+            # rebuild blocks
+            # y = y.view(y.shape[0], grid_thw[0], grid_thw[1], grid_thw[2])
+            # Space-to-Depth rearrange (Depth as in Channel/hidden-dim, e.g. imagine a grid of cards which you now compress by stacking reduce block**3 cards onto each other)
+            y = rearrange(
+                y,
+                # 'b c (t p1) (h p2) (w p3) -> b (t h w) (c p1 p2 p3)',
+                'c (t p1) (h p2) (w p3) -> (t h w) (c p1 p2 p3)',
+                p1=self.reduce_block[0],
+                p2=self.reduce_block[1],
+                p3=self.reduce_block[2]
+            ).contiguous()
+            res = torch.cat((res, y), dim=0)
+            # cur_pos += lenght
+        x = res
 
         # Process through adapter
-        # x = x.reshape(-1, embedding_dim * self.reduce_block[0] * self.reduce_block[1] * self.reduce_block[2])
         x = self.rmsnorm(x)
         x = self.adapter(x)
 

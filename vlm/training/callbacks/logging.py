@@ -1,6 +1,9 @@
+import math
 import os
 import re
+from pathlib import Path
 from typing import Literal
+from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 import torch.distributed as dist
 import torch
@@ -304,8 +307,8 @@ class PrintEvalBatchCallback(TrainerCallback):
 class PycocoevalCallback(TrainerCallback):
     def __init__(
         self, eval_dataloader: DataLoader, max_new_tokens: int,
-            tokenizer=None, processor=None, eval_every_n_epochs=0.25, print_first_sample=True,
-            is_distributed=False
+            tokenizer=None, processor=None, eval_every_n_epochs=0.5, print_first_sample=True,
+            is_distributed=False, calculate_radbert_score=True
     ):
         self.eval_dataloader = eval_dataloader
         self.max_new_tokens = max_new_tokens
@@ -330,6 +333,11 @@ class PycocoevalCallback(TrainerCallback):
         self.meteor_scorer = Meteor()
         self.rougel_scorer = Rouge()
         self.cider_scorer = Cider()
+
+        self.calculate_radbert_score = calculate_radbert_score
+        if self.calculate_radbert_score:
+            from eval import eval_ctrate_radbert
+            self.radbert_scorer = eval_ctrate_radbert
 
 
     def on_evaluate(
@@ -446,6 +454,21 @@ class PycocoevalCallback(TrainerCallback):
                 logger.error(f"CIDEr score calculation failed: {e}")
                 cider_score = -1.0  # use -1 to indicate error
 
+            # === RadBert ===
+            if self.calculate_radbert_score:
+                try:
+                    radbert_score = self.radbert_scorer(preds=in_res, gts=in_gts)  # returns dict
+                except Exception as e:
+                    logger.error(f"radbert score calculation failed: {e}")
+                    radbert_score = {
+                        "accuracy": -1.0,
+                        "balanced_accuracy": -1.0,
+                        "precision": -1.0,
+                        "recall": -1.0,
+                        "f1": -1.0,
+                        "crg": -1.0
+                    }  # use -1 to indicate error
+
             # Log the BLEU scores
             logger.info_main(f"BLEU-1 score: {bleu_score_1:.4f}")
             logger.info_main(f"BLEU-2 score: {bleu_score_2:.4f}")
@@ -467,6 +490,12 @@ class PycocoevalCallback(TrainerCallback):
             # Log the CIDEr score
             logger.info_main(f"CIDEr score: {cider_score}")
             wandb.log({"cider_score": cider_score})
+
+            # Log RadBert
+            if self.calculate_radbert_score:
+                for key, value in radbert_score.items():
+                    logger.info_main(f"radbert_{key}: {value:.4f}")
+                    wandb.log({f"radbert_{key}": value})
 
             # === Log and optionally save best model ===
             if bleu_score_1 > self.best_bleu_score_1:
@@ -537,6 +566,79 @@ class LossLoggingCallback(TrainerCallback):
             # with open("custom_loss_log.txt", "a") as f:
             #     if 'loss' in logs:
             #         f.write(f"{global_step},{logs['loss']}\n")
+
+
+class WandbGroupedLRCallback(TrainerCallback):
+    """
+    Logs learning rates of different parameter groups.
+    """
+
+    def on_log(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        logs=None,
+        **kwargs,
+    ):
+        if state.is_world_process_zero and wandb.run is not None:
+            optimizer: Optimizer = kwargs["optimizer"]
+
+            named_lrs = {}
+            for param_group in optimizer.param_groups:
+                module_name = param_group["name"].removesuffix("_DECAY").removesuffix("_NO")
+                # It's ok if the 'NO_DECAY' overwrites the 'DECAY' learning rate of the same module or vice versa
+                # because they have the same learning rate
+                named_lrs[module_name] = param_group["lr"]
+
+            learning_rates = {f"lr/{module_name}": loss for module_name, loss in named_lrs.items()}
+
+            # Log custom metric(s) to WandB
+            wandb.log({**learning_rates, "train/global_step": state.global_step})
+
+
+class TerminateOnNaNLossCallback(TrainerCallback):
+    def __init__(self, threshold: int = 3, filename: str = "TRAINING_FAILED.txt"):
+        self.threshold = threshold
+        self.filename = filename
+        self.bad_value_counter = 0
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None:
+            return
+
+        current_loss = logs.get("loss")
+        if current_loss is None:
+            return
+
+        is_bad_value = (
+                math.isnan(current_loss) or
+                math.isinf(current_loss) or
+                current_loss == 0.0
+        )
+
+        if is_bad_value:
+            self.bad_value_counter += 1
+        else:
+            self.bad_value_counter = 0
+
+        if self.bad_value_counter >= self.threshold:
+            file_path = Path(args.output_dir, self.filename)
+            try:
+                with open(file_path, "w") as f:
+                    f.write("Status: ABORTED\n")
+                    f.write(f"Reason: Loss instability detected for {self.threshold} consecutive logs.\n")
+                    f.write(f"Final Value: {current_loss}\n")
+                    f.write(f"Global Step: {state.global_step}\n")
+
+                logger.error_main(f"\nABORTING: Crash report written to: {file_path}")
+            except Exception as e:
+                logger.error_main(f"ABORTING: Could not write crash report: {e}")
+
+            raise RuntimeError(
+                f"Training aborted! Loss was {current_loss} for {self.threshold} consecutive logs. "
+                f"See {file_path} for details."
+            )
 
 
 class WandbCustomLoggingCallback(TrainerCallback):
