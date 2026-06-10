@@ -19,7 +19,8 @@ from vlm.data.datasets import (
         MerlinDatasetRetrieval,
         MerlinDatasetRetrievalWithImage,
         CTRATEDatasetRetrieval,
-        CTRATEDatasetRetrievalWithImage
+        CTRATEDatasetRetrievalWithImage,
+        ToothFairy4Dataset,
 )
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
@@ -580,6 +581,8 @@ def train_val_data_from_config(cfg: RunConfig):
                 dataset_class = MerlinDatasetRetrieval
         else:
             dataset_class = MerlinDataset
+    elif cfg.data.dataset_name == "toothfairy4":
+        dataset_class = ToothFairy4Dataset
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
 
