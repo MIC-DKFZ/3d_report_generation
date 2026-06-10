@@ -76,11 +76,22 @@ def eval_report_generation_pycocoeval(preds: list, gts: list) -> tuple[dict, dic
         meteor_score, meteor_per_image = meteor_scorer.compute_score(gts=in_gts, res=in_res)
         aggregate["meteor_score"] = meteor_score
         per_case["meteor_score"] = list(meteor_per_image)
+        # Collect raw per-sentence statistics strings so calc_statistics.py can
+        # bootstrap the *corpus-level* METEOR by resampling stats and re-running EVAL,
+        # rather than resampling per-sentence scores (which gives CI for a different quantity).
+        meteor_scorer.lock.acquire()
+        meteor_stats = [
+            meteor_scorer._stat(in_res[i][0], in_gts[i])
+            for i in sorted(in_gts.keys())
+        ]
+        meteor_scorer.lock.release()
+        per_case["meteor_stats"] = meteor_stats
     except Exception as e:
         logger.error(f"METEOR score calculation failed: {e}")
         meteor_scorer.lock.release()
         aggregate["meteor_score"] = -1.0
         per_case["meteor_score"] = [-1.0] * n
+        per_case["meteor_stats"] = [""] * n
 
     # === ROUGE ===
     try:
