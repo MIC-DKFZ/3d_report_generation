@@ -111,6 +111,9 @@ class QwenVLModel(AbstractVLMModel):
         batch = self.processor(
             text=texts,
             num_vision_tokens=num_vision_tokens,
+            do_truncation=self.do_truncation,
+            truncate_after=self.truncate_after,
+            truncate_at=self.truncate_at,
             return_tensors="pt",
             padding=True,
             padding_side="right",

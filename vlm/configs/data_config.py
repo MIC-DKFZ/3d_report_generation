@@ -61,6 +61,15 @@ class DataConfig(ConfigBase):
     )
     sentence_shuffle_p: float = Field(0.5, description="Probability of randomly shuffling the order of sentences.")
 
+    do_truncation: bool = Field(False, description="Whether to truncate tokenized text inputs.")
+    truncate_after: str | None = Field(
+        None, description="Text marker after which tokenized inputs may be truncated."
+    )
+    truncate_at: int | None = Field(
+        None, description="Number of tokens to keep after the truncation marker."
+    )
+
+
     is_stacked_2d_embedding: bool = Field(False, description="Set to True for vision encoders such as 'Curia' "
                                                              "where the input embeddings are shaped "
                                                              "(n_slices, class_token + n_patch_tokens, embed_dim).")
