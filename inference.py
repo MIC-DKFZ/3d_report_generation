@@ -9,7 +9,6 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from vlm.configs.run_config import RunConfig
-from vlm.data.datasets import AMOSMMDataset, CTRATEDataset
 from vlm.data.datasets import (
         AMOSMMDataset,
         CTRATEDataset,
@@ -20,7 +19,8 @@ from vlm.data.datasets import (
         CTRATEDatasetRetrievalWithImage,
         BonnDataset,
         BonnDatasetRetrieval,
-        BonnDatasetRetrievalWithImage
+        BonnDatasetRetrievalWithImage,
+        ToothFairy4Dataset,
 )
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from vlm.models.abstract_vlm import AbstractVLMModel
@@ -369,7 +369,12 @@ def main(args, is_main=True):
             split=cfg.eval.split,
             vision_encoder_patch_size=vision_encoder_patch_size,
         )
-
+    elif cfg.data.dataset_name == "toothfairy4":
+        test_dataset = ToothFairy4Dataset(
+            cfg=cfg,
+            split=cfg.eval.split,
+            vision_encoder_patch_size=vision_encoder_patch_size,
+        )
     else:
         raise ValueError(f"Unsupported dataset name: {cfg.data.dataset_name}")
 
