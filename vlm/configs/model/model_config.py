@@ -10,7 +10,7 @@ from vlm.configs.model.vision_encoder_config import VisionEncoderClassConfig
 from vlm.vision_encoders.base import VisionEncoderBase
 
 class ModelConfig(ConfigBase):
-    model_type: Literal["owl", "qwen", "qwen3"] = Field(..., description="Type of VLM model to train.")
+    model_type: str = Field(..., description="Type of VLM model to train.")
     model_id: str | None = Field(None, description="Model ID or path.")
 
     vision_encoder: VisionEncoderClassConfig | None = Field(

@@ -349,7 +349,7 @@ class MedicalImageDataset(Dataset, ABC):
         system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
 
         # TODO check if I can use the same template
-        if self.model_type in ["qwen", "qwen3"]:
+        if "qwen" in self.model_type.lower():
             user_message = {
                 "role": "user",
                 "content": ([{"type": "video"}] if not self.text_only else []) + [{"type": "text", "text": question}]
@@ -929,7 +929,7 @@ Output a report in the following format:
 Now analyze the following:
         """
 
-        if self.model_type in ["qwen", "qwen3"]:
+        if "qwen" in self.model_type.lower():
             user_message = {
                 "role": "user",
                 "content": [{"type": "text", "text": question_p1}] + ([{"type": "video"}] if not self.text_only else [])

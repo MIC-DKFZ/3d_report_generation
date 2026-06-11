@@ -37,10 +37,6 @@ class EvaluationConfig(ConfigBase):
                                                              "If None, use half the number of CPUs in the system.")
     calculate_radbert_score: bool = Field(False, description="Additionally calculate the radbert metrics on evaluation.")
 
-    dataset_json_path: str | None = Field(
-        None, description="Path to the test dataset JSON file."
-    )
-
     @model_validator(mode="after")
     def check_inference_eval(self):
         if self.run_eval and not self.run_inference:

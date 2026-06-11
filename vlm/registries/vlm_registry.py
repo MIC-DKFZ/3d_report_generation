@@ -70,7 +70,15 @@ if _use_qwen25(TRANSFORMERS_VERSION):
         model_class=QwenVLModel
     )
 else:
-    VLM_REGISTRY["qwen3"] = VLMConfig(
+    VLM_REGISTRY["Qwen3-VL-2B"] = VLMConfig(
         model_id="Qwen/Qwen3-VL-2B-Instruct",
+        model_class=QwenVLModel
+    )
+    VLM_REGISTRY["Qwen3-VL-4B"] = VLMConfig(
+        model_id="Qwen/Qwen3-VL-4B-Instruct",
+        model_class=QwenVLModel
+    )
+    VLM_REGISTRY["Qwen3-VL-8B"] = VLMConfig(
+        model_id="Qwen/Qwen3-VL-8B-Instruct",
         model_class=QwenVLModel
     )
