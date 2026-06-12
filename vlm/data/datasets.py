@@ -72,10 +72,13 @@ class MedicalImageDataset(Dataset, ABC):
     def __init__(
         self,
         cfg: RunConfig,
+        split: Literal["train", "val", "test"],
         vision_encoder_patch_size: Tuple[int, ...],
-        split: Literal["train", "val", "test"] = "train",
+        n_samples: int | None = None,
     ):
         super().__init__()
+
+        self.n_samples = n_samples
 
         self.vision_input_path = Path(cfg.data.vision_input_path)
         self.vision_input_type = cfg.data.vision_input_type
@@ -88,19 +91,16 @@ class MedicalImageDataset(Dataset, ABC):
         self.vision_encoder_patch_size = vision_encoder_patch_size
         self.is_stacked_2d_embedding = cfg.data.is_stacked_2d_embedding
         self.reduce_to_n_slices = cfg.data.reduce_to_n_slices
+
         if self.split == "train":
-            self.n_samples = cfg.data.n_train_samples
             self.dataset_json_path = Path(cfg.data.train_dataset_json_path)
             self.do_sentence_shuffle = cfg.data.do_sentence_shuffle
         elif self.split == "val":
-            self.n_samples = cfg.data.n_val_samples
             self.dataset_json_path = Path(cfg.data.val_dataset_json_path)
             self.do_sentence_shuffle = False
         elif self.split == "test":
-            # TODO: which dataset_json_path to add here..?
-            self.n_samples = cfg.eval.n_samples
-            self.do_sentence_shuffle = False
             self.dataset_json_path = Path(cfg.eval.dataset_json_path)
+            self.do_sentence_shuffle = False
 
         logger.info_main(
             f"Using vision_input_path for {self.__class__.__name__} ({self.split}): {self.vision_input_path}"

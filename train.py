@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -32,8 +33,8 @@ from vlm.registries.vlm_registry import VLM_REGISTRY
 from vlm.utils import logger
 from vlm.utils.ddp_utils import setup_ddp
 from vlm.utils.helper import seed_everything, load_config_file, \
-    is_main_process, count_parameters
-from vlm.utils.load_and_save_files import save_json, save_yaml
+    is_main_process, count_parameters, resolve_ckpt_dir_in_run_dir
+from vlm.utils.load_and_save_files import load_yaml, save_json, save_yaml
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.memory_utils import (
     aggressive_cleanup,
@@ -41,6 +42,35 @@ from vlm.utils.memory_utils import (
     setup_memory_efficient_training,
 )
 from vlm.utils.paths import VLM_CONFIG_DIR
+
+
+FINAL_CONFIG_FILENAME = "final_config.yml"
+INPUT_CONFIG_FILENAME = "input_config.yml"
+TRAIN_LOG_FILENAME = "train.log"
+ADAPTER_STATS_FILENAME = "adapter_stats.json"
+WANDB_CONFIG_BACKUP_FILENAME = "config_backup.json"
+
+
+@dataclass(frozen=True)
+class TrainRuntimeArgs:
+    continue_training: bool
+    continue_training_run_dir: Path | None
+
+
+def load_run_config_from_run_dir(run_dir: str | Path) -> RunConfig:
+    run_dir = Path(run_dir)
+    final_config_path = run_dir / FINAL_CONFIG_FILENAME
+    if not final_config_path.is_file():
+        raise FileNotFoundError(f"No {FINAL_CONFIG_FILENAME} found in run directory: {run_dir}")
+
+    cfg_dict = load_yaml(final_config_path)["run"]
+    cfg = RunConfig.model_validate(cfg_dict)
+
+    # The resume directory passed on the CLI is the source of truth;
+    # the saved config may contain an output_dir from a previous filesystem location.
+    cfg.general.output_dir = str(run_dir)
+
+    return cfg
 
 
 class UnifiedVLMTrainer:
@@ -124,13 +154,14 @@ class UnifiedVLMTrainer:
             output_dir=self.cfg.general.output_dir,
         )
 
-    def train(self, train_dataset, val_dataset):
+    def train(self, train_dataset, val_dataset, callback_val_dataset=None):
         """
         Main training function that trains the VLM model.
 
         Args:
             train_dataset: Training dataset
-            val_dataset: Validation dataset
+            val_dataset: Validation dataset used by the trainer for eval loss.
+            callback_val_dataset: Validation dataset used by custom generation callbacks.
         """
         if self.is_distributed:
             dist.barrier()
@@ -254,9 +285,10 @@ class UnifiedVLMTrainer:
         ]
 
         if val_dataset is not None:
+            callback_eval_dataset = callback_val_dataset if callback_val_dataset is not None else val_dataset
             if self.is_distributed:
                 sampler = EvalDistributedSampler(
-                    val_dataset,
+                    callback_eval_dataset,
                     num_replicas=self.world_size,
                     rank=self.rank,
                     shuffle=False
@@ -264,10 +296,14 @@ class UnifiedVLMTrainer:
             else:
                 sampler = None
 
-            eval_dataloader = DataLoader(val_dataset, batch_size=self.cfg.trainer.per_device_eval_batch_size, shuffle=False,
-                                         sampler=sampler,
-                                         collate_fn=self.vlm_model.collate_fn,
-                                         num_workers=self.cfg.eval.num_dataloader_workers)
+            eval_dataloader = DataLoader(
+                callback_eval_dataset,
+                batch_size=self.cfg.eval.per_device_batch_size,
+                shuffle=False,
+                sampler=sampler,
+                collate_fn=self.vlm_model.collate_fn,
+                num_workers=self.cfg.eval.num_dataloader_workers
+            )
 
             callbacks.append(
                 # PrintEvalBatchCallback(  # type: ignore[arg-type]
@@ -424,10 +460,10 @@ def setup_config_and_logging() -> RunConfig:
     if is_main_process():
         os.makedirs(cfg.general.output_dir, exist_ok=True)
         shutil.copyfile(
-            cfg.general.train_config, os.path.join(cfg.general.output_dir, "input_config.yml")
+            cfg.general.train_config, os.path.join(cfg.general.output_dir, INPUT_CONFIG_FILENAME)
         )
 
-    log_file_path = os.path.join(cfg.general.output_dir, "train.log")
+    log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
     setup_logger(log_file_path)  # Setup logger on every rank
 
     logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
@@ -439,7 +475,7 @@ def setup_config_and_logging() -> RunConfig:
     # Log the final configuration if we are not continuing training
     if is_main_process():
         if not cfg.general.continue_training:
-            final_config_path = os.path.join(cfg.general.output_dir, "final_config.yml")
+            final_config_path = os.path.join(cfg.general.output_dir, FINAL_CONFIG_FILENAME)
             save_yaml(
                 {
                     "command": " ".join(sys.argv),
@@ -487,7 +523,9 @@ def ensure_wandb_config_logging():
 
                 # Save config to a backup JSON file in the run directory for extra safety
                 if hasattr(wandb.run, "dir") and wandb.run.dir:
-                    config_backup_path = os.path.join(wandb.run.dir, "config_backup.json")
+                    config_backup_path = os.path.join(
+                        wandb.run.dir, WANDB_CONFIG_BACKUP_FILENAME
+                    )
                     try:
                         save_json(config_dict, config_backup_path, default=str)
                         logger.info_main(f"Config backup saved to: {config_backup_path}")
@@ -551,10 +589,7 @@ def create_comprehensive_wandb_config(
 
 
 def train_val_data_from_config(cfg: RunConfig):
-    if cfg.model.vision_encoder:
-        vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
-    else:
-        vision_encoder_patch_size = None
+    vision_encoder_patch_size = cfg.model.vision_encoder.patch_size if cfg.model.vision_encoder else None
 
     do_validation = cfg.data.val_dataset_json_path is not None
 
@@ -597,6 +632,15 @@ def train_val_data_from_config(cfg: RunConfig):
         split="val",
         vision_encoder_patch_size=vision_encoder_patch_size,
     ) if do_validation else None
+
+    callback_val_dataset = None
+    if val_dataset:
+        callback_val_dataset = dataset_class(  # type: ignore
+            cfg=cfg,
+            split="val",
+            n_samples=cfg.eval.callback_n_samples,
+            vision_encoder_patch_size=vision_encoder_patch_size,
+        )
 
     if cfg.data.embedding_constant is not None:
         logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")

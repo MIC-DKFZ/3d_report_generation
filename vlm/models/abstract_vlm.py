@@ -32,6 +32,7 @@ class AbstractVLMModel(ABC):
                  local_files_only=True,
                  device=None):
         # init in setup_model()
+        self._model_str = None
         self.model: PreTrainedModel | None = None
         self.tokenizer = None
         self.processor = None
@@ -171,13 +172,14 @@ class AbstractVLMModel(ABC):
                 raise ValueError(f"Unknown mode in {TrainableModuleConfig.__name__}: {mode}")
 
     @staticmethod
-    def load_from_run_dir(run_dir: str | Path, mode: Literal["best", "final"] = "best") -> tuple[AbstractVLMModel, RunConfig, Path]:
+    def load_from_run_dir(run_dir: str | Path, mode: Literal["best_metric", "best", "final"] = "final") -> tuple[AbstractVLMModel, RunConfig, Path]:
         """
         Load a trained VLM model from a run directory.
 
         Args:
             run_dir: Path to the run directory containing checkpoint subfolders and the final configuration file.
             mode: Which checkpoint to restore.
+                - "best_metric": Load the checkpoint with the custom score (located in 'best_model-*').
                 - "best": Load the checkpoint with the best validation score.
                 - "final": Load the last saved checkpoint after training.
 

@@ -311,16 +311,11 @@ def main(args, is_main=True):
         # This remains at the end so explicit CLI args take absolute final precedence
         cfg.merge_subconfigs_with_cli_args()
 
-    if cfg.model.vision_encoder:
-        vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
-    else:
-        vision_encoder_patch_size = None
+    vision_encoder_patch_size = cfg.model.vision_encoder.patch_size if cfg.model.vision_encoder else None
 
     logger.info_main(f"Using {cfg.eval.split} split for inference.")
     cfg.data.do_sentence_shuffle = False
     cfg.data.do_transforms = False
-    if cfg.eval.split == "val":
-        cfg.data.n_val_samples = cfg.eval.n_samples
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
             cfg=cfg,
@@ -336,10 +331,11 @@ def main(args, is_main=True):
         else:
             ctrate_dataset_class = CTRATEDataset
 
-        test_dataset = ctrate_dataset_class(
+        test_dataset = ctrate_dataset_class(  # type: ignore
             cfg=cfg,
             split=cfg.eval.split,
-            vision_encoder_patch_size=vision_encoder_patch_size,
+            n_samples=None,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
     elif cfg.data.dataset_name == "merlin":
         if cfg.data.retrieval_json_path is not None:
@@ -350,10 +346,11 @@ def main(args, is_main=True):
         else:
             merlin_dataset_class = MerlinDataset
 
-        test_dataset = merlin_dataset_class(
+        test_dataset = merlin_dataset_class(  # type: ignore
             cfg=cfg,
             split=cfg.eval.split,
-            vision_encoder_patch_size=vision_encoder_patch_size,
+            n_samples=None,
+            vision_encoder_patch_size=vision_encoder_patch_size
         )
     elif cfg.data.dataset_name == "bonn":
         if cfg.data.retrieval_json_path is not None:
@@ -398,7 +395,7 @@ def main(args, is_main=True):
     logger.remove()
 
     # Save configuration used for inference
-    # Currenlty mostly dataset related configs could change - e.g. to evaluate OOD data etc
+    # Currently mostly dataset related configs could change - e.g. to evaluate OOD data etc
     if is_main_process():
         final_config_path = os.path.join(inference_output_dir, "final_config.yml")
         save_yaml(
