@@ -266,9 +266,6 @@ class MedicalImageDataset(Dataset, ABC):
     # def modify_sample(self, result: Dict) -> Dict:
     #     return result
 
-    def modify_input(self, formatted_qa, formatted_qa_prompt_only, result):
-        return formatted_qa, formatted_qa_prompt_only
-
     def __getitem__(self, index):
         sample = self.samples[index]
 
@@ -291,13 +288,10 @@ class MedicalImageDataset(Dataset, ABC):
             system_text=sample["system_text"],
         )
 
-        formatted_qa, formatted_qa_prompt_only = self.modify_input(formatted_qa, formatted_qa_prompt_only, result)
-
         result["formatted_qa"] = formatted_qa
         result["formatted_qa_prompt_only"] = formatted_qa_prompt_only
 
         if not self.text_only:
-            # Load embedding
             result = self._load_embeddings(sample, result)
         else:
             result["vision_input"] = None
