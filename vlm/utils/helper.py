@@ -95,6 +95,16 @@ def load_config_file(config_path: str | Path) -> dict:
     return config_file
 
 
+def get_hf_hub_cache_dir() -> str:
+    if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
+        cache_dir = os.getenv("HF_HUB_CACHE")
+        if cache_dir is None:
+            raise EnvironmentError("HF_HUB_CACHE must be set when running in a cluster environment.")
+        return cache_dir
+
+    return os.path.expanduser("~/.cache/huggingface/hub")
+
+
 def get_config_from_plans(plans_file_path):
     # see here https://git.dkfz.de/mic/personal/group4/culrich/nnunet_finetuning/-/blob/fine_tuning_rocket/nnunetv2/training/nnUNetTrainer/variants/pretraining/eva_pretrained.py?ref_type=heads#L167
 
@@ -267,10 +277,10 @@ def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "bes
     if not run_dir.exists():
         raise FileNotFoundError(f"The specified run directory does not exist: {run_dir}")
     if mode == "best_metric":
-        our_best_ckpt_dir = Path(run_dir, "best_model")
-        if not our_best_ckpt_dir.is_dir():
-            raise FileNotFoundError(f"No 'best_model' directory found in {run_dir}")
-        ckpt_dir = our_best_ckpt_dir
+        our_best_ckpt_dir = [_ for _ in run_dir.glob("best_model-*")]
+        if len(our_best_ckpt_dir) != 1 or not our_best_ckpt_dir[0].is_dir():
+            raise FileNotFoundError(f"Expected exactly one 'best_model-*' directory in {run_dir}")
+        ckpt_dir = our_best_ckpt_dir[0]
     else:
         ckpt_dirs = [d for d in run_dir.glob("checkpoint-*") if d.is_dir()]
         if not ckpt_dirs:
