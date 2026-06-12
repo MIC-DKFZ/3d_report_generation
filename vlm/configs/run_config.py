@@ -52,8 +52,8 @@ class RunConfig(ConfigBase):
             # 'dataset_json_path' can only be None if split='test' and no dataset JSON was provided.
             # RunConfig.set_default_eval_dataset_json_path() assigns the validation dataset JSON
             # when split='val' and no path is specified.
-            if self.eval.split == "test" and self.eval.dataset_json_path is None:
-                raise ValueError("The 'dataset_json' has to be specified if 'split=test'")
+            if self.eval.dataset_json_path is None:
+                raise ValueError("The 'dataset_json' has to be specified if 'run_eval=True'")
             if not Path(self.eval.dataset_json_path).is_file():
                 raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.eval.dataset_json_path}")
         return self

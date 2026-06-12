@@ -93,6 +93,14 @@ class DataConfig(ConfigBase):
     )
 
     @model_validator(mode="after")
+    def maybe_set_val_dataset_json_path_to_none(self):
+        if isinstance(self.val_dataset_json_path, str):
+            normalized_path = self.val_dataset_json_path.strip().lower()
+            if normalized_path in {"none", "null"}:
+                self.val_dataset_json_path = None
+        return self
+
+    @model_validator(mode="after")
     def validate_vision_input_modifiers(self):
         if self.text_only and self.embedding_constant is not None:
             raise ValueError(f"'text_only' and 'embedding_constant' cannot be used together.")
