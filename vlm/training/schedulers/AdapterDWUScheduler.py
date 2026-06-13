@@ -122,7 +122,7 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
 
         # Guard against resume mismatches: when stage transitions skip intermediate stages,
         # the existing optimizer can carry stale param groups from an earlier stage.
-        if optimizer is not None and len(optimizer.param_groups) != len(param_groups):
+        if not should_rebuild_optimizer and (optimizer is not None and len(optimizer.param_groups) != len(param_groups)):
             logger.warning_main(
                 "[SCHEDULER] Rebuilding optimizer due to param-group mismatch "
                 f"(current={len(optimizer.param_groups)}, expected={len(param_groups)})."
