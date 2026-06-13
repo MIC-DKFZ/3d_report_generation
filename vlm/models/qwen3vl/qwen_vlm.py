@@ -14,6 +14,11 @@ class QwenVLModel(AbstractVLMModel):
         self._model_str = "qwen"
         self.batch_count = 0
 
+        self.forbidden_name_patterns_for_wd.extend(
+            # Add LoRA layers and the token embedding layer (which is also the LM head) to forbidden name patterns.
+            ["lora", "embed_tokens", "lm_head"]
+        )
+
     @property
     def module_attr_map(self) -> dict[str, str]:
         return {
@@ -102,9 +107,12 @@ class QwenVLModel(AbstractVLMModel):
         batch = self.processor(
             text=texts,
             num_vision_tokens=num_vision_tokens,
+            do_truncation=self.do_truncation,
+            truncate_after=self.truncate_after,
+            truncate_at=self.truncate_at,
             return_tensors="pt",
             padding=True,
-            padding_side="right"
+            padding_side="right",
         )
 
         batch_prompt_only = self.processor(
@@ -112,7 +120,7 @@ class QwenVLModel(AbstractVLMModel):
             num_vision_tokens=num_vision_tokens,
             return_tensors="pt",
             padding=True,
-            padding_side="left"
+            padding_side="left",
         )
 
         labels = batch["input_ids"].clone()
