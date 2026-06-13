@@ -65,7 +65,7 @@ VLM_REGISTRY: dict[str, VLMConfig] = {
 }
 
 if _use_qwen25(TRANSFORMERS_VERSION):
-    VLM_REGISTRY["qwen"] = VLMConfig(
+    VLM_REGISTRY["Qwen25-VL-3B"] = VLMConfig(
         model_id="Qwen/Qwen2.5-VL-3B-Instruct",
         model_class=QwenVLModel
     )
