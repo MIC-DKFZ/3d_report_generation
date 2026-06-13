@@ -387,7 +387,7 @@ def get_class_from_registry(class_name: str, registry: list[type]) -> type | Non
     return None
 
 
-def find_sublist(self, lis: list, sub: list):
+def find_sublist(lis: list, sub: list):
     m = len(sub)
     for i in range(len(lis) - m + 1):
         if lis[i:i + m] == sub:
