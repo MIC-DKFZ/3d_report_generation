@@ -1,4 +1,3 @@
-from typing import Literal
 from pydantic import Field
 
 from vlm.configs.base import ConfigBase
@@ -23,5 +22,3 @@ class GeneralConfig(ConfigBase):
     output_dir: str | None = Field(None, description="Directory to save model outputs.")
     wandb_project: str = Field("mic-rocket-vlm", description="WandB project name.")
     local_files_only: bool = Field(False, description="Use only local files for Hugging Face from_pretrained.")
-    continue_training: bool = Field(False, description="Training will continue from state defined in `output_dir`.")
-    continue_training_mode: Literal["best_metric", "best", "final"] = Field("final", description="Which checkpoint to load to continue training.")

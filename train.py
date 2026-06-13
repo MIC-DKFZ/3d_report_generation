@@ -78,6 +78,7 @@ class UnifiedVLMTrainer:
         self,
         vlm_model: AbstractVLMModel,
         cfg: RunConfig,
+        runtime_args: TrainRuntimeArgs,
     ):
         """
         Initialize the unified VLM trainer.
@@ -89,6 +90,7 @@ class UnifiedVLMTrainer:
         self.vlm_model: AbstractVLMModel = vlm_model
         self.trainer: VLMSFTTrainer | None = None
         self.cfg: RunConfig = cfg
+        self.runtime_args = runtime_args
 
         (
             self.is_distributed,
@@ -172,7 +174,7 @@ class UnifiedVLMTrainer:
             log_memory_usage("Before Training Setup")
 
         # Setup model, processor and tokenizer
-        if not self.cfg.general.continue_training:
+        if not self.runtime_args.continue_training:
             model = self.vlm_model.setup_model()
             # Apply trainable parameter configs and possibly add PEFT adapter layers
             self.vlm_model.apply_trainable_config()
@@ -332,7 +334,7 @@ class UnifiedVLMTrainer:
         if (
             self.cfg.general.init_optimizer_scheduler_from_checkpoint
             and self.cfg.general.init_from_checkpoint_dir
-            and not self.cfg.general.continue_training
+            and not self.runtime_args.continue_training
         ):
             init_opt_scheduler_ckpt = self.cfg.general.init_from_checkpoint_dir
 
@@ -358,24 +360,7 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training")
 
-        if self.cfg.general.continue_training:
-            if self.cfg.general.continue_training_mode == "final":
-                self.trainer.train(resume_from_checkpoint=True)
-            elif self.cfg.general.continue_training_mode == "best":
-                self.trainer.train(
-                    resume_from_checkpoint=os.path.join(
-                        self.cfg.general.output_dir, "best_model"
-                    )
-                )
-            elif self.cfg.general.continue_training_mode == "best_metric":
-                raise NotImplementedError(
-                    "Currently not supported to continue from best metric!"
-                    " Implement yourselve or just set `best_metric` to "
-                    "`best_model`."
-                )
-
-        else:
-            self.trainer.train()
+        self.trainer.train(resume_from_checkpoint=self.runtime_args.continue_training)
 
         if is_main_process():
             log_memory_usage("After Training")
@@ -418,16 +403,15 @@ class UnifiedVLMTrainer:
         log_banner("Successfully finished Training")
 
 
-def setup_config_and_logging() -> RunConfig:
+def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
     args_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
 
     args_parser.add_argument(
         "--train_config",
         type=str,
-        required=True,
+        default=None,
         help="Path to config file (YAML or JSON), relative to the 'VLM_CONFIG_DIR' environment variable",
     )
-
     args_parser.add_argument(
         "--add_base_configs",
         type=str,
@@ -436,8 +420,52 @@ def setup_config_and_logging() -> RunConfig:
         help="Optional list of base config files",
     )
 
+    args_parser.add_argument(
+        "--continue_training",
+        action="store_true",
+        help="Continue training from an existing run.",
+    )
+    args_parser.add_argument(
+        "--continue_training_run_dir",
+        type=Path,
+        default=None,
+        help="Run directory to continue training from.",
+    )
+
     args, _ = args_parser.parse_known_args()
 
+    if args.continue_training and args.continue_training_run_dir is None:
+        args_parser.error("--continue_training_run_dir is required when --continue_training is set.")
+    if not args.continue_training and args.continue_training_run_dir is not None:
+        args_parser.error("--continue_training_run_dir can only be used with --continue_training.")
+    if not args.continue_training and args.train_config is None:
+        args_parser.error("--train_config is required unless --continue_training is set.")
+
+    runtime_args = TrainRuntimeArgs(
+        continue_training=args.continue_training,
+        continue_training_run_dir=args.continue_training_run_dir,
+    )
+
+    if runtime_args.continue_training:
+        assert runtime_args.continue_training_run_dir is not None, (
+            "argparse validation should require --continue_training_run_dir with --continue_training"
+        )
+        cfg = load_run_config_from_run_dir(runtime_args.continue_training_run_dir)
+
+        log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
+        setup_logger(log_file_path)  # Setup logger on every rank
+
+        logger.info_main(f"Continuing training from run directory: {cfg.general.output_dir}")
+
+        cfg.merge_subconfigs_with_cli_args()
+        cfg.general.output_dir = str(runtime_args.continue_training_run_dir)
+        cfg.apply_conditional_resets()
+
+        return cfg, runtime_args
+
+    assert args.train_config is not None, (
+        "argparse validation should require --train_config unless --continue_training is set"
+    )
     train_config_path = Path(VLM_CONFIG_DIR, args.train_config)
     if not train_config_path.exists():
         raise ValueError(f"The provided config file does not exist: {train_config_path}")
@@ -473,20 +501,18 @@ def setup_config_and_logging() -> RunConfig:
     cfg.merge_subconfigs_with_cli_args()
     cfg.apply_conditional_resets()
 
-    # Log the final configuration if we are not continuing training
     if is_main_process():
-        if not cfg.general.continue_training:
-            final_config_path = os.path.join(cfg.general.output_dir, FINAL_CONFIG_FILENAME)
-            save_yaml(
-                {
-                    "command": " ".join(sys.argv),
-                    "run": cfg.model_dump()
-                },
-                final_config_path,
-                sort_keys=False
-            )
+        final_config_path = os.path.join(cfg.general.output_dir, FINAL_CONFIG_FILENAME)
+        save_yaml(
+            {
+                "command": " ".join(sys.argv),
+                "run": cfg.model_dump()
+            },
+            final_config_path,
+            sort_keys=False
+        )
 
-    return cfg
+    return cfg, runtime_args
 
 
 def ensure_wandb_config_logging():
@@ -622,15 +648,17 @@ def train_val_data_from_config(cfg: RunConfig):
     else:
         raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
 
-    train_dataset = dataset_class(
+    train_dataset = dataset_class(  # type: ignore
         cfg=cfg,
         split="train",
+        n_samples=cfg.data.n_train_samples,
         vision_encoder_patch_size=vision_encoder_patch_size,
     )
 
-    val_dataset = dataset_class(
+    val_dataset = dataset_class(  # type: ignore
         cfg=cfg,
         split="val",
+        n_samples=cfg.data.n_val_samples,
         vision_encoder_patch_size=vision_encoder_patch_size,
     ) if do_validation else None
 
@@ -651,17 +679,27 @@ def train_val_data_from_config(cfg: RunConfig):
         f"Loaded {len(train_dataset)} training samples and "
         f"{len(val_dataset) if val_dataset is not None else 'no'} validation samples"
     )
+    if callback_val_dataset is not None:
+        logger.info_main(
+            f"Loaded {len(callback_val_dataset)} validation samples for callback evaluation"
+        )
     logger.info_main(f"Using train batch size: {cfg.trainer.per_device_train_batch_size}")
     if val_dataset is not None:
         logger.info_main(f"Using eval batch size: {cfg.trainer.per_device_eval_batch_size}")
 
-    return train_dataset, val_dataset
+    return train_dataset, val_dataset, callback_val_dataset
 
 
 @logger.catch(reraise=True)
 def main():
     setup_ddp()  # setup DDP first so we can communicate shared output folder
-    cfg = setup_config_and_logging()
+    cfg, runtime_args = setup_config_and_logging()
+
+    run_dir_file = os.getenv("VLM_RUN_DIR_FILE")
+    if run_dir_file and is_main_process():
+        run_dir_file_path = Path(run_dir_file)
+        run_dir_file_path.parent.mkdir(parents=True, exist_ok=True)
+        run_dir_file_path.write_text(cfg.general.output_dir + "\n", encoding="utf-8")
 
     seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
 
@@ -670,14 +708,27 @@ def main():
     except KeyError:
         raise ValueError(f"Unknown model type: {cfg.general.model_type}")
 
-    if cfg.general.continue_training:
-        cfg_continue_training_mode = cfg.general.continue_training_mode
-        vlm_model, cfg, ckpt_dir = AbstractVLMModel.load_from_run_dir(
-            cfg.general.output_dir,
-            mode=cfg.general.continue_training_mode
+    if runtime_args.continue_training:
+        assert runtime_args.continue_training_run_dir is not None
+        ckpt_dir = resolve_ckpt_dir_in_run_dir(
+            run_dir=runtime_args.continue_training_run_dir,
+            mode="final",
         )
-        cfg.general.continue_training_mode = cfg_continue_training_mode
-        cfg.general.continue_training = True
+        logger.info_main(f"Loading final model from {runtime_args.continue_training_run_dir}")
+        vlm_model = vlm_model_class(
+            model_cfg=cfg.model,
+            vision_input_type=cfg.data.vision_input_type,
+            vision_embed_dim=cfg.get_vision_embed_dim(),
+            vision_embed_size=cfg.get_vision_embed_size(),
+            text_only=cfg.data.text_only,
+            do_truncation=cfg.data.do_truncation,
+            truncate_after=cfg.data.truncate_after,
+            truncate_at=cfg.data.truncate_at,
+            local_files_only=cfg.general.local_files_only
+        )
+        vlm_model.setup_model()
+        vlm_model.apply_trainable_config()
+        vlm_model.load_weights_from_checkpoint_dir(ckpt_dir=ckpt_dir)
     else:
         vlm_model = vlm_model_class(
             model_cfg=cfg.model,
@@ -691,21 +742,18 @@ def main():
             local_files_only=cfg.general.local_files_only
         )
 
-    if cfg.model.vision_encoder:
-        vision_encoder_patch_size = cfg.model.vision_encoder.patch_size
-
-    train_dataset, val_dataset = train_val_data_from_config(cfg)
+    train_dataset, val_dataset, callback_val_dataset = train_val_data_from_config(cfg)
 
     # Create the trainer and train the model
-    trainer = UnifiedVLMTrainer(vlm_model=vlm_model, cfg=cfg)
+    trainer = UnifiedVLMTrainer(vlm_model=vlm_model, cfg=cfg, runtime_args=runtime_args)
 
-    trainer.train(train_dataset, val_dataset)
+    trainer.train(train_dataset, val_dataset, callback_val_dataset)
     logger.remove()
 
     if cfg.eval.run_inference:
         inference_args = argparse.Namespace(
             run_dir=cfg.general.output_dir,
-            mode="final"
+            mode=cfg.eval.mode
         )
         inference_main(inference_args, is_main=False)
 
