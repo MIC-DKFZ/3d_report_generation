@@ -1,4 +1,5 @@
 import math
+import json
 import os
 import re
 import shutil
@@ -10,6 +11,7 @@ import torch.distributed as dist
 import torch
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 import wandb
 from transformers.modeling_utils import unwrap_model
@@ -521,6 +523,7 @@ class PycocoevalCallback(TrainerCallback):
                 metrics_path = callback_eval_dir / "VLM_metrics.json"
                 save_json(metric_results, metrics_path)
                 logger.info_main(f"Saved metric results to {str(metrics_path)}")
+                self.save_f1_plot(callback_eval_dir.parent)
 
                 radbert_path = None
                 if pred_df is not None:
@@ -560,6 +563,59 @@ class PycocoevalCallback(TrainerCallback):
         model.train()  # Ensure model is back in training mode
 
         logger.info_main(f"Finished Evaluation Callback...")
+
+    @staticmethod
+    def _step_from_callback_eval_dir(step_dir: Path) -> int:
+        prefix = "step-"
+        if not step_dir.name.startswith(prefix):
+            raise ValueError(f"Expected step directory to start with '{prefix}': {step_dir}")
+        return int(step_dir.name.removeprefix(prefix))
+
+    def load_f1_scores(self, callback_eval_root: Path) -> list[tuple[int, float]]:
+        scores: list[tuple[int, float]] = []
+        for metrics_path in callback_eval_root.glob("step-*/VLM_metrics.json"):
+            with metrics_path.open() as f:
+                metrics = json.load(f)
+
+            f1 = metrics.get("f1")
+            if f1 is None:
+                continue
+
+            scores.append((self._step_from_callback_eval_dir(metrics_path.parent), float(f1)))
+
+        return sorted(scores)
+
+    def save_f1_plot(self, callback_eval_root: Path) -> None:
+        scores = self.load_f1_scores(callback_eval_root)
+        if not scores:
+            logger.warning_main(
+                f"No F1 scores found in callback eval metrics under {callback_eval_root}"
+            )
+            return
+
+        steps = [step for step, _ in scores]
+        f1_scores = [f1 for _, f1 in scores]
+        best_step, best_f1 = max(scores, key=lambda item: item[1])
+
+        fig, ax = plt.subplots(figsize=(9, 5.5))
+        ax.plot(
+            steps,
+            f1_scores,
+            marker="o",
+            linewidth=2,
+            markersize=4,
+        )
+        ax.scatter([best_step], [best_f1], s=60, zorder=3)
+        ax.set_title(f"Callback Evaluation F1 | best {best_f1:.4f} at step {best_step}")
+        ax.set_xlabel("Training step")
+        ax.set_ylabel("F1")
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+
+        output_path = callback_eval_root / "f1_score.png"
+        fig.savefig(output_path, dpi=200)
+        plt.close(fig)
+        logger.info_main(f"Saved callback F1 plot to {str(output_path)}")
 
 
     def save_checkpoint(self, model, output_dir, step: int, metrics_path=None, radbert_path=None):
