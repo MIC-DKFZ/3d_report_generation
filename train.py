@@ -246,7 +246,7 @@ class UnifiedVLMTrainer:
             _stats = {
                 "parameter_count": adapter_parameter_count
             }
-            save_json(_stats, Path(self.cfg.general.output_dir, "adapter_stats.json"))
+            save_json(_stats, Path(self.cfg.general.output_dir, ADAPTER_STATS_FILENAME))
 
         # Create comprehensive config for WandB logging
         config_dict = create_comprehensive_wandb_config(
@@ -302,7 +302,8 @@ class UnifiedVLMTrainer:
                 shuffle=False,
                 sampler=sampler,
                 collate_fn=self.vlm_model.collate_fn,
-                num_workers=self.cfg.eval.num_dataloader_workers
+                num_workers=self.cfg.eval.num_dataloader_workers,
+                pin_memory=self.cfg.trainer.dataloader_pin_memory,
             )
 
             callbacks.append(

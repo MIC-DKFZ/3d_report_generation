@@ -115,6 +115,7 @@ class UnifiedVLMInference:
             num_workers=self.num_dataloader_workers,
             sampler=sampler,
             collate_fn=self.vlm_model.collate_fn,
+            pin_memory=True,
         )
 
         # Freeze all parameters
