@@ -305,7 +305,10 @@ class UnifiedVLMTrainer:
                 sampler=sampler,
                 collate_fn=self.vlm_model.collate_fn,
                 num_workers=self.cfg.eval.num_dataloader_workers,
-                pin_memory=self.cfg.trainer.dataloader_pin_memory,
+                # Keep pin_memory disabled for the callback dataloader. Tests with 1000
+                # callback samples showed that enabling pinned memory can lead to
+                # multi-minute stalls in the main training loop after the callback finishes.
+                pin_memory=False,
             )
 
             callbacks.append(
