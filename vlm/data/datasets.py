@@ -133,7 +133,13 @@ class MedicalImageDataset(Dataset, ABC):
         self.samples = self._filter_samples(self.samples)
 
         if self.n_samples is not None:
-            self.samples = list(np.random.choice(self.samples, self.n_samples, replace=False))
+            if self.n_samples > len(self.samples):
+                logger.warning_main(
+                    f"Requested n_samples={self.n_samples} for {self.__class__.__name__} "
+                    f"({self.split}), but only {len(self.samples)} samples are available."
+                )
+            elif self.n_samples < len(self.samples):
+                self.samples = list(np.random.choice(self.samples, self.n_samples, replace=False))
 
         if self.do_transforms:
             if self.vision_input_type != VisionInputType.IMAGE:
