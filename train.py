@@ -33,7 +33,9 @@ from vlm.registries.vlm_registry import VLM_REGISTRY
 from vlm.utils import logger
 from vlm.utils.ddp_utils import setup_ddp
 from vlm.utils.helper import seed_everything, load_config_file, \
-    is_main_process, count_parameters, resolve_ckpt_dir_in_run_dir
+    is_main_process, count_parameters, resolve_ckpt_dir_in_run_dir, \
+    collect_image_ids_from_config_dataset_jsons
+from vlm.utils.local_staging import stage_vision_input_to_local
 from vlm.utils.load_and_save_files import load_yaml, save_json, save_yaml
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.memory_utils import (
@@ -305,10 +307,10 @@ class UnifiedVLMTrainer:
                 sampler=sampler,
                 collate_fn=self.vlm_model.collate_fn,
                 num_workers=self.cfg.eval.num_dataloader_workers,
-                # Keep pin_memory disabled for the callback dataloader. Tests with 1000
+                # IMPORTANT: Keep pin_memory disabled for the callback dataloader. Tests with 1000
                 # callback samples showed that enabling pinned memory can lead to
                 # multi-minute stalls in the main training loop after the callback finishes.
-                pin_memory=False,
+                pin_memory=False
             )
 
             callbacks.append(
@@ -704,6 +706,16 @@ def main():
         run_dir_file_path.parent.mkdir(parents=True, exist_ok=True)
         run_dir_file_path.write_text(cfg.general.output_dir + "\n", encoding="utf-8")
 
+    if cfg.general.stage_vision_input_to_local:
+        image_ids = collect_image_ids_from_config_dataset_jsons(cfg, ["train", "val", "test"])
+        cfg.data.vision_input_path = str(
+            stage_vision_input_to_local(
+                vision_input_path=cfg.data.vision_input_path,  # type: ignore
+                vision_input_is_sharded=cfg.data.vision_input_is_sharded,
+                image_ids=image_ids,
+            )
+        )
+
     seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
 
     try:
@@ -758,7 +770,7 @@ def main():
             run_dir=cfg.general.output_dir,
             mode=cfg.eval.mode
         )
-        inference_main(inference_args, is_main=False)
+        inference_main(inference_args, vision_input_path=cfg.data.vision_input_path, is_main=False)
 
 
 if __name__ == "__main__":

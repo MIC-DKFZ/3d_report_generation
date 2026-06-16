@@ -27,6 +27,10 @@ class DataConfig(ConfigBase):
     vision_input_path: str | None = Field(
         None, description="Path to the vision input (either embeddings or images)."
     )
+    vision_input_is_sharded: bool = Field(
+        False,
+        description="Whether vision_input_path points to split folders containing tar shards.",
+    )
     vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
     embed_dim: int | None = Field(
         None, description="Embedding dimension of the embeddings if using"

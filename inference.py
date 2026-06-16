@@ -115,7 +115,7 @@ class UnifiedVLMInference:
             num_workers=self.num_dataloader_workers,
             sampler=sampler,
             collate_fn=self.vlm_model.collate_fn,
-            pin_memory=True,
+            pin_memory=False,
         )
 
         # Freeze all parameters
@@ -254,7 +254,7 @@ def main_cli():
     main(args)
 
 
-def main(args, is_main=True):
+def main(args, vision_input_path: str | None = None, is_main: bool = True):
     seed_everything(0)  # Set a fixed seed for reproducibility
 
     if args.run_dir:
@@ -312,6 +312,7 @@ def main(args, is_main=True):
         # This remains at the end so explicit CLI args take absolute final precedence
         cfg.merge_subconfigs_with_cli_args()
 
+    cfg.data.vision_input_path = vision_input_path if vision_input_path else cfg.data.vision_input_path
     vision_encoder_patch_size = cfg.model.vision_encoder.patch_size if cfg.model.vision_encoder else None
 
     logger.info_main(f"Using {cfg.eval.split} split for inference.")
