@@ -2,6 +2,7 @@ from abc import ABC
 from enum import StrEnum
 from pathlib import Path
 
+from accelerate.optimizer import AcceleratedOptimizer
 from vlm.training.schedulers.lr_schedulers import LinearIncreasingLR, LinearIncreasingOffsetLR, \
     CosineAnnealingOffsetLR
 from torch.optim import Optimizer
@@ -129,12 +130,15 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
             )
             should_rebuild_optimizer = True
 
+        # TODO: Not sure if needed, added quick fix as optimizer is always 'AcceleratedOptimizer' for DDP
         # Guard against wrapped optimizers (e.g. DeepSpeedOptimizerWrapper). For stage transitions
         # we need a base torch optimizer so `accelerator.prepare(model, optimizer)` can rebuild
         # engine/param mappings from scratch.
         if (
-                optimizer is not None
+                not should_rebuild_optimizer
+                and optimizer is not None
                 and not isinstance(optimizer, self.optimizer_class)
+                and not isinstance(optimizer, AcceleratedOptimizer)
                 and self.training_stage == self._Stage.WARMUP_2
         ):
             logger.warning_main(
