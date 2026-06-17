@@ -111,7 +111,7 @@ def collect_image_ids_from_config_dataset_jsons(cfg, splits: list[str]) -> set[s
     split_to_dataset_json_path = {
         "train": cfg.data.train_dataset_json_path,
         "val": cfg.data.val_dataset_json_path,
-        "test": cfg.eval.dataset_json_path,
+        "test": cfg.eval.test_dataset_json_path,
     }
 
     unknown_splits = sorted(set(splits) - set(split_to_dataset_json_path))

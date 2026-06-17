@@ -40,22 +40,12 @@ class RunConfig(ConfigBase):
     eval: EvaluationConfig
 
     @model_validator(mode="after")
-    def set_default_eval_dataset_json_path(self):
-        # fall back to the val dataset JSON from data config if none is provided
-        if self.eval.split == "val" and self.eval.dataset_json_path is None:
-            self.eval.dataset_json_path = self.data.val_dataset_json_path
-        return self
-
-    @model_validator(mode="after")
     def check_eval_dataset_json(self):
         if self.eval.run_eval:
-            # 'dataset_json_path' can only be None if split='test' and no dataset JSON was provided.
-            # RunConfig.set_default_eval_dataset_json_path() assigns the validation dataset JSON
-            # when split='val' and no path is specified.
-            if self.eval.dataset_json_path is None:
+            if self.eval.test_dataset_json_path is None:
                 raise ValueError("The 'dataset_json' has to be specified if 'run_eval=True'")
-            if not Path(self.eval.dataset_json_path).is_file():
-                raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.eval.dataset_json_path}")
+            if not Path(self.eval.test_dataset_json_path).is_file():
+                raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.eval.test_dataset_json_path}")
         return self
 
     @model_validator(mode="after")

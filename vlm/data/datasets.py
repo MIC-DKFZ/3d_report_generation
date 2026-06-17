@@ -99,7 +99,7 @@ class MedicalImageDataset(Dataset, ABC):
             self.dataset_json_path = Path(cfg.data.val_dataset_json_path)
             self.do_sentence_shuffle = False
         elif self.split == "test":
-            self.dataset_json_path = Path(cfg.eval.dataset_json_path)
+            self.dataset_json_path = Path(cfg.eval.test_dataset_json_path)
             self.do_sentence_shuffle = False
 
         logger.info_main(
