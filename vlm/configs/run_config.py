@@ -62,6 +62,37 @@ class RunConfig(ConfigBase):
         return self
 
     @model_validator(mode="after")
+    def validate_early_stopping_specific_args(self):
+        if not self.general.do_early_stopping:
+            return self
+
+        if self.data.val_dataset_json_path is None:
+            raise ValueError(
+                "general.do_early_stopping=True requires data.val_dataset_json_path to be set."
+            )
+        if self.trainer.early_stopping_patience is None:
+            raise ValueError(
+                "general.do_early_stopping=True requires trainer.early_stopping_patience to be set."
+            )
+        if self.trainer.metric_for_best_model is None:
+            raise ValueError(
+                "general.do_early_stopping=True requires trainer.metric_for_best_model to be set."
+            )
+        if self.trainer.eval_strategy == "no":
+            raise ValueError(
+                "general.do_early_stopping=True requires trainer.eval_strategy to be 'steps' or 'epoch'."
+            )
+        if (
+            self.trainer.metric_for_best_model in {"eval_radbert_f1", "radbert_f1"}
+            and not self.eval.calculate_radbert_score
+        ):
+            raise ValueError(
+                "Early stopping is configured for 'eval_radbert_f1', but eval.calculate_radbert_score is disabled."
+            )
+
+        return self
+
+    @model_validator(mode="after")
     def resolve_model_id(self):
         if self.model.model_id:
             return self
@@ -190,6 +221,7 @@ class RunConfig(ConfigBase):
             _lis = [
                 (["trainer.eval_steps", "trainer.metric_for_best_model"], None),
                 (["trainer.eval_strategy"], "no"),
+                (["general.do_early_stopping"], False),
             ]
             for _modules, _val in _lis:
                 for _module in _modules:
@@ -197,9 +229,30 @@ class RunConfig(ConfigBase):
                     if is_main_process():
                         logger.info(f"  > cfg.{_module} set to {_val}")
 
+    def _maybe_reset_early_stopping_specific_args(self):
+        """
+        When early stopping is disabled, reset early-stopping-specific arguments.
+        This keeps inherited base-config values from enabling the callback implicitly.
+        """
+        if self.general.do_early_stopping:
+            return
+
+        logger.info_main("[Early Stopping] Resetting early-stopping-specific arguments:")
+
+        _lis = [
+            (["trainer.early_stopping_patience"], None),
+            (["trainer.early_stopping_threshold"], 0.0),
+        ]
+        for _modules, _val in _lis:
+            for _module in _modules:
+                setattr_nested(self, _module, _val)
+                if is_main_process():
+                    logger.info(f"  > cfg.{_module} set to {_val}")
+
     def apply_conditional_resets(self) -> None:
         self._maybe_reset_vision_related_specific_args()
         self._maybe_reset_validation_specific_args()
+        self._maybe_reset_early_stopping_specific_args()
 
     def merge_subconfigs_with_cli_args(self):
         """ Apply CLI argument overrides to configs """

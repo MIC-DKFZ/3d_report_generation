@@ -9,6 +9,7 @@ from pathlib import Path
 
 import torch.distributed as dist
 from torch.utils.data import DataLoader
+from transformers import EarlyStoppingCallback
 from trl import SFTConfig
 
 import wandb
@@ -151,8 +152,12 @@ class UnifiedVLMTrainer:
         # Add model-specific arguments
         model_args = self.vlm_model.get_model_specific_training_args()
 
+        trainer_args = self.cfg.trainer.model_dump(
+            exclude={"early_stopping_patience", "early_stopping_threshold"}
+        )
+
         return SFTConfig(
-            **self.cfg.trainer.model_dump(),
+            **trainer_args,
             **model_args,
             run_name=self.cfg.general.run_name,
             output_dir=self.cfg.general.output_dir,
@@ -334,6 +339,14 @@ class UnifiedVLMTrainer:
                 )
             )
 
+        if self.cfg.general.do_early_stopping:
+            callbacks.append(
+                EarlyStoppingCallback(  # type: ignore
+                    early_stopping_patience=self.cfg.trainer.early_stopping_patience,
+                    early_stopping_threshold=self.cfg.trainer.early_stopping_threshold,
+                )
+            )
+
         # Initialize SFT trainer
         init_opt_scheduler_ckpt = None
         if (
@@ -351,6 +364,7 @@ class UnifiedVLMTrainer:
             data_collator=self.vlm_model.collate_fn,
             callbacks=callbacks,
             init_opt_scheduler_from_ckpt=init_opt_scheduler_ckpt,
+            skip_model_load_on_resume=self.runtime_args.continue_training,
             scheduler=self.cfg.scheduler.to_instance(
                 module_attr_map=self.vlm_model.module_attr_map,
                 forbidden_name_patterns_for_wd=self.vlm_model.forbidden_name_patterns_for_wd,

@@ -21,6 +21,7 @@ class GeneralConfig(ConfigBase):
     )
     output_dir: str | None = Field(None, description="Directory to save model outputs.")
     wandb_project: str = Field("mic-rocket-vlm", description="WandB project name.")
+    do_early_stopping: bool = Field(False, description="Enable Trainer early stopping callback.")
     local_files_only: bool = Field(False, description="Use only local files for Hugging Face from_pretrained.")
     stage_vision_input_to_local: bool = Field(
         False,

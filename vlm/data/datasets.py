@@ -139,7 +139,10 @@ class MedicalImageDataset(Dataset, ABC):
                     f"({self.split}), but only {len(self.samples)} samples are available."
                 )
             elif self.n_samples < len(self.samples):
-                self.samples = list(np.random.choice(self.samples, self.n_samples, replace=False))
+                # Use a local RNG so this subset does not depend on earlier random draws.
+                rng = np.random.default_rng(42)
+                sample_indices = rng.choice(len(self.samples), self.n_samples, replace=False)
+                self.samples = [self.samples[i] for i in sample_indices]
 
         if self.do_transforms:
             if self.vision_input_type != VisionInputType.IMAGE:

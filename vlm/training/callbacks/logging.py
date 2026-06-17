@@ -330,9 +330,6 @@ class PycocoevalCallback(TrainerCallback):
 
         self.processor = processor
 
-        # Track best metrics for model saving
-        self.best_radbert_f1 = -1.0
-
         # RG Metric Scorers
         self.bleu_scorer = Bleu(4)
         self.meteor_scorer = Meteor()
@@ -355,8 +352,9 @@ class PycocoevalCallback(TrainerCallback):
         metrics=None,
         **kwargs,
     ):
-        if state.epoch - self.last_epoch < self.eval_every_n_epochs:
-            return
+        # TODO: Figure how to handle eval_every_n_epochs if early stopping is enabled (maybe just remove it)
+        # if state.epoch - self.last_epoch < self.eval_every_n_epochs:
+        #     return
 
         self.last_epoch = state.epoch
 
@@ -420,6 +418,7 @@ class PycocoevalCallback(TrainerCallback):
             all_results = results
 
         # === Calculate final scores/metrics and log to WandB ===
+        metric_results = {}
         if state.is_world_process_zero:
 
             all_preds = all_results["preds"]
@@ -466,10 +465,13 @@ class PycocoevalCallback(TrainerCallback):
             # === RadBert ===
             if self.calculate_radbert_score:
                 try:
-                    radbert_score, pred_df, gt_df = self.radbert_scorer(preds=all_preds, gts=all_gts)
+                    radbert_scores, pred_df, gt_df = self.radbert_scorer(
+                        preds=all_preds,
+                        gts=all_gts
+                    )
                 except Exception as e:
                     logger.error(f"radbert score calculation failed: {e}")
-                    radbert_score = {
+                    radbert_scores = {
                         "accuracy": -1.0,
                         "balanced_accuracy": -1.0,
                         "precision": -1.0,
@@ -478,6 +480,18 @@ class PycocoevalCallback(TrainerCallback):
                         "crg": -1.0
                     }  # use -1 to indicate error
                     pred_df = gt_df = None
+
+            metric_results = {
+                "bleu_score_1": bleu_score_1,
+                "bleu_score_2": bleu_score_2,
+                "bleu_score_3": bleu_score_3,
+                "bleu_score_4": bleu_score_4,
+                "meteor_score": meteor_score,
+                "rougel_score": rougel_score,
+                "cider_score": cider_score,
+            }
+            if self.calculate_radbert_score:
+                metric_results.update(radbert_scores)
 
             # Log the BLEU scores
             logger.info_main(f"BLEU-1 score: {bleu_score_1:.4f}")
@@ -501,31 +515,17 @@ class PycocoevalCallback(TrainerCallback):
             logger.info_main(f"CIDEr score: {cider_score}")
             wandb.log({"cider_score": cider_score})
 
+            callback_eval_dir = (
+                Path(args.output_dir) / "callback_eval" / f"step-{state.global_step}"
+            )
+            callback_eval_dir.mkdir(parents=True, exist_ok=True)
+
             # Log RadBert
             if self.calculate_radbert_score:
-                for key, value in radbert_score.items():
+                for key, value in radbert_scores.items():
                     logger.info_main(f"radbert_{key}: {value:.4f}")
                     wandb.log({f"radbert_{key}": value})
 
-                callback_eval_dir = Path(args.output_dir) / "callback_eval" / f"step-{state.global_step}"
-                callback_eval_dir.mkdir(parents=True, exist_ok=True)
-
-                metric_results = {
-                    "bleu_score_1": bleu_score_1,
-                    "bleu_score_2": bleu_score_2,
-                    "bleu_score_3": bleu_score_3,
-                    "bleu_score_4": bleu_score_4,
-                    "meteor_score": meteor_score,
-                    "rougel_score": rougel_score,
-                    "cider_score": cider_score,
-                    **radbert_score,
-                }
-                metrics_path = callback_eval_dir / "VLM_metrics.json"
-                save_json(metric_results, metrics_path)
-                logger.info_main(f"Saved metric results to {str(metrics_path)}")
-                self.save_f1_plot(callback_eval_dir.parent)
-
-                radbert_path = None
                 if pred_df is not None:
                     radbert_out = pd.DataFrame({"image_id": all_image_ids})
                     for col in pred_df.columns:
@@ -537,24 +537,25 @@ class PycocoevalCallback(TrainerCallback):
                     radbert_out.to_csv(radbert_path, index=False)
                     logger.info_main(f"Saved RadBERT class predictions to {str(radbert_path)}")
 
-            # === Log and optionally save best model ===
+            metrics_path = callback_eval_dir / "VLM_metrics.json"
+            save_json(metric_results, metrics_path)
+            logger.info_main(f"Saved metric results to {str(metrics_path)}")
             if self.calculate_radbert_score:
-                radbert_f1 = radbert_score.get("f1", -1.0)
-                if radbert_f1 > self.best_radbert_f1:
-                    self.best_radbert_f1 = radbert_f1
-                    logger.info_main(
-                        f"New best RadBERT F1 score: {self.best_radbert_f1:.4f} - Saving model checkpoint"
-                    )
-                    self.save_checkpoint(
-                        model,
-                        args.output_dir,
-                        state.global_step,
-                        metrics_path=metrics_path,
-                        radbert_path=radbert_path,
-                    )
+                self.save_f1_plot(callback_eval_dir.parent)
 
-                # Always log best, even if there is no improvement.
-                wandb.log({"best_radbert_f1": self.best_radbert_f1})
+        if self.is_distributed:
+            metric_results_list = [metric_results]
+            dist.broadcast_object_list(metric_results_list, src=0)
+            metric_results = metric_results_list[0]
+
+        if metrics is not None:
+            for key, value in metric_results.items():
+                metrics_key = (
+                    f"eval_radbert_{key}"
+                    if key in {"accuracy", "balanced_accuracy", "precision", "recall", "f1", "crg"}
+                    else f"eval_{key}"
+                )
+                metrics[metrics_key] = value
 
         # Ensure that main process finishes writing before continuing
         if self.is_distributed:
@@ -616,36 +617,6 @@ class PycocoevalCallback(TrainerCallback):
         fig.savefig(output_path, dpi=200)
         plt.close(fig)
         logger.info_main(f"Saved callback F1 plot to {str(output_path)}")
-
-
-    def save_checkpoint(self, model, output_dir, step: int, metrics_path=None, radbert_path=None):
-        best_model_dir = Path(output_dir) / f"best_model-{step}"
-        best_model_dir.mkdir(parents=True, exist_ok=True)
-
-        # Save only the trainable state_dict
-        model_to_save = unwrap_model(model)
-        trainable_state_dict = get_trainable_state_dict(model_to_save)
-
-        # Save the model
-        model.save_pretrained(best_model_dir, state_dict=trainable_state_dict)
-        if hasattr(self.tokenizer, "save_pretrained"):
-            self.tokenizer.save_pretrained(best_model_dir)
-        if hasattr(self.processor, "save_pretrained"):
-            self.processor.save_pretrained(best_model_dir)
-
-        if metrics_path is not None and Path(metrics_path).is_file():
-            shutil.copy2(metrics_path, best_model_dir / "VLM_metrics.json")
-        if radbert_path is not None and Path(radbert_path).is_file():
-            shutil.copy2(radbert_path, best_model_dir / "radbert_predictions.csv")
-
-        for old_best_model_dir in Path(output_dir).glob("best_model-*"):
-            if old_best_model_dir != best_model_dir and old_best_model_dir.is_dir():
-                shutil.rmtree(old_best_model_dir)
-                logger.info_main(f"Removed old best model checkpoint: {old_best_model_dir}")
-
-        logger.info_main(f"Model saved to: {best_model_dir}")
-
-
 
 class LossLoggingCallback(TrainerCallback):
     """A custom callback that logs the training loss"""
