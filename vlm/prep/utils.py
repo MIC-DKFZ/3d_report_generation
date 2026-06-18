@@ -37,13 +37,38 @@ def distribute_files(img_files, rank, world_size):
     # Split files evenly across GPUs
     files_per_gpu = len(img_files) // world_size
     start_idx = rank * files_per_gpu
-    
+
     if rank == world_size - 1:  # Last GPU gets remaining files
         end_idx = len(img_files)
     else:
         end_idx = start_idx + files_per_gpu
-    
+
     return img_files[start_idx:end_idx]
+
+
+def shard_files(img_files, shard_id, num_shards):
+    """Select this shard's subset of files for multi-node (multi-job) splitting.
+
+    Each independent job processes a disjoint slice of the (sorted) file list so
+    several jobs on different nodes can run in parallel without coordination.
+    Uses interleaved (round-robin) assignment so the load stays balanced even if
+    the list is ordered by size/case. Within a job the result is further split
+    across GPUs by ``distribute_files``.
+
+    Args:
+        img_files: Full, deterministically ordered list of files.
+        shard_id: Index of this job, in ``[0, num_shards)``.
+        num_shards: Total number of jobs the data is split across.
+
+    Returns:
+        The subset of ``img_files`` assigned to ``shard_id``.
+    """
+    if num_shards <= 1:
+        return img_files
+    assert 0 <= shard_id < num_shards, (
+        f"shard_id ({shard_id}) must be in [0, num_shards={num_shards})"
+    )
+    return img_files[shard_id::num_shards]
 
 
 
