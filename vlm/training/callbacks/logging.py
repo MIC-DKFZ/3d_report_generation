@@ -341,6 +341,8 @@ class PycocoevalCallback(TrainerCallback):
             from eval import eval_ctrate_radbert
             self.radbert_scorer = eval_ctrate_radbert
 
+        self.radbert_gt_df = None
+
 
     def on_evaluate(
         self,
@@ -467,8 +469,11 @@ class PycocoevalCallback(TrainerCallback):
                 try:
                     radbert_scores, pred_df, gt_df = self.radbert_scorer(
                         preds=all_preds,
-                        gts=all_gts
+                        gts=all_gts,
+                        default_gt_df=self.radbert_gt_df
                     )
+                    if self.radbert_gt_df is None:
+                        self.radbert_gt_df = gt_df
                 except Exception as e:
                     logger.error(f"radbert score calculation failed: {e}")
                     radbert_scores = {

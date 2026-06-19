@@ -153,7 +153,7 @@ def inference_ctrate_radbert(reports: list[str], ckpt_path: str | Path, hf_radbe
     return result
 
 
-def eval_ctrate_radbert(preds: list, gts: list) -> tuple[dict, pd.DataFrame | None, pd.DataFrame | None]:
+def eval_ctrate_radbert(preds: list, gts: list, default_gt_df: pd.DataFrame | None = None) -> tuple[dict, pd.DataFrame | None, pd.DataFrame | None]:
     """
     Returns (aggregate_metrics, pred_df, gt_df).
     pred_df / gt_df are [N, C] DataFrames of binary class predictions; None when RadBERT is unavailable.
@@ -169,8 +169,7 @@ def eval_ctrate_radbert(preds: list, gts: list) -> tuple[dict, pd.DataFrame | No
     hf_radbert_dir = radbert_dir / "RadBERT-RoBERTa-4m"
 
     pred_df = inference_ctrate_radbert(preds, radbert_ckpt, hf_radbert_dir)
-    gt_df = inference_ctrate_radbert(gts, radbert_ckpt, hf_radbert_dir)
-
+    gt_df = inference_ctrate_radbert(gts, radbert_ckpt, hf_radbert_dir) if default_gt_df is None else default_gt_df
     results = calculate_metrics(pred_df, gt_df)
     return results, pred_df, gt_df
 
