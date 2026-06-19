@@ -221,7 +221,7 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
     if parent_key != "":
         parent_key = parent_key + "."
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
 
     def _iterate_config(
             parser: argparse.ArgumentParser,
