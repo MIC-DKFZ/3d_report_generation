@@ -26,7 +26,13 @@ class EvaluationConfig(ConfigBase):
     num_eval_processes: int | None = Field(None, description="Number of subprocesses to use for evaluation. "
                                                              "If None, use half the number of CPUs in the system.")
 
-    callback_n_samples: int | None = Field(None, description="Number of samples. Run all if 'None'.")
+    callback_n_samples: int | Literal["unique"] | None = Field(
+        None,
+        description=(
+            "Number of samples. Run all if 'None'. For CT-RATE, use 'unique' to select "
+            "one deterministic random image version per unique image."
+        ),
+    )
     calculate_radbert_score: bool = Field(False, description="Additionally calculate the radbert metrics on evaluation.")
 
     @model_validator(mode="after")

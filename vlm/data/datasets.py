@@ -132,17 +132,7 @@ class MedicalImageDataset(Dataset, ABC):
 
         self.samples = self._filter_samples(self.samples)
 
-        if self.n_samples is not None:
-            if self.n_samples > len(self.samples):
-                logger.warning_main(
-                    f"Requested n_samples={self.n_samples} for {self.__class__.__name__} "
-                    f"({self.split}), but only {len(self.samples)} samples are available."
-                )
-            elif self.n_samples < len(self.samples):
-                # Use a local RNG so this subset does not depend on earlier random draws.
-                rng = np.random.default_rng(42)
-                sample_indices = rng.choice(len(self.samples), self.n_samples, replace=False)
-                self.samples = [self.samples[i] for i in sample_indices]
+        self.samples = self._select_samples(self.samples)
 
         if self.do_transforms:
             if self.vision_input_type != VisionInputType.IMAGE:
@@ -157,6 +147,32 @@ class MedicalImageDataset(Dataset, ABC):
     def _get_vision_input_path(self, image_id) -> Path:
         """Load vision input path for a given image ID"""
         pass
+
+    def _select_samples(self, samples: list[dict]) -> list[dict]:
+        if self.n_samples is None:
+            return samples
+
+        if not isinstance(self.n_samples, int):
+            raise ValueError(
+                f"Unsupported n_samples={self.n_samples!r} for {self.__class__.__name__}. "
+                "MedicalImageDataset only supports integer n_samples; subclasses must "
+                "override _select_samples to support custom sampling modes."
+            )
+
+        if self.n_samples > len(samples):
+            logger.warning_main(
+                f"Requested n_samples={self.n_samples} for {self.__class__.__name__} "
+                f"({self.split}), but only {len(samples)} samples are available."
+            )
+            return samples
+
+        if self.n_samples < len(samples):
+            # Use a local RNG so this subset does not depend on earlier random draws.
+            rng = np.random.default_rng(42)
+            sample_indices = rng.choice(len(samples), self.n_samples, replace=False)
+            return [samples[i] for i in sample_indices]
+
+        return samples
 
     def _filter_samples(self, samples):
         """Filter samples based on answer type"""
@@ -492,6 +508,29 @@ class CTRATEDataset(MedicalImageDataset):
         do_transforms (bool, optional): If True, apply data augmentations to images
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
+
+    @staticmethod
+    def _base_image_id(image_id: str) -> str:
+        return image_id.rsplit("_", 1)[0]
+
+    def _select_samples(self, samples: list[dict]) -> list[dict]:
+        if self.n_samples != "unique":
+            return super()._select_samples(samples)
+
+        grouped_indices: dict[str, list[int]] = {}
+        for index, sample in enumerate(samples):
+            base_image_id = self._base_image_id(sample["image_id"])
+            grouped_indices.setdefault(base_image_id, []).append(index)
+
+        # Use the same local deterministic RNG pattern as integer n_samples selection.
+        rng = np.random.default_rng(42)
+        selected_indices = [int(rng.choice(indices)) for indices in grouped_indices.values()]
+
+        logger.info_main(
+            f"Selected {len(selected_indices)} unique CT-RATE images from "
+            f"{len(samples)} samples for {self.__class__.__name__} ({self.split})."
+        )
+        return [samples[i] for i in selected_indices]
 
     def _get_vision_input_path(self, image_id, split_path=None) -> Path:
         """Load vision input path for a given image ID"""
