@@ -305,7 +305,7 @@ class UnifiedVLMTrainer:
             else:
                 sampler = None
 
-            eval_dataloader = DataLoader(
+            callback_eval_dataloader = DataLoader(
                 callback_eval_dataset,
                 batch_size=self.cfg.eval.per_device_batch_size,
                 shuffle=False,
@@ -320,7 +320,7 @@ class UnifiedVLMTrainer:
 
             callbacks.append(
                 # PrintEvalBatchCallback(  # type: ignore[arg-type]
-                #     eval_dataloader=eval_dataloader,
+                #     callback_eval_dataloader=callback_eval_dataloader,
                 #     task_type="RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
                 #     max_new_tokens=self.cfg.eval.max_new_tokens,
                 #     eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
@@ -329,7 +329,7 @@ class UnifiedVLMTrainer:
                 #     is_distributed=self.is_distributed
                 # )
                 PycocoevalCallback(  # type: ignore[arg-type]
-                    eval_dataloader=eval_dataloader,
+                    eval_dataloader=callback_eval_dataloader,
                     max_new_tokens=self.cfg.eval.max_new_tokens,
                     eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
                     tokenizer=self.vlm_model.tokenizer,
