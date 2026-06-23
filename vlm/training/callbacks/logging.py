@@ -1,5 +1,4 @@
 import math
-import json
 import os
 import re
 import shutil
@@ -313,7 +312,7 @@ class PycocoevalCallback(TrainerCallback):
     def __init__(
         self, eval_dataloader: DataLoader, max_new_tokens: int,
             tokenizer=None, processor=None, eval_every_n_epochs=0.5, print_first_sample=True,
-            is_distributed=False, calculate_radbert_score=True
+            is_distributed=False, calculate_radbert_score=True, dataset_name="ctrate"
     ):
         self.eval_dataloader = eval_dataloader
         self.max_new_tokens = max_new_tokens
@@ -338,8 +337,17 @@ class PycocoevalCallback(TrainerCallback):
 
         self.calculate_radbert_score = calculate_radbert_score
         if self.calculate_radbert_score:
-            from eval import eval_ctrate_radbert
-            self.radbert_scorer = eval_ctrate_radbert
+            # Pick the report classifier matching the dataset. Both scorers share
+            # the same (preds, gts) -> metrics-dict contract, so everything below
+            # (wandb keys, error fallback) is unchanged.
+            if dataset_name == "ctrate":
+                from eval import eval_ctrate_radbert
+                self.radbert_scorer = eval_ctrate_radbert
+            elif dataset_name == "merlin":
+                from eval import eval_merlin_modernbert
+                self.radbert_scorer = eval_merlin_modernbert
+            else:
+                raise ValueError(f"Unknown dataset_name: {dataset_name}")
 
         self.radbert_gt_df = None
 

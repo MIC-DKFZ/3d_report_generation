@@ -19,6 +19,13 @@ from torch.utils.data import SequentialSampler, DataLoader
 
 from vlm.evaluation.ctrate_radbert.calculate_metrics import calculate_metrics
 from vlm.evaluation.ctrate_radbert.utils import CTDataset, RadBertClassifier, RadBertInference, ctrate_label_cols
+from vlm.evaluation.merlin_modernbert.calculate_metrics import calculate_metrics as calculate_metrics_merlin
+from vlm.evaluation.merlin_modernbert.utils import (
+    MerlinBertClassifier,
+    MerlinBertInference,
+    MerlinDataset,
+    load_label_cols,
+)
 from vlm.utils import logger
 from vlm.evaluation.hf_evaluate.scorers import BLEUScorer, ROUGELScorer, METEORScorer
 from vlm.utils.helper import add_datetime_tag, chunkify
@@ -171,6 +178,61 @@ def eval_ctrate_radbert(preds: list, gts: list, default_gt_df: pd.DataFrame | No
     pred_df = inference_ctrate_radbert(preds, radbert_ckpt, hf_radbert_dir)
     gt_df = inference_ctrate_radbert(gts, radbert_ckpt, hf_radbert_dir) if default_gt_df is None else default_gt_df
     results = calculate_metrics(pred_df, gt_df)
+    return results, pred_df, gt_df
+
+
+def _as_report_list(reports):
+    """Accept either a list of strings or the pycocoeval dict {i: [text]}."""
+    if isinstance(reports, dict):
+        return [reports[k][0] if isinstance(reports[k], (list, tuple)) else reports[k]
+                for k in sorted(reports)]
+    return list(reports)
+
+
+def inference_merlin_modernbert(reports, model_dir: str | Path):
+    """Classify reports with the fine-tuned Merlin ModernBERT model -> [N, 30] binary df.
+
+    Unlike RadBERT (a custom module + ``.pth``), the Merlin model is a
+    self-contained ``AutoModelForSequenceClassification`` directory, so
+    ``model_dir`` points straight at it (no separate base-model / checkpoint).
+    """
+    reports = _as_report_list(reports)
+    label_cols = load_label_cols(model_dir)
+    df = pd.DataFrame({"reports": reports})
+
+    batch_size = 32
+    if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
+        batch_size = 96
+
+    ds = MerlinDataset(df, len(label_cols), label_cols, hf_model_dir=str(model_dir))
+    loader = DataLoader(
+        ds, sampler=SequentialSampler(ds), batch_size=batch_size, num_workers=4, pin_memory=True
+    )
+
+    model = MerlinBertClassifier(n_classes=len(label_cols), hf_model_dir=str(model_dir))
+    model = model.cuda().eval()
+
+    trainer = MerlinBertInference(model, {"test": loader}, len(label_cols), label_cols)
+    preds = trainer.infer()  # ndarray [N, C]
+    return pd.DataFrame(preds.astype(int), columns=label_cols)
+
+
+def eval_merlin_modernbert(preds, gts, default_gt_df: pd.DataFrame | None = None) -> tuple[dict, pd.DataFrame | None, pd.DataFrame | None]:
+    """Merlin-dataset analogue of ``eval_ctrate_radbert``.
+
+    Returns (aggregate_metrics, pred_df, gt_df); the dfs are [N, 30] binary
+    class predictions, or None when the classifier dir is not configured.
+    """
+    model_dir = os.getenv("VLM_MERLIN_MODERNBERT_DIR")
+    if model_dir is None:
+        logger.warning_main("The environment variable 'VLM_MERLIN_MODERNBERT_DIR' is not set. "
+                            "Cannot proceed with Merlin ModernBERT inference.")
+        return {}, None, None
+
+    pred_df = inference_merlin_modernbert(preds, model_dir)
+    gt_df = inference_merlin_modernbert(gts, model_dir) if default_gt_df is None else default_gt_df
+
+    results = calculate_metrics_merlin(pred_df, gt_df)
     return results, pred_df, gt_df
 
 
@@ -446,10 +508,16 @@ def main(args):
     aggregate_results.update(nlp_aggregate)
 
     radbert_pred_df = radbert_gt_df = None
-    if args.dataset_name == "ctrate":
-        radbert_metrics, radbert_pred_df, radbert_gt_df = eval_ctrate_radbert(preds, gts)
-        aggregate_results.update(radbert_metrics)
 
+    dataset_name = args.dataset_name
+    if dataset_name == "ctrate":
+        radbert_metrics, radbert_pred_df, radbert_gt_df = eval_ctrate_radbert(preds, gts)
+    elif dataset_name == "merlin":
+        radbert_metrics, radbert_pred_df, radbert_gt_df = eval_merlin_modernbert(preds, gts)
+    else:
+        raise ValueError(f"Unknown dataset_name: {dataset_name}")
+
+    aggregate_results.update(radbert_metrics)
     logger.info_main("[METRICS] Evaluation Summary:")
     for metric_name, value in aggregate_results.items():
         logger.info_main(f"    > {metric_name}: {value:.4f}")

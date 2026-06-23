@@ -335,7 +335,8 @@ class UnifiedVLMTrainer:
                     tokenizer=self.vlm_model.tokenizer,
                     processor=self.vlm_model.processor,
                     is_distributed=self.is_distributed,
-                    calculate_radbert_score=self.cfg.eval.calculate_radbert_score
+                    calculate_radbert_score=self.cfg.eval.calculate_radbert_score,
+                    dataset_name=self.cfg.data.dataset_name
                 )
             )
 
