@@ -161,6 +161,7 @@ class UnifiedVLMTrainer:
             **model_args,
             run_name=self.cfg.general.run_name,
             output_dir=self.cfg.general.output_dir,
+            seed=self.cfg.general.seed,
         )
 
     def train(self, train_dataset, val_dataset, callback_val_dataset=None):
