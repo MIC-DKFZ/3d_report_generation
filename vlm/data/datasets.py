@@ -717,8 +717,25 @@ class MerlinDataset(CTRATEDataset):
             impression_sentences = [
                 s.strip() for s in impression_part.split("\n") if s.strip()
             ]
-            if len(impression_sentences) > 1:
-                random.shuffle(impression_sentences)
+            summary_idx = next(
+                (
+                    idx
+                    for idx, sentence in enumerate(impression_sentences)
+                    if re.match(r"^SUMMARY\b:?", sentence, flags=re.IGNORECASE)
+                ),
+                None,
+            )
+            if summary_idx is None:
+                shuffled_impression_sentences = impression_sentences
+                summary_sentences = []
+            else:
+                shuffled_impression_sentences = impression_sentences[:summary_idx]
+                summary_sentences = impression_sentences[summary_idx:]
+
+            if len(shuffled_impression_sentences) > 1:
+                random.shuffle(shuffled_impression_sentences)
+
+            impression_sentences = shuffled_impression_sentences + summary_sentences
             result += f"\n{impression_header}\n" + "\n".join(impression_sentences)
 
         # print("answer after shuffling:", result)
