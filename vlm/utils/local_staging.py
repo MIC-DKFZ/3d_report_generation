@@ -2,7 +2,7 @@ import os
 import shutil
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterable
 
@@ -141,9 +141,25 @@ def extract_sharded_vision_input(
         tasks.append((shard_path, dst_dir))
 
     total_shard_bytes = 0
+    completed_shards = 0
+    start = time.perf_counter()
+    last_log = start
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        for shard_bytes in executor.map(lambda task: extract_tar(*task), tasks):
+        futures = [executor.submit(extract_tar, shard_path, dst_dir) for shard_path, dst_dir in tasks]
+        for future in as_completed(futures):
+            shard_bytes = future.result()
             total_shard_bytes += shard_bytes
+            completed_shards += 1
+            now = time.perf_counter()
+            if completed_shards == len(tasks) or completed_shards % 25 == 0 or now - last_log >= 60:
+                elapsed = now - start
+                logger.info_main(
+                    "  extracted shards: "
+                    f"{completed_shards}/{len(tasks)}, "
+                    f"source bytes {format_bytes(total_shard_bytes)}, "
+                    f"time {elapsed:.2f}s, throughput {format_rate(total_shard_bytes, elapsed)}"
+                )
+                last_log = now
 
     return len(tasks), total_shard_bytes
 

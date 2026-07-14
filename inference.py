@@ -40,6 +40,7 @@ from vlm.utils.load_and_save_files import load_json, save_json, save_yaml
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.vision_input_type import VisionInputType
 from vlm.utils.paths import VLM_CONFIG_DIR
+from vlm.utils.local_staging import get_local_vision_input_path
 from eval import main as eval_main
 
 
@@ -237,6 +238,15 @@ def parse_args() -> Namespace:
         default="",
         help="An optional suffix to append to the 'inference' output directory."
     )
+
+    parser.add_argument(
+        "--is_staged",
+        action="store_true",
+        help=(
+            "Use the node-local staged vision input directory returned by "
+            "get_local_vision_input_path()."
+        ),
+    )
     parser.add_argument(
         "--overwrite_config_from_files",
         type=str,
@@ -311,6 +321,9 @@ def main(args, vision_input_path: str | None = None, is_main: bool = True):
         # 5. Apply explicit CLI arguments (e.g., --batch_size 8)
         # This remains at the end so explicit CLI args take absolute final precedence
         cfg.merge_subconfigs_with_cli_args()
+
+    if getattr(args, "is_staged", False):
+        cfg.data.vision_input_path = str(get_local_vision_input_path())
 
     cfg.data.vision_input_path = vision_input_path if vision_input_path else cfg.data.vision_input_path
     vision_encoder_patch_size = cfg.model.vision_encoder.patch_size if cfg.model.vision_encoder else None

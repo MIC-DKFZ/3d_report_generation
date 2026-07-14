@@ -62,6 +62,17 @@ class RunConfig(ConfigBase):
         return self
 
     @model_validator(mode="after")
+    def validate_sharded_vision_input_requires_local_staging(self):
+        if self.data.vision_input_is_sharded and not self.general.stage_vision_input_to_local:
+            raise ValueError(
+                "data.vision_input_is_sharded=True requires "
+                "general.stage_vision_input_to_local=True. Sharded vision input is only "
+                "handled by the local staging step; the dataset loader itself expects "
+                "normal per-sample files."
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_early_stopping_specific_args(self):
         if not self.general.do_early_stopping:
             return self
