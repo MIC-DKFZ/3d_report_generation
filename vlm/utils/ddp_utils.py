@@ -1,10 +1,22 @@
 from collections import defaultdict
+from datetime import timedelta
 from itertools import chain
 
 import torch
 import os
 from vlm.utils import logger
 from torch import distributed as dist
+
+
+def get_ddp_timeout() -> timedelta:
+    value = os.environ.get("VLM_DDP_TIMEOUT_SECONDS", str(1800))
+    try:
+        seconds = int(value)
+    except ValueError as exc:
+        raise ValueError("VLM_DDP_TIMEOUT_SECONDS must be an integer number of seconds") from exc
+    if seconds < 1:
+        raise ValueError("VLM_DDP_TIMEOUT_SECONDS must be >= 1")
+    return timedelta(seconds=seconds)
 
 
 def gather_inference_outputs(local_results: list | dict, main_rank: int = 0) -> list | dict[str, list] | None:
@@ -57,7 +69,14 @@ def setup_ddp() -> tuple[bool, int, int, int, int]:
 
         # Initialize the process group
         if not dist.is_initialized():
-            dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+            timeout = get_ddp_timeout()
+            logger.info(f"Initializing NCCL process group with timeout={timeout}")
+            dist.init_process_group(
+                backend="nccl",
+                rank=rank,
+                world_size=world_size,
+                timeout=timeout,
+            )
         logger.info(f"Process group initialized on rank {rank}")
 
         return True, rank, world_size, local_rank, local_world_size
