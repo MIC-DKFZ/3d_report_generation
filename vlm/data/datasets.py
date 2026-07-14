@@ -22,7 +22,7 @@ from vlm.utils.regex_patterns import (
     VQA_OPTION_LETTERS_IN_TEXT_PATTERN,
 )
 from vlm.utils.vision_input_type import VisionInputType
-
+from vlm.models.phi4mini.phi4mini_vlm import PHI_VISION_PLACEHOLDER_TOKEN
 from vlm.configs.run_config import RunConfig
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
@@ -365,18 +365,29 @@ class MedicalImageDataset(Dataset, ABC):
             self, question, answer, system_text=SYSTEM_TEXT
     ):
 
-        system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
-
-        # TODO check if I can use the same template
         if "qwen" in self.model_type.lower():
+            system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
             user_message = {
                 "role": "user",
-                "content": ([{"type": "video"}] if not self.text_only else []) + [{"type": "text", "text": question}]
+                "content": ([{"type": "video"}] if not self.text_only else [])
+                + [{"type": "text", "text": question}],
             }
+            answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
+        elif "gemma" in self.model_type.lower():
+            system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
+            user_message = {
+                "role": "user",
+                "content": ([{"type": "image"}] if not self.text_only else [])
+                + [{"type": "text", "text": question}],
+            }
+            answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
+        elif "phi" in self.model_type.lower():
+            system_message = {"role": "system", "content": system_text}
+            vision_prefix = f"{PHI_VISION_PLACEHOLDER_TOKEN}\n" if not self.text_only else ""
+            user_message = {"role": "user", "content": f"{vision_prefix}{question}"}
+            answer_message = {"role": "assistant", "content": answer}
         else:
             raise ValueError(f"Unsupported model name: {self.model_type}")
-
-        answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
 
         full_conversation = [system_message, user_message, answer_message]
         prompt_only_conversation = [system_message, user_message]

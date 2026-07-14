@@ -1,7 +1,10 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from pydantic import BaseModel
+from vlm.models.gemma3.gemma3_vlm import Gemma3TextVLModel
 from vlm.models.owl.owl_vlm import OwlVLModel
+from vlm.models.phi4mini.phi4mini_vlm import Phi4MiniVLModel
+from vlm.models.qwen3.qwen3_vlm import Qwen3TextVLModel
 
 
 TRANSFORMERS_QWEN3_CUTOFF = (4, 53, 3)
@@ -70,6 +73,10 @@ if _use_qwen25(TRANSFORMERS_VERSION):
         model_class=QwenVLModel
     )
 else:
+    VLM_REGISTRY["Qwen3-1.7B"] = VLMConfig(
+        model_id="Qwen/Qwen3-1.7B",
+        model_class=Qwen3TextVLModel
+    )
     VLM_REGISTRY["Qwen3-VL-2B"] = VLMConfig(
         model_id="Qwen/Qwen3-VL-2B-Instruct",
         model_class=QwenVLModel
@@ -82,3 +89,18 @@ else:
         model_id="Qwen/Qwen3-VL-8B-Instruct",
         model_class=QwenVLModel
     )
+
+VLM_REGISTRY["Phi4Mini"] = VLMConfig(
+    model_id="microsoft/Phi-4-mini-instruct",
+    model_class=Phi4MiniVLModel
+)
+
+VLM_REGISTRY["Qwen3-8B"] = VLMConfig(
+    model_id="Qwen/Qwen3-8B",
+    model_class=Qwen3TextVLModel
+)
+
+VLM_REGISTRY["Gemma3-4B"] = VLMConfig(
+    model_id="google/gemma-3-4b-it",
+    model_class=Gemma3TextVLModel
+)
