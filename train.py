@@ -28,7 +28,7 @@ from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
 from vlm.models.abstract_vlm import AbstractVLMModel
 from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
-    TerminateOnNaNLossCallback
+    TerminateOnNaNLossCallback, EveryNEpochsCallback
 from vlm.training.trainers import VLMSFTTrainer
 from vlm.registries.vlm_registry import VLM_REGISTRY
 from vlm.utils import logger
@@ -293,6 +293,14 @@ class UnifiedVLMTrainer:
             WandbGroupedLRCallback(),
             TerminateOnNaNLossCallback(threshold=3)
         ]
+
+        if self.cfg.trainer.eval_strategy == "epoch":
+            if self.cfg.trainer.eval_steps is None:
+                raise ValueError(
+                    "trainer.eval_steps must be set when trainer.eval_strategy='epoch' "
+                    "because it controls EveryNEpochsCallback.n."
+                )
+            callbacks.append(EveryNEpochsCallback(n=self.cfg.trainer.eval_steps))
 
         if val_dataset is not None:
             callback_eval_dataset = callback_val_dataset if callback_val_dataset is not None else val_dataset

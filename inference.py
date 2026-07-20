@@ -25,6 +25,7 @@ from vlm.data.datasets import (
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from vlm.models.abstract_vlm import AbstractVLMModel
 from vlm.utils import logger
+from vlm.utils.decoding import decode_generated_answers, decode_prompts
 from vlm.utils.ddp_utils import setup_ddp, gather_inference_outputs
 from vlm.utils.filter_batch import extract_batch_prompt_only
 from vlm.utils.helper import (
@@ -148,15 +149,14 @@ class UnifiedVLMInference:
                         max_new_tokens=self.max_new_tokens,
                     )
 
-                trimmed_generated_ids = [
-                    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], outputs)
-                ]
-                decoded_output = self.vlm_model.tokenizer.batch_decode(
-                    trimmed_generated_ids, skip_special_tokens=True
+                decoded_output = decode_generated_answers(
+                    self.vlm_model.tokenizer,
+                    outputs,
+                    inputs["input_ids"],
                 )
-
-                decoded_input = self.vlm_model.tokenizer.batch_decode(
-                    inputs['input_ids'], skip_special_tokens=True
+                decoded_input = decode_prompts(
+                    self.vlm_model.tokenizer,
+                    inputs["input_ids"],
                 )
 
                 logger.info_main(
@@ -167,21 +167,13 @@ class UnifiedVLMInference:
                     [
                         {
                             **{key: value[i] for key, value in raw_samples.items()},
-                            "complete_input": decoded_input,
+                            "complete_input": decoded_input[i],
                             "output_text": do,
+                            "output_text_clean": do.strip(),
                         }
                         for i, do in enumerate(decoded_output)
                     ]
                 )
-
-        for result in results:
-            # Clean up the output text
-            outputs_text = result["output_text"]
-            if "assistant\n" in outputs_text:
-                outputs_text = outputs_text.split("assistant\n")[-1].strip()
-            if "system\n" in outputs_text:
-                outputs_text = outputs_text.split("system\n")[-1].strip()
-            result["output_text_clean"] = outputs_text
 
         if self.is_distributed:
             all_results = gather_inference_outputs(local_results=results, main_rank=0)

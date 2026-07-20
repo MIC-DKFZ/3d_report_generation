@@ -1,7 +1,7 @@
 import math
 import os
 import re
-import shutil
+import json
 from pathlib import Path
 from typing import Literal
 from torch.optim import Optimizer
@@ -15,6 +15,7 @@ from transformers import TrainerCallback, TrainerControl, TrainerState, Training
 import wandb
 from transformers.modeling_utils import unwrap_model
 from vlm.evaluation.hf_evaluate.scorers import BLEUScorer, ROUGELScorer, METEORScorer
+from vlm.utils.decoding import decode_generated_answers, decode_label_answers
 from vlm.utils.ddp_utils import gather_inference_outputs
 from vlm.utils.filter_batch import extract_batch_prompt_only
 from vlm.utils import logger
@@ -362,10 +363,6 @@ class PycocoevalCallback(TrainerCallback):
         metrics=None,
         **kwargs,
     ):
-        # TODO: Figure how to handle eval_every_n_epochs if early stopping is enabled (maybe just remove it)
-        # if state.epoch - self.last_epoch < self.eval_every_n_epochs:
-        #     return
-
         self.last_epoch = state.epoch
 
         logger.info_main(f"Starting Evaluation Callback...")
@@ -387,22 +384,26 @@ class PycocoevalCallback(TrainerCallback):
                 del inputs_prompt_only["raw_samples"]
                 del inputs_prompt_only["batch_count"]
 
+                prompt_input_ids = inputs_prompt_only["input_ids"]
                 outputs = model.generate(
                     **inputs_prompt_only,
                     max_new_tokens=self.max_new_tokens
                 )
 
-                # Decode input and generated output
-                decoded_gts = self.tokenizer.batch_decode(inputs["input_ids"], skip_special_tokens=True)
-                decoded_preds = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                decoded_gt_assistant_answers = decode_label_answers(
+                    self.tokenizer,
+                    inputs["labels"],
+                )
+                decoded_pred_assistant_answers = decode_generated_answers(
+                    self.tokenizer,
+                    outputs,
+                    prompt_input_ids,
+                )
 
                 # Explicitly delete large tensors to free memory
                 del inputs_prompt_only
                 del outputs
                 torch.cuda.empty_cache()  # Clear CUDA cache periodically
-
-                decoded_gt_assistant_answers = [decoded_gt.split("assistant\n")[-1].strip() for decoded_gt in decoded_gts]
-                decoded_pred_assistant_answers = [decoded_output.split("assistant\n")[-1].strip() for decoded_output in decoded_preds]
 
                 # store predictions and ground truths
                 preds.extend(decoded_pred_assistant_answers)
@@ -478,6 +479,7 @@ class PycocoevalCallback(TrainerCallback):
                     radbert_scores, pred_df, gt_df = self.radbert_scorer(
                         preds=all_preds,
                         gts=all_gts,
+                        image_ids=all_image_ids,
                         default_gt_df=self.radbert_gt_df
                     )
                     if self.radbert_gt_df is None:
@@ -737,6 +739,42 @@ class TerminateOnNaNLossCallback(TrainerCallback):
                 f"Training aborted! Loss was {current_loss} for {self.threshold} consecutive logs. "
                 f"See {file_path} for details."
             )
+
+
+class EveryNEpochsCallback(TrainerCallback):
+    # `trainer.eval_steps` is passed as `n` and controls the cadence. This callback is
+    # needed, for example, to evaluate every n epochs instead of after every epoch.
+    def __init__(self, n=1):
+        self.n = n
+
+    def _get_epoch(self, state):
+        return int(round(state.epoch)) if state.epoch is not None else None
+
+    def _is_final_epoch(self, args, epoch: int | None) -> bool:
+        return epoch is not None and epoch >= int(round(args.num_train_epochs))
+
+    def _should_run_on_epoch(self, args, state) -> bool:
+        epoch = self._get_epoch(state)
+        if self._is_final_epoch(args, epoch):
+            return True
+        return epoch is not None and epoch % self.n == 0
+
+    @staticmethod
+    def _enable_eval_and_save(control):
+        control.should_evaluate = True
+        control.should_save = True
+        return control
+
+    @staticmethod
+    def _disable_eval_and_save(control):
+        control.should_evaluate = False
+        control.should_save = False
+        return control
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        if self._should_run_on_epoch(args, state):
+            return self._enable_eval_and_save(control)
+        return self._disable_eval_and_save(control)
 
 
 class WandbCustomLoggingCallback(TrainerCallback):
