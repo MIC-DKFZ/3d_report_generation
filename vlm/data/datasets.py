@@ -223,10 +223,6 @@ class MedicalImageDataset(Dataset, ABC):
             # remove batch dimension
             vision_input = blosc2.load_array(vision_input_path)
 
-            # TEMPORARY FIX FOR CURIA EMBEDS THAT ARE SAVED AS FLOAT64
-            if vision_input.dtype != "float32":
-                vision_input = vision_input.astype("float32")
-
             if vision_input.ndim == 5 and vision_input.shape[0] == 1:
                 vision_input = vision_input.squeeze(0)
 
