@@ -14,6 +14,7 @@ import torch
 from einops import rearrange
 from torch.utils.data import Dataset
 
+from vlm.data.embedding_transforms import EmbeddingCompose
 from vlm.utils import logger
 from vlm.utils.dataset_utils import get_training_image_transforms, preprocess_3d_image
 from vlm.utils.regex_patterns import (
@@ -91,6 +92,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.vision_encoder_patch_size = vision_encoder_patch_size
         self.is_stacked_2d_embedding = cfg.data.is_stacked_2d_embedding
         self.reduce_to_n_slices = cfg.data.reduce_to_n_slices
+        self.embedding_transforms = self._build_embedding_transforms(cfg)
 
         if self.split == "train":
             self.dataset_json_path = Path(cfg.data.train_dataset_json_path)
@@ -142,6 +144,16 @@ class MedicalImageDataset(Dataset, ABC):
             )
         else:
             self.training_transforms = None
+
+    def _build_embedding_transforms(self, cfg: RunConfig) -> EmbeddingCompose | None:
+        if self.split != "train" or self.vision_input_type != VisionInputType.EMBEDDING:
+            return None
+
+        transforms = [transform_cfg.to_instance() for transform_cfg in cfg.data.embedding_transforms]
+        if not transforms:
+            return None
+
+        return EmbeddingCompose(transforms)
 
     @abstractmethod
     def _get_vision_input_path(self, image_id) -> Path:
@@ -334,6 +346,8 @@ class MedicalImageDataset(Dataset, ABC):
                     f"Unsupported embedding constant type: {type(self.embedding_constant)}"
                 )
         else:
+            if self.embedding_transforms is not None:
+                vision_input = self.embedding_transforms(vision_input)
             result["vision_input"] = vision_input
 
         return result
@@ -942,6 +956,10 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
                     f"Unsupported embedding constant type: {type(self.embedding_constant)}"
                 )
         else:
+            if self.embedding_transforms is not None:
+                vision_input = [
+                    self.embedding_transforms(embedding) for embedding in vision_input
+                ]
             result["vision_input"] = vision_input
 
         return result

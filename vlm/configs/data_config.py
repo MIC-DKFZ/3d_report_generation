@@ -5,9 +5,13 @@ import vlm
 
 from torch.utils.data import Dataset
 
-from vlm.configs.base import ConfigBase
+from vlm.configs.base import ConfigBase, RecursiveFindClassConfigBase
 from vlm.utils.vision_input_type import VisionInputType
 from vlm.utils.find_class_by_name import recursive_find_python_class
+
+
+class EmbeddingTransformClassConfig(RecursiveFindClassConfigBase):
+    folder_to_search = "vlm.data.embedding_transforms"
 
 
 class DataConfig(ConfigBase):
@@ -59,6 +63,10 @@ class DataConfig(ConfigBase):
         False, description="Resize images to 192x192x192 cubes (with lung crops)."
     )
     do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
+    embedding_transforms: list[EmbeddingTransformClassConfig] = Field(
+        default_factory=list,
+        description="Embedding-space augmentations to apply to precomputed embeddings during training.",
+    )
     do_sentence_shuffle: bool = Field(
         True,
         description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.",
@@ -128,6 +136,13 @@ class DataConfig(ConfigBase):
         if self.is_stacked_2d_embedding and self.reduce_to_n_slices is None:
             raise ValueError("Missing parameters for stacked 2D embeddings input: "
                              "please specify 'reduce_to_n_slices' when is_stacked_2d_embedding=True.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_embedding_augmentations(self):
+        if self.embedding_transforms and self.vision_input_type != VisionInputType.EMBEDDING:
+            raise ValueError("embedding_transforms require vision_input_type='embedding'.")
+
         return self
 
     dataset_class_name: str | None = Field(
