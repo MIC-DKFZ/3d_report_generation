@@ -41,6 +41,6 @@ class TrainableModuleConfig(ConfigBase):
     def check_peft_consistency(self):
         if self.mode == "peft" and self.peft is None:
             raise ValueError("Must provide 'peft' config when mode='peft'.")
-        if self.mode != "peft" and self.peft is not None:
-            raise ValueError("'peft' must be None unless mode='peft'.")
+        if self.mode == "full" and self.peft is not None:
+            raise ValueError("'peft' must be None for mode='full'; frozen PEFT modules are supported.")
         return self
