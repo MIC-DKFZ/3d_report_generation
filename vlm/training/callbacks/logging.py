@@ -437,41 +437,41 @@ class PycocoevalCallback(TrainerCallback):
             all_image_ids = all_results["image_ids"]
 
             # Put preds and gts into compatible format for Pycocoeval
-            in_res = {i: [pred] for i, pred in enumerate(all_preds)}
-            in_gts = {i: [gt] for i, gt in enumerate(all_gts)}
+            # in_res = {i: [pred] for i, pred in enumerate(all_preds)}
+            # in_gts = {i: [gt] for i, gt in enumerate(all_gts)}
 
             # === BLEU ===
-            try:
-                (bleu_score_1, bleu_score_2, bleu_score_3, bleu_score_4), _ = self.bleu_scorer.compute_score(gts=in_gts,
-                                                                                                             res=in_res,
-                                                                                                             verbose=0)
-            except Exception as e:
-                logger.error(f"BLEU score calculation failed: {e}")
-                bleu_score_1 = bleu_score_2 = bleu_score_3 = bleu_score_4 = -1.0
+            # try:
+            #     (bleu_score_1, bleu_score_2, bleu_score_3, bleu_score_4), _ = self.bleu_scorer.compute_score(gts=in_gts,
+            #                                                                                                  res=in_res,
+            #                                                                                                  verbose=0)
+            # except Exception as e:
+            #     logger.error(f"BLEU score calculation failed: {e}")
+            #     bleu_score_1 = bleu_score_2 = bleu_score_3 = bleu_score_4 = -1.0
 
             # === METEOR ===
-            try:
-                meteor_score, _ = self.meteor_scorer.compute_score(gts=in_gts, res=in_res)
-            except Exception as e:
-                logger.error(f"METEOR score calculation failed: {e}")
-                self.meteor_scorer.lock.release()
-                meteor_score = -1.0  # use -1 to indicate error
+            # try:
+            #     meteor_score, _ = self.meteor_scorer.compute_score(gts=in_gts, res=in_res)
+            # except Exception as e:
+            #     logger.error(f"METEOR score calculation failed: {e}")
+            #     self.meteor_scorer.lock.release()
+            #     meteor_score = -1.0  # use -1 to indicate error
 
             # === ROUGE ===
-            try:
-                rougel_score, _ = self.rougel_scorer.compute_score(gts=in_gts, res=in_res)
-                rougel_score = rougel_score.item()
-            except Exception as e:
-                logger.error(f"ROUGE-L score calculation failed: {e}")
-                rougel_score = -1.0  # use -1 to indicate error
+            # try:
+            #     rougel_score, _ = self.rougel_scorer.compute_score(gts=in_gts, res=in_res)
+            #     rougel_score = rougel_score.item()
+            # except Exception as e:
+            #     logger.error(f"ROUGE-L score calculation failed: {e}")
+            #     rougel_score = -1.0  # use -1 to indicate error
 
             # === CIDEr ===
-            try:
-                cider_score, _ = self.cider_scorer.compute_score(gts=in_gts, res=in_res)
-                cider_score = cider_score.item()
-            except Exception as e:
-                logger.error(f"CIDEr score calculation failed: {e}")
-                cider_score = -1.0  # use -1 to indicate error
+            # try:
+            #     cider_score, _ = self.cider_scorer.compute_score(gts=in_gts, res=in_res)
+            #     cider_score = cider_score.item()
+            # except Exception as e:
+            #     logger.error(f"CIDEr score calculation failed: {e}")
+            #     cider_score = -1.0  # use -1 to indicate error
 
             # === RadBert ===
             if self.calculate_radbert_score:
@@ -497,38 +497,38 @@ class PycocoevalCallback(TrainerCallback):
                     pred_df = gt_df = None
 
             metric_results = {
-                "bleu_score_1": bleu_score_1,
-                "bleu_score_2": bleu_score_2,
-                "bleu_score_3": bleu_score_3,
-                "bleu_score_4": bleu_score_4,
-                "meteor_score": meteor_score,
-                "rougel_score": rougel_score,
-                "cider_score": cider_score,
+                # "bleu_score_1": bleu_score_1,
+                # "bleu_score_2": bleu_score_2,
+                # "bleu_score_3": bleu_score_3,
+                # "bleu_score_4": bleu_score_4,
+                # "meteor_score": meteor_score,
+                # "rougel_score": rougel_score,
+                # "cider_score": cider_score,
             }
             if self.calculate_radbert_score:
                 metric_results.update(radbert_scores)
 
             # Log the BLEU scores
-            logger.info_main(f"BLEU-1 score: {bleu_score_1:.4f}")
-            logger.info_main(f"BLEU-2 score: {bleu_score_2:.4f}")
-            logger.info_main(f"BLEU-3 score: {bleu_score_3:.4f}")
-            logger.info_main(f"BLEU-4 score: {bleu_score_4:.4f}")
-            wandb.log({f"bleu_score_1": bleu_score_1})
-            wandb.log({f"bleu_score_2": bleu_score_2})
-            wandb.log({f"bleu_score_3": bleu_score_3})
-            wandb.log({f"bleu_score_4": bleu_score_4})
+            # logger.info_main(f"BLEU-1 score: {bleu_score_1:.4f}")
+            # logger.info_main(f"BLEU-2 score: {bleu_score_2:.4f}")
+            # logger.info_main(f"BLEU-3 score: {bleu_score_3:.4f}")
+            # logger.info_main(f"BLEU-4 score: {bleu_score_4:.4f}")
+            # wandb.log({f"bleu_score_1": bleu_score_1})
+            # wandb.log({f"bleu_score_2": bleu_score_2})
+            # wandb.log({f"bleu_score_3": bleu_score_3})
+            # wandb.log({f"bleu_score_4": bleu_score_4})
 
             # Log the METEOR score
-            logger.info_main(f"METEOR score: {meteor_score}")
-            wandb.log({"meteor_score": meteor_score})
+            # logger.info_main(f"METEOR score: {meteor_score}")
+            # wandb.log({"meteor_score": meteor_score})
 
             # Log the ROUGE-L score
-            logger.info_main(f"ROUGE-L score: {rougel_score}")
-            wandb.log({"rougel_score": rougel_score})
+            # logger.info_main(f"ROUGE-L score: {rougel_score}")
+            # wandb.log({"rougel_score": rougel_score})
 
             # Log the CIDEr score
-            logger.info_main(f"CIDEr score: {cider_score}")
-            wandb.log({"cider_score": cider_score})
+            # logger.info_main(f"CIDEr score: {cider_score}")
+            # wandb.log({"cider_score": cider_score})
 
             callback_eval_dir = (
                 Path(args.output_dir) / "callback_eval" / f"step-{state.global_step}"
