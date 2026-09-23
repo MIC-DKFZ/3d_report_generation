@@ -4,7 +4,7 @@ import random
 import string
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, TypeVar, Dict
+from typing import Any, TypeVar, Dict
 from collections.abc import Container
 
 import numpy as np
@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 from pydantic import BaseModel, create_model
-from transformers.trainer import TRAINER_STATE_NAME
 
 from vlm.utils.load_and_save_files import load_json, load_yaml
 from vlm.utils.paths import VLM_OUTPUT_DIR
@@ -303,46 +302,6 @@ def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[s
     )
 
 
-def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "best", "best_metric"]) -> Path:
-    """
-    Determine the checkpoint directory within a run directory.
-
-    Args:
-        run_dir: Path to the run directory containing checkpoint subdirectories.
-        mode: Select the 'final' or the 'best' checkpoint within the run directory.
-
-    Returns:
-        Path to the resolved checkpoint directory.
-    """
-    run_dir = Path(run_dir)
-    if not run_dir.exists():
-        raise FileNotFoundError(f"The specified run directory does not exist: {run_dir}")
-    if mode == "best_metric":
-        our_best_ckpt_dir = [_ for _ in run_dir.glob("best_model-*")]
-        if len(our_best_ckpt_dir) != 1 or not our_best_ckpt_dir[0].is_dir():
-            raise FileNotFoundError(f"Expected exactly one 'best_model-*' directory in {run_dir}")
-        ckpt_dir = our_best_ckpt_dir[0]
-    else:
-        ckpt_dirs = [d for d in run_dir.glob("checkpoint-*") if d.is_dir()]
-        if not ckpt_dirs:
-            raise FileNotFoundError(f"No HF trainer checkpoint directories found in {run_dir}")
-        ckpt_dirs_sorted = sorted(ckpt_dirs, key=lambda d: int(d.name.split("-")[-1]))
-
-        final_ckpt_dir = ckpt_dirs_sorted[-1]
-        if mode == "final":
-            ckpt_dir = final_ckpt_dir
-        elif mode == "best":
-            final_trainer_state = load_json(final_ckpt_dir / TRAINER_STATE_NAME)
-            best_ckpt_dir = Path(final_trainer_state["best_model_checkpoint"])
-            if not best_ckpt_dir.is_dir():
-                raise FileNotFoundError(f"The HF trainer 'best_model_checkpoint' directory does not exist in {run_dir}")
-            ckpt_dir = best_ckpt_dir
-        else:
-            raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
-
-    return ckpt_dir
-
-
 def recursive_dict_merge(d1: dict[str, Any], d2: dict[str, Any]) -> dict[str, Any]:
     """
     Recursively merge two dictionaries.
@@ -402,14 +361,6 @@ def log_param_groups(model: nn.Module, optimizer: Optimizer, file_path=None):
 
 def count_parameters(module: nn.Module) -> int:
     return sum(p.numel() for p in module.parameters())
-
-
-def get_trainable_state_dict(model: nn.Module):
-    """Return a state dict containing only parameters with requires_grad=True."""
-    trainable_names = {name for name, p in model.named_parameters() if p.requires_grad}
-    state_dict = {name: p for name, p in model.state_dict().items() if name in trainable_names}
-
-    return state_dict
 
 
 def find_run_dir_in_output_dir(run_dir: str):

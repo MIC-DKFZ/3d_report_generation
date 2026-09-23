@@ -2,14 +2,12 @@ import argparse
 import json
 import os
 import shutil
-import sys
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 import torch.distributed as dist
 from torch.utils.data import DataLoader
-from transformers import EarlyStoppingCallback
+from transformers import EarlyStoppingCallback, TrainerCallback
 from trl import SFTConfig
 
 import wandb
@@ -29,15 +27,22 @@ from inference import main as inference_main
 from vlm.models.abstract_vlm import AbstractVLMModel
 from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
     TerminateOnNaNLossCallback, EveryNEpochsCallback
+from vlm.training.checkpointing import (
+    CheckpointPlan,
+    TrainRuntimeArgs,
+    create_checkpoint_plan,
+    load_run_config_from_run_dir,
+    restore_model_checkpoints,
+    save_final_config,
+)
 from vlm.training.trainers import VLMSFTTrainer
 from vlm.registries.vlm_registry import VLM_REGISTRY
 from vlm.utils import logger
 from vlm.utils.ddp_utils import setup_ddp
 from vlm.utils.helper import seed_everything, load_config_file, \
-    is_main_process, count_parameters, resolve_ckpt_dir_in_run_dir, \
-    collect_image_ids_from_config_dataset_jsons
+    is_main_process, count_parameters, collect_image_ids_from_config_dataset_jsons
 from vlm.utils.local_staging import stage_vision_input_to_local
-from vlm.utils.load_and_save_files import load_yaml, save_json, save_yaml
+from vlm.utils.load_and_save_files import save_json
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.memory_utils import (
     aggressive_cleanup,
@@ -47,33 +52,10 @@ from vlm.utils.memory_utils import (
 from vlm.utils.paths import VLM_CONFIG_DIR
 
 
-FINAL_CONFIG_FILENAME = "final_config.yml"
 INPUT_CONFIG_FILENAME = "input_config.yml"
 TRAIN_LOG_FILENAME = "train.log"
 ADAPTER_STATS_FILENAME = "adapter_stats.json"
 WANDB_CONFIG_BACKUP_FILENAME = "config_backup.json"
-
-
-@dataclass(frozen=True)
-class TrainRuntimeArgs:
-    continue_training: bool
-    continue_training_run_dir: Path | None
-
-
-def load_run_config_from_run_dir(run_dir: str | Path) -> RunConfig:
-    run_dir = Path(run_dir)
-    final_config_path = run_dir / FINAL_CONFIG_FILENAME
-    if not final_config_path.is_file():
-        raise FileNotFoundError(f"No {FINAL_CONFIG_FILENAME} found in run directory: {run_dir}")
-
-    cfg_dict = load_yaml(final_config_path)["run"]
-    cfg = RunConfig.model_validate(cfg_dict)
-
-    # The resume directory passed on the CLI is the source of truth;
-    # the saved config may contain an output_dir from a previous filesystem location.
-    cfg.general.output_dir = str(run_dir)
-
-    return cfg
 
 
 class UnifiedVLMTrainer:
@@ -81,7 +63,8 @@ class UnifiedVLMTrainer:
         self,
         vlm_model: AbstractVLMModel,
         cfg: RunConfig,
-        runtime_args: TrainRuntimeArgs,
+        checkpoint_plan: CheckpointPlan,
+        ddp_setup: tuple[bool, int, int, int, int],
     ):
         """
         Initialize the unified VLM trainer.
@@ -89,11 +72,13 @@ class UnifiedVLMTrainer:
         Args:
             vlm_model: An instance of a class derived from AbstractVLMModel
             cfg: The RunConfig of the experiment
+            checkpoint_plan: Ordered model and training-state checkpoint sources
+            ddp_setup: Distributed topology initialized by main
         """
         self.vlm_model: AbstractVLMModel = vlm_model
         self.trainer: VLMSFTTrainer | None = None
         self.cfg: RunConfig = cfg
-        self.runtime_args = runtime_args
+        self.checkpoint_plan = checkpoint_plan
 
         (
             self.is_distributed,
@@ -101,7 +86,7 @@ class UnifiedVLMTrainer:
             self.world_size,
             self.local_rank,
             self.local_world_size,
-        ) = setup_ddp()
+        ) = ddp_setup
 
     def get_training_args(self):
         """Configure standard training arguments for distributed training"""
@@ -116,38 +101,6 @@ class UnifiedVLMTrainer:
 
         # TODO: Do calculation before final_config.yml is logged
         self.cfg.trainer.dataloader_num_workers = num_workers
-
-        # Normalize legacy placeholder values so non-DeepSpeed runs do not try
-        # to parse "deepspeed" as a config/path.
-        deepspeed_cfg_path = self.cfg.trainer.deepspeed
-        if isinstance(deepspeed_cfg_path, str):
-            normalized_ds = deepspeed_cfg_path.strip().lower()
-            if normalized_ds in {"", "none", "null", "false", "off", "deepspeed"}:
-                logger.warning_main(
-                    "Ignoring placeholder value for trainer.deepspeed "
-                    f"({deepspeed_cfg_path!r}) and disabling DeepSpeed."
-                )
-                self.cfg.trainer.deepspeed = None
-                deepspeed_cfg_path = None
-
-        # Keep HF/Accelerate and DeepSpeed gradient accumulation in sync to avoid
-        # "Gradient accumulation steps mismatch" warnings.
-        if deepspeed_cfg_path:
-            ds_path = Path(deepspeed_cfg_path)
-            if not ds_path.is_absolute():
-                ds_path = Path.cwd() / ds_path
-            if ds_path.exists():
-                with open(ds_path, "r", encoding="utf-8") as f:
-                    ds_cfg = json.load(f)
-                ds_grad_accum = ds_cfg.get("gradient_accumulation_steps")
-                if isinstance(ds_grad_accum, int) and ds_grad_accum >= 1:
-                    if self.cfg.trainer.gradient_accumulation_steps != ds_grad_accum:
-                        logger.warning_main(
-                            "Overriding trainer.gradient_accumulation_steps "
-                            f"({self.cfg.trainer.gradient_accumulation_steps}) with DeepSpeed value "
-                            f"({ds_grad_accum}) from {ds_path}."
-                        )
-                    self.cfg.trainer.gradient_accumulation_steps = ds_grad_accum
 
         # Add model-specific arguments
         model_args = self.vlm_model.get_model_specific_training_args()
@@ -164,7 +117,7 @@ class UnifiedVLMTrainer:
             seed=self.cfg.general.seed,
         )
 
-    def train(self, train_dataset, val_dataset, callback_val_dataset=None):
+    def train(self, train_dataset, val_dataset, callback_val_dataset=None) -> bool:
         """
         Main training function that trains the VLM model.
 
@@ -172,6 +125,9 @@ class UnifiedVLMTrainer:
             train_dataset: Training dataset
             val_dataset: Validation dataset used by the trainer for eval loss.
             callback_val_dataset: Validation dataset used by custom generation callbacks.
+
+        Returns:
+            Whether the resumed run had already reached its configured training limit.
         """
         if self.is_distributed:
             dist.barrier()
@@ -182,73 +138,15 @@ class UnifiedVLMTrainer:
             log_memory_usage("Before Training Setup")
 
         # Setup model, processor and tokenizer
-        if not self.runtime_args.continue_training:
-            model = self.vlm_model.setup_model()
-            # Apply trainable parameter configs and possibly add PEFT adapter layers
-            self.vlm_model.apply_trainable_config()
-        else:
-            # The loaded model should already have the trainable parameters applied
-            model = self.vlm_model.model
+        model = self.vlm_model.setup_model()
 
-        if self.cfg.general.init_from_checkpoint_dir:
-            missing_keys, unexpected_keys = self.vlm_model.load_weights_from_checkpoint_dir(
-                self.cfg.general.init_from_checkpoint_dir,
-                allow_unexpected_keys=True,  # Needed if Stage N+1 needs additional modules
-            )
-            preview_limit = 20
+        # Configure component trainability and construct any configured PEFT layers.
+        self.vlm_model.configure_model_for_training()
 
-            model_for_key_check = self.vlm_model.model
-            if model_for_key_check is None:
-                logger.warning_main(
-                    "Checkpoint load: could not classify missing keys because model is None"
-                )
-                trainable_param_names = set()
-            else:
-                trainable_param_names = {
-                    name for name, p in model_for_key_check.named_parameters() if p.requires_grad
-                }
+        self.vlm_model.initialize_checkpoint_tracking()
 
-            if missing_keys:
-                missing_trainable = [k for k in missing_keys if k in trainable_param_names]
-                missing_non_trainable = [k for k in missing_keys if k not in trainable_param_names]
-
-                if missing_trainable:
-                    missing_trainable_preview = missing_trainable[:preview_limit]
-                    missing_trainable_suffix = "" if len(missing_trainable) <= preview_limit else " ..."
-                    logger.warning_main(
-                        f"Checkpoint load: {len(missing_trainable)} trainable keys are missing from "
-                        f"{self.cfg.general.init_from_checkpoint_dir}. "
-                        f"Preview (first {len(missing_trainable_preview)}): "
-                        f"{missing_trainable_preview}{missing_trainable_suffix}"
-                    )
-
-                if missing_non_trainable:
-                    missing_non_trainable_preview = missing_non_trainable[:preview_limit]
-                    missing_non_trainable_suffix = (
-                        "" if len(missing_non_trainable) <= preview_limit else " ..."
-                    )
-                    logger.info_main(
-                        f"Checkpoint load: {len(missing_non_trainable)} non-trainable keys are missing from "
-                        f"{self.cfg.general.init_from_checkpoint_dir} (usually expected for trainable-only checkpoints). "
-                        f"Preview (first {len(missing_non_trainable_preview)}): "
-                        f"{missing_non_trainable_preview}{missing_non_trainable_suffix}"
-                    )
-
-            if unexpected_keys:
-                unexpected_preview = unexpected_keys[:preview_limit]
-                unexpected_suffix = "" if len(unexpected_keys) <= preview_limit else " ..."
-                logger.warning_main(
-                    f"Checkpoint load: {len(unexpected_keys)} unexpected keys in "
-                    f"{self.cfg.general.init_from_checkpoint_dir}. "
-                    f"Preview (first {len(unexpected_preview)}): {unexpected_preview}{unexpected_suffix}"
-                )
-            if not missing_keys and not unexpected_keys:
-                logger.warning_main(
-                    "Checkpoint load: no missing/unexpected keys when initializing from "
-                    f"{self.cfg.general.init_from_checkpoint_dir}"
-                )
-            # Keep trainer input explicit after checkpoint weight load
-            model = self.vlm_model.model
+        # Sparse checkpoints are applied in dependency order; resume weights come last.
+        restore_model_checkpoints(self.vlm_model, self.checkpoint_plan)
 
         # Log adapter-specific numbers (e.g. number of params)
         if self.vlm_model.vision_adapter is not None:
@@ -288,7 +186,7 @@ class UnifiedVLMTrainer:
         # Configure training arguments
         training_args = self.get_training_args()
 
-        callbacks = [
+        callbacks: list[TrainerCallback] = [
             LossLoggingCallback(),
             WandbGroupedLRCallback(),
             TerminateOnNaNLossCallback(threshold=3)
@@ -328,15 +226,6 @@ class UnifiedVLMTrainer:
             )
 
             callbacks.append(
-                # PrintEvalBatchCallback(  # type: ignore[arg-type]
-                #     callback_eval_dataloader=callback_eval_dataloader,
-                #     task_type="RG" if self.cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
-                #     max_new_tokens=self.cfg.eval.max_new_tokens,
-                #     eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
-                #     tokenizer=self.vlm_model.tokenizer,
-                #     processor=self.vlm_model.processor,
-                #     is_distributed=self.is_distributed
-                # )
                 PycocoevalCallback(  # type: ignore[arg-type]
                     eval_dataloader=callback_eval_dataloader,
                     max_new_tokens=self.cfg.eval.max_new_tokens,
@@ -358,14 +247,6 @@ class UnifiedVLMTrainer:
             )
 
         # Initialize SFT trainer
-        init_opt_scheduler_ckpt = None
-        if (
-            self.cfg.general.init_optimizer_scheduler_from_checkpoint
-            and self.cfg.general.init_from_checkpoint_dir
-            and not self.runtime_args.continue_training
-        ):
-            init_opt_scheduler_ckpt = self.cfg.general.init_from_checkpoint_dir
-
         self.trainer = VLMSFTTrainer(
             model=model,
             args=training_args,
@@ -373,8 +254,8 @@ class UnifiedVLMTrainer:
             eval_dataset=val_dataset,
             data_collator=self.vlm_model.collate_fn,
             callbacks=callbacks,
-            init_opt_scheduler_from_ckpt=init_opt_scheduler_ckpt,
-            skip_model_load_on_resume=self.runtime_args.continue_training,
+            optimizer_scheduler_checkpoint=self.checkpoint_plan.optimizer_scheduler_checkpoint,
+            model_weights_preloaded=self.checkpoint_plan.is_resume,
             scheduler=self.cfg.scheduler.to_instance(
                 module_attr_map=self.vlm_model.module_attr_map,
                 forbidden_name_patterns_for_wd=self.vlm_model.forbidden_name_patterns_for_wd,
@@ -389,14 +270,16 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training")
 
-        self.trainer.train(resume_from_checkpoint=self.runtime_args.continue_training)
+        # Model weights are already loaded; pass the checkpoint path so Trainer can restore
+        # its step, callback, scaler, RNG, and dataloader progress when continuing a run.
+        resume_checkpoint = self.checkpoint_plan.trainer_state_checkpoint
+        self.trainer.train(
+            resume_from_checkpoint=str(resume_checkpoint) if resume_checkpoint is not None else None
+        )
+        already_complete_on_resume = self.trainer.already_complete_on_resume
 
         if is_main_process():
             log_memory_usage("After Training")
-
-        # Save model (only on main process)
-        # if is_main_process():
-        #     self.trainer.save_model(self.cfg.general.output_dir)
 
         # Synchronize all processes before cleanup
         if self.is_distributed:
@@ -430,6 +313,7 @@ class UnifiedVLMTrainer:
             dist.barrier()
 
         log_banner("Successfully finished Training")
+        return already_complete_on_resume
 
 
 def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
@@ -450,11 +334,6 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
     )
 
     args_parser.add_argument(
-        "--continue_training",
-        action="store_true",
-        help="Continue training from an existing run.",
-    )
-    args_parser.add_argument(
         "--continue_training_run_dir",
         type=Path,
         default=None,
@@ -463,22 +342,14 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
 
     args, _ = args_parser.parse_known_args()
 
-    if args.continue_training and args.continue_training_run_dir is None:
-        args_parser.error("--continue_training_run_dir is required when --continue_training is set.")
-    if not args.continue_training and args.continue_training_run_dir is not None:
-        args_parser.error("--continue_training_run_dir can only be used with --continue_training.")
-    if not args.continue_training and args.train_config is None:
-        args_parser.error("--train_config is required unless --continue_training is set.")
+    if args.continue_training_run_dir is None and args.train_config is None:
+        args_parser.error("--train_config or --continue_training_run_dir is required.")
 
     runtime_args = TrainRuntimeArgs(
-        continue_training=args.continue_training,
         continue_training_run_dir=args.continue_training_run_dir,
     )
 
-    if runtime_args.continue_training:
-        assert runtime_args.continue_training_run_dir is not None, (
-            "argparse validation should require --continue_training_run_dir with --continue_training"
-        )
+    if runtime_args.continue_training_run_dir is not None:
         cfg = load_run_config_from_run_dir(runtime_args.continue_training_run_dir)
 
         log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
@@ -490,11 +361,13 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
         cfg.general.output_dir = str(runtime_args.continue_training_run_dir)
         cfg.apply_conditional_resets()
 
+        # Persist CLI overrides for future resumptions.
+        if is_main_process():
+            save_final_config(cfg)
+
         return cfg, runtime_args
 
-    assert args.train_config is not None, (
-        "argparse validation should require --train_config unless --continue_training is set"
-    )
+    assert args.train_config is not None
     train_config_path = Path(VLM_CONFIG_DIR, args.train_config)
     if not train_config_path.exists():
         raise ValueError(f"The provided config file does not exist: {train_config_path}")
@@ -531,15 +404,7 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
     cfg.apply_conditional_resets()
 
     if is_main_process():
-        final_config_path = os.path.join(cfg.general.output_dir, FINAL_CONFIG_FILENAME)
-        save_yaml(
-            {
-                "command": " ".join(sys.argv),
-                "run": cfg.model_dump()
-            },
-            final_config_path,
-            sort_keys=False
-        )
+        save_final_config(cfg)
 
     return cfg, runtime_args
 
@@ -721,15 +586,19 @@ def train_val_data_from_config(cfg: RunConfig):
 
 @logger.catch(reraise=True)
 def main():
-    setup_ddp()  # setup DDP first so we can communicate shared output folder
+    # Set up DDP before config validation so generated run paths can be shared across ranks.
+    ddp_setup = setup_ddp()
     cfg, runtime_args = setup_config_and_logging()
+    checkpoint_plan = create_checkpoint_plan(cfg, runtime_args)
 
+    # Pass the actual run directory to the submission script for subsequent (test-set) inference.
     run_dir_file = os.getenv("VLM_RUN_DIR_FILE")
     if run_dir_file and is_main_process():
         run_dir_file_path = Path(run_dir_file)
         run_dir_file_path.parent.mkdir(parents=True, exist_ok=True)
         run_dir_file_path.write_text(cfg.general.output_dir + "\n", encoding="utf-8")
 
+    # Copy vision inputs to node-local storage to reduce shared filesystem I/O.
     if cfg.general.stage_vision_input_to_local:
         image_ids = collect_image_ids_from_config_dataset_jsons(cfg, ["train", "val", "test"])
         cfg.data.vision_input_path = str(
@@ -745,51 +614,34 @@ def main():
     try:
         vlm_model_class = VLM_REGISTRY[cfg.model.model_type].model_class
     except KeyError:
-        raise ValueError(f"Unknown model type: {cfg.general.model_type}")
+        raise ValueError(f"Unknown model type: {cfg.model.model_type}")
 
-    if runtime_args.continue_training:
-        assert runtime_args.continue_training_run_dir is not None
-        ckpt_dir = resolve_ckpt_dir_in_run_dir(
-            run_dir=runtime_args.continue_training_run_dir,
-            mode="final",
-        )
-        logger.info_main(f"Loading final model from {runtime_args.continue_training_run_dir}")
-        vlm_model = vlm_model_class(
-            model_cfg=cfg.model,
-            vision_input_type=cfg.data.vision_input_type,
-            vision_embed_dim=cfg.get_vision_embed_dim(),
-            vision_embed_size=cfg.get_vision_embed_size(),
-            text_only=cfg.data.text_only,
-            do_truncation=cfg.data.do_truncation,
-            truncate_after=cfg.data.truncate_after,
-            truncate_at=cfg.data.truncate_at,
-            local_files_only=cfg.general.local_files_only
-        )
-        vlm_model.setup_model()
-        vlm_model.apply_trainable_config()
-        vlm_model.load_weights_from_checkpoint_dir(ckpt_dir=ckpt_dir)
-    else:
-        vlm_model = vlm_model_class(
-            model_cfg=cfg.model,
-            vision_input_type=cfg.data.vision_input_type,
-            vision_embed_dim=cfg.get_vision_embed_dim(),
-            vision_embed_size=cfg.get_vision_embed_size(),
-            text_only=cfg.data.text_only,
-            do_truncation=cfg.data.do_truncation,
-            truncate_after=cfg.data.truncate_after,
-            truncate_at=cfg.data.truncate_at,
-            local_files_only=cfg.general.local_files_only
-        )
+    vlm_model = vlm_model_class(
+        model_cfg=cfg.model,
+        vision_input_type=cfg.data.vision_input_type,
+        vision_embed_dim=cfg.get_vision_embed_dim(),
+        vision_embed_size=cfg.get_vision_embed_size(),
+        text_only=cfg.data.text_only,
+        do_truncation=cfg.data.do_truncation,
+        truncate_after=cfg.data.truncate_after,
+        truncate_at=cfg.data.truncate_at,
+        local_files_only=cfg.general.local_files_only
+    )
 
     train_dataset, val_dataset, callback_val_dataset = train_val_data_from_config(cfg)
 
     # Create the trainer and train the model
-    trainer = UnifiedVLMTrainer(vlm_model=vlm_model, cfg=cfg, runtime_args=runtime_args)
+    trainer = UnifiedVLMTrainer(
+        vlm_model=vlm_model,
+        cfg=cfg,
+        checkpoint_plan=checkpoint_plan,
+        ddp_setup=ddp_setup,
+    )
 
-    trainer.train(train_dataset, val_dataset, callback_val_dataset)
+    already_complete_on_resume = trainer.train(train_dataset, val_dataset, callback_val_dataset)
     logger.remove()
 
-    if cfg.eval.run_inference:
+    if cfg.eval.run_inference and not already_complete_on_resume:
         inference_args = argparse.Namespace(
             run_dir=cfg.general.output_dir,
             mode=cfg.eval.mode

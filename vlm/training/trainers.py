@@ -4,6 +4,7 @@ import gc
 import os
 import shutil
 import time
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -17,7 +18,7 @@ from transformers.debug_utils import DebugOption
 from transformers.integrations import deepspeed_init, deepspeed_load_checkpoint
 from transformers.integrations.tpu import tpu_spmd_dataloader
 from transformers.modeling_utils import unwrap_model
-from transformers.trainer import _is_peft_model, TRAINER_STATE_NAME, SCHEDULER_NAME, OPTIMIZER_NAME
+from transformers.trainer import _is_peft_model, TRAINER_STATE_NAME
 from transformers.trainer_callback import ExportableState
 from transformers.trainer_pt_utils import get_model_param_count
 from transformers.trainer_utils import speed_metrics, TrainOutput, SaveStrategy
@@ -27,7 +28,7 @@ from trl import SFTTrainer
 
 from vlm.training.schedulers.base import SchedulerBase
 from vlm.utils import logger
-from vlm.utils.helper import get_trainable_state_dict
+from vlm.training.checkpoint_state import load_model_checkpoint, save_model_checkpoint
 
 
 class VLMSFTTrainer(SFTTrainer):
@@ -35,52 +36,58 @@ class VLMSFTTrainer(SFTTrainer):
     def __init__(
         self,
         scheduler: SchedulerBase | None = None,
-        init_opt_scheduler_from_ckpt: str | None = None,
+        optimizer_scheduler_checkpoint: str | Path | None = None,
+        model_weights_preloaded: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
 
         # Our custom scheduler
         self.scheduler = scheduler
-        self.init_opt_scheduler_from_ckpt = init_opt_scheduler_from_ckpt
+        self.optimizer_scheduler_checkpoint = (
+            str(optimizer_scheduler_checkpoint)
+            if optimizer_scheduler_checkpoint is not None
+            else None
+        )
+        self.model_weights_preloaded = model_weights_preloaded
 
         # This flag is typically True by default.
         # For some reason, this can result in the training loss not being normalized by the batch size.
         self.model_accepts_loss_kwargs = False
 
-    def _resolve_opt_scheduler_ckpt_dir(self, resume_from_checkpoint: str | None) -> str | None:
-        """
-        Determine checkpoint directory for loading optimizer/scheduler states.
-        Resume checkpoint takes precedence over init checkpoint.
-        """
-        ckpt_dir = resume_from_checkpoint or self.init_opt_scheduler_from_ckpt
-        if not ckpt_dir:
-            return None
-
-        scheduler_path = os.path.join(ckpt_dir, SCHEDULER_NAME)
-        optimizer_path = os.path.join(ckpt_dir, OPTIMIZER_NAME)
-        if not os.path.isfile(scheduler_path) or not os.path.isfile(optimizer_path):
-            logger.warning_main(
-                f"Skipping optimizer/scheduler initialization from checkpoint '{ckpt_dir}' because "
-                f"'{SCHEDULER_NAME}' or '{OPTIMIZER_NAME}' is missing."
+    def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
+        if (
+            self.model_weights_preloaded
+            and not self.is_deepspeed_enabled
+            and not self.is_fsdp_enabled
+            and not is_sagemaker_mp_enabled()
+        ):
+            logger.info_main(
+                "Skipping Trainer model-weight loading because checkpoint weights were preloaded."
             )
-            return None
+            return
 
-        return ckpt_dir
+        if (
+            not self.is_deepspeed_enabled
+            and not self.is_fsdp_enabled
+            and not is_sagemaker_mp_enabled()
+        ):
+            load_model_checkpoint(model if model is not None else self.model, resume_from_checkpoint)
+            return
 
-    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
-        """
-        Only save trainable parameters with 'requires_grad=True'.
-        """
+        super()._load_from_checkpoint(resume_from_checkpoint, model)
 
-        if output_dir is None:
-            output_dir = self.args.output_dir
+    def _save(self, output_dir=None, state_dict=None):
+        output_dir = output_dir or self.args.output_dir
+        model = self.accelerator.unwrap_model(self.model)
+        save_model_checkpoint(model, output_dir, state_dict=state_dict)
 
-        model_to_save = unwrap_model(self.model)
-        trainable_state_dict = get_trainable_state_dict(model_to_save)
-
-        if self.args.should_save:
-            self._save(output_dir, trainable_state_dict)
+    def _load_best_model(self):
+        checkpoint = self.state.best_model_checkpoint
+        if checkpoint is not None and not self.is_deepspeed_enabled and not self.is_fsdp_enabled:
+            load_model_checkpoint(self.accelerator.unwrap_model(self.model), checkpoint)
+            return
+        return super()._load_best_model()
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):
         """
@@ -455,12 +462,14 @@ class VLMSFTTrainer(SFTTrainer):
 
     #                 if step % args.gradient_accumulation_steps == 0:
     #                     # Call our own scheduler
-    #                     self.optimizer, self.lr_scheduler, changed_requires_grad_state = self.scheduler.update(
-    #                         model=self.model,
-    #                         optimizer=self.optimizer,
-    #                         lr_scheduler=self.lr_scheduler,
-    #                         global_step=self.state.global_step,
-    #                         max_steps=self.state.max_steps
+    #                     self.optimizer, self.lr_scheduler, changed_requires_grad_state = (
+    #                         self.scheduler.prepare_training_step(
+    #                             model=self.model,
+    #                             optimizer=self.optimizer,
+    #                             lr_scheduler=self.lr_scheduler,
+    #                             global_step=self.state.global_step,
+    #                             max_steps=self.state.max_steps
+    #                         )
     #                     )
 
     #                     if changed_requires_grad_state:
@@ -688,7 +697,8 @@ class VLMSFTTrainer(SFTTrainer):
         1. Log to our log files.
         2. Allow integration of our own callback to support our custom schedulers.
         """
-        optimizer_scheduler_ckpt_dir = self._resolve_opt_scheduler_ckpt_dir(resume_from_checkpoint)
+        self.already_complete_on_resume = False
+        optimizer_scheduler_ckpt_dir = self.optimizer_scheduler_checkpoint
         scheduler_is_initialized = False
         self.accelerator.free_memory()
         self._train_batch_size = batch_size
@@ -786,7 +796,7 @@ class VLMSFTTrainer(SFTTrainer):
             max_steps=max_steps
         )
         if self.optimizer is None:
-            self.optimizer, self.lr_scheduler, _ = self.scheduler.update(
+            self.optimizer, self.lr_scheduler, _ = self.scheduler.prepare_training_step(
                 model=self.model,
                 optimizer=self.optimizer,
                 lr_scheduler=self.lr_scheduler,
@@ -894,6 +904,7 @@ class VLMSFTTrainer(SFTTrainer):
             os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)
         ):
             self.state = TrainerState.load_from_json(os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME))
+            self.state.train_batch_size = self._train_batch_size
             self.compare_trainer_and_checkpoint_args(self.args, self.state)
             self._load_callback_state()
             epochs_trained = int(self.state.global_step // num_update_steps_per_epoch)
@@ -911,6 +922,15 @@ class VLMSFTTrainer(SFTTrainer):
                     f"  Will skip the first {epochs_trained} epochs then the first"
                     f" {steps_trained_in_current_epoch} batches in the first epoch."
                 )
+
+        if resume_from_checkpoint is not None and self.state.global_step >= max_steps:
+            self.already_complete_on_resume = True
+            logger.info_main(
+                "Training is already complete at global step "
+                f"{self.state.global_step}/{max_steps}; no additional updates will run."
+            )
+            epochs_trained = num_train_epochs
+            steps_trained_in_current_epoch = 0
 
         # Update the references
         for attr in ("model", "optimizer", "lr_scheduler"):
@@ -1022,22 +1042,23 @@ class VLMSFTTrainer(SFTTrainer):
                         if optimizer_scheduler_ckpt_dir and not scheduler_is_initialized:
                             scheduler_is_initialized = True
                             check_torch_load_is_safe()
-                            self.optimizer, self.lr_scheduler, changed_requires_grad_state = self.scheduler.update(
+                            self.optimizer, self.lr_scheduler, changed_requires_grad_state = self.scheduler.resume(
                                 model=self.model,
                                 optimizer=self.optimizer,
                                 lr_scheduler=self.lr_scheduler,
                                 global_step=self.state.global_step,
                                 max_steps=self.state.max_steps,
-                                load_opt_scheduler_from_ckpt=optimizer_scheduler_ckpt_dir,
+                                checkpoint_dir=optimizer_scheduler_ckpt_dir,
                             )
-
                         else:
-                            self.optimizer, self.lr_scheduler, changed_requires_grad_state = self.scheduler.update(
-                                model=self.model,
-                                optimizer=self.optimizer,
-                                lr_scheduler=self.lr_scheduler,
-                                global_step=self.state.global_step,
-                                max_steps=self.state.max_steps
+                            self.optimizer, self.lr_scheduler, changed_requires_grad_state = (
+                                self.scheduler.prepare_training_step(
+                                    model=self.model,
+                                    optimizer=self.optimizer,
+                                    lr_scheduler=self.lr_scheduler,
+                                    global_step=self.state.global_step,
+                                    max_steps=self.state.max_steps,
+                                )
                             )
 
                         if changed_requires_grad_state:
