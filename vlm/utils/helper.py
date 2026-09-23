@@ -1,56 +1,21 @@
 import argparse
+import json
 import os
 import random
 import string
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TypeVar, Dict
+from typing import Any
 from collections.abc import Container
 
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Optimizer
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel
 
 from vlm.utils.load_and_save_files import load_json, load_yaml
 from vlm.utils.paths import VLM_OUTPUT_DIR
-
-
-def create_and_instantiate_model_from_dict(data_dict: Dict[str, Any]) -> BaseModel:
-    """
-    Dynamically creates a Pydantic BaseModel based on the keys and inferred
-    types of the input dictionary, and then returns an instance of that model
-    populated with the dictionary data.
-    """
-
-    # 1. Infer Pydantic Field Definitions
-    # We iterate over the dictionary and create the field definitions for create_model.
-    # We use type(value) for the field's type and the value itself as the default
-    # (though we'll pass the data separately for instantiation).
-
-    # For robust type checking, it's better to treat all fields as required
-    # and infer their type based on the value's type.
-    # The format required by create_model for a required field is: (Type, ...)
-
-    field_definitions = {}
-    for key, value in data_dict.items():
-        # Get the Python type of the value
-        field_type = type(value)
-        # Define the field as a required field of that type
-        field_definitions[key] = (field_type, ...)
-
-    # 2. Dynamically Create the Model Class
-    DynamicModel = create_model(
-        'InferredModel', # Name the dynamic class
-        **field_definitions
-    )
-
-    # 3. Instantiate and Validate the Model
-    # We pass the original data_dict as keyword arguments to the new model
-    instance = DynamicModel(**data_dict)
-
-    return instance
 
 
 def seed_everything(seed: int):
@@ -166,140 +131,118 @@ def add_datetime_tag(s: str, sep: str = "__") -> str:
     return datetime.now().strftime(f"{s}{sep}%Y-%m-%d_%H-%M-%S")
 
 
-def unflatten_dict(d: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Recursively transforms a flat dictionary with dot-separated keys into
-    a nested dictionary structure.
-    """
-    nested_dict: Dict[str, Any] = {}
-
-    # Group keys by the part before the first dot
-    grouped_keys: Dict[str, Dict[str, Any]] = {}
-
+def unflatten_dict(d: dict[str, Any]) -> dict[str, Any]:
+    """Turn dotted keys into nested dictionaries."""
+    nested: dict[str, Any] = {}
+    grouped: dict[str, dict[str, Any]] = {}
     for key, value in d.items():
-        if '.' in key:
-            # Split key at the first dot
-            stem, rest = key.split('.', 1)
-
-            # Initialize the inner dictionary for the stem if it doesn't exist
-            if stem not in grouped_keys:
-                grouped_keys[stem] = {}
-
-            # Store the remaining part of the key and the value
-            grouped_keys[stem][rest] = value
+        head, separator, tail = key.partition(".")
+        if separator:
+            grouped.setdefault(head, {})[tail] = value
         else:
-            # Keys without a dot are added directly to the final dictionary
-            nested_dict[key] = value
+            nested[head] = value
 
-    # Recursively process the grouped keys
-    for stem, inner_dict in grouped_keys.items():
-        # The value for the 'stem' is the result of unflattening the inner_dict
-        nested_dict[stem] = unflatten_dict(inner_dict)
-
-    return nested_dict
+    for head, values in grouped.items():
+        nested[head] = unflatten_dict(values)
+    return nested
 
 
-ConfigT = TypeVar("ConfigT", bound=BaseModel)
-def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[str] | None = None, parent_key: str = "") -> ConfigT:
-    """
-    Update a Pydantic BaseModel with matching CLI arguments.
+def add_config_cli_args(
+    parser: argparse.ArgumentParser,
+    default_model: BaseModel,
+    parent_key: str = "",
+) -> set[str]:
+    """Register dotted CLI options and return paths accepting additional class kwargs."""
+    from vlm.configs.base import DynamicClassConfigBase
 
-    Args:
-        default_model: A Pydantic model (e.g. GeneralConfig, ModelConfig, ...).
-        ignore_keys: A list of keys for values that should not be merged even if provided via CLI.
-        parent_key: The subconfiguration that is to be overwritten by the CLI arguments.
+    dynamic_kwargs_paths: set[str] = set()
 
-    Returns:
-        A new instance of the same model type with updated fields.
-    """
-    if ignore_keys is None:
-        ignore_keys = []
-    elif isinstance(ignore_keys, str):
-        ignore_keys = [ignore_keys]
+    def register_fields(model: BaseModel | dict[str, Any], prefix: str) -> None:
+        if isinstance(model, BaseModel):
+            fields = (
+                (key, field.annotation, getattr(model, key))
+                for key, field in type(model).model_fields.items()
+            )
+        else:
+            fields = ((key, type(value), value) for key, value in model.items())
 
-    if parent_key != "":
-        parent_key = parent_key + "."
+        for key, annotation, value in fields:
+            path = f"{prefix}.{key}" if prefix else key
 
-    parser = argparse.ArgumentParser(allow_abbrev=False)
-
-    def _iterate_config(
-            parser: argparse.ArgumentParser,
-            default_model: ConfigT,
-            ignore_keys: str | list[str],
-            parent_key: str = ""):
-        from vlm.configs.base import DynamicClassConfigBase
-
-        for key, field in default_model.model_fields.items():
-
-            if key in ignore_keys:
+            if isinstance(value, BaseModel):
+                register_fields(value, path)
                 continue
-
-            value = getattr(default_model, key)
-            arg_type = field.annotation
-
-            # Pydantic models or dictionaries should not be passed via CLI.
-            # Without this check, we would replace the pydantic models by dictionaries.
-            if isinstance(arg_type, (dict, BaseModel)):
-                continue
-
-            # if isinstance(arg_type, type) and issubclass(arg_type, BaseModel):
-            if issubclass(type(value), BaseModel):
-                _iterate_config(
-                    parser,
-                    value,
-                    ignore_keys,
-                    parent_key + f"{key}."
-                )
-            if "kwargs" in key and issubclass(type(default_model), DynamicClassConfigBase):
+            if key == "class_kwargs" and isinstance(model, DynamicClassConfigBase):
                 assert isinstance(value, dict)
-                _iterate_config(
-                    parser,
-                    create_and_instantiate_model_from_dict(value),
-                    ignore_keys,
-                    parent_key + f"{key}."
-                )
+                dynamic_kwargs_paths.add(path)
+                register_fields(value, path)
+                continue
 
-            elif arg_type == bool:
-                # Handle boolean values with store_true/store_false
+            if annotation == bool:
                 if value:
                     parser.add_argument(
-                        f"--{parent_key}no-{key}",
+                        f"--{prefix}.no-{key}" if prefix else f"--no-{key}",
                         action="store_false",
-                        dest=f"{parent_key}{key}",
+                        dest=path,
+                        default=argparse.SUPPRESS,
                         help=f"Disable {key} (default: enabled)",
                     )
                 else:
                     parser.add_argument(
-                        f"--{parent_key}{key}",
+                        f"--{path}",
                         action="store_true",
+                        default=argparse.SUPPRESS,
                         help=f"Enable {key} (default: disabled)",
                     )
-            elif issubclass(type(value), Container) and not isinstance(value, str):
-                parser.add_argument(
-                    f"--{parent_key}{key}",
-                    type=str,           # force CLI args to be parsed as strings; Pydantic will handle casting/validation.
-                                        # prevents argparse from using type=NoneType when the default value is None
-                    nargs="+",
-                    default=value,
-                    help=f"Set {key} (default: {value})",
-                )
             else:
+                options = (
+                    {"nargs": "+"}
+                    if isinstance(value, Container) and not isinstance(value, str)
+                    else {}
+                )
                 parser.add_argument(
-                    f"--{parent_key}{key}",
-                    type=str,           # force CLI args to be parsed as strings; Pydantic will handle casting/validation.
-                                        # prevents argparse from using type=NoneType when the default value is None
-                    default=value,
+                    f"--{path}",
+                    type=str,  # Pydantic casts and validates the CLI string.
+                    default=argparse.SUPPRESS,
                     help=f"Set {key} (default: {value})",
+                    **options,
                 )
 
-    _iterate_config(parser, default_model, ignore_keys, parent_key)
+    register_fields(default_model, parent_key)
+    return dynamic_kwargs_paths
 
-    args_parsed, _ = parser.parse_known_args()
-    args_parsed = {k.removeprefix(parent_key): v for k, v in vars(args_parsed).items()}
-    args_parsed = unflatten_dict(args_parsed)
-    return default_model.__class__.model_validate(
-        {**default_model.model_dump(), **args_parsed}
-    )
+
+def _parse_dynamic_cli_value(value: str) -> Any:
+    """Accept JSON values for new class kwargs, leaving ordinary strings unchanged."""
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def add_new_class_kwarg_cli_args(
+    parser: argparse.ArgumentParser,
+    cli_args: list[str],
+    dynamic_kwargs_paths: set[str],
+) -> None:
+    """Register previously absent keys beneath known dynamic class kwargs paths."""
+    _, unknown_args = parser.parse_known_args(cli_args)
+    added_options: set[str] = set()
+    for arg in unknown_args:
+        if not arg.startswith("--"):
+            continue
+        option = arg.split("=", 1)[0]
+        path = option.removeprefix("--")
+        if option in added_options:
+            continue
+        if any(
+            path.startswith(f"{prefix}.") and path != f"{prefix}."
+            for prefix in dynamic_kwargs_paths
+        ):
+            parser.add_argument(
+                option, type=_parse_dynamic_cli_value, default=argparse.SUPPRESS
+            )
+            added_options.add(option)
 
 
 def recursive_dict_merge(d1: dict[str, Any], d2: dict[str, Any]) -> dict[str, Any]:

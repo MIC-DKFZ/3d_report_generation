@@ -1,3 +1,4 @@
+import argparse
 import os
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.scheduler.scheduler_config import SchedulerClassConfig
 from vlm.configs.trainer_config import SFTTrainerConfig
 from vlm.utils.helper import load_config_file, recursive_dict_merge, add_datetime_tag, setattr_nested, is_main_process, \
-    get_random_uid, merge_config_with_cli_args
+    get_random_uid, add_config_cli_args, add_new_class_kwarg_cli_args, unflatten_dict
 from vlm.utils.paths import VLM_OUTPUT_DIR, VLM_CONFIG_DIR
 from vlm.utils.vision_input_type import VisionInputType
 from vlm.utils import logger
@@ -265,12 +266,34 @@ class RunConfig(ConfigBase):
         self._maybe_reset_validation_specific_args()
         self._maybe_reset_early_stopping_specific_args()
 
-    def merge_subconfigs_with_cli_args(self):
-        """ Apply CLI argument overrides to configs """
-        for subconfig_name, field in self.model_fields.items():
-            subconfig = getattr(self, subconfig_name)
+    def merge_subconfigs_with_cli_args(self, cli_args: list[str]) -> None:
+        """Parse and apply dotted CLI overrides, rejecting unknown arguments."""
+        if not cli_args:
+            return
+
+        parser = argparse.ArgumentParser(allow_abbrev=False)
+        subconfigs = {}
+        for name in type(self).model_fields:
+            subconfig = getattr(self, name)
             if isinstance(subconfig, ConfigBase):
-                setattr(self, subconfig_name, merge_config_with_cli_args(subconfig, parent_key=subconfig_name))
+                subconfigs[name] = subconfig
+        dynamic_kwargs_paths = set()
+        for name, subconfig in subconfigs.items():
+            dynamic_kwargs_paths.update(add_config_cli_args(parser, subconfig, parent_key=name))
+
+        add_new_class_kwarg_cli_args(parser, cli_args, dynamic_kwargs_paths)
+
+        parsed_args = vars(parser.parse_args(cli_args))
+        for name, subconfig in subconfigs.items():
+            prefix = f"{name}."
+            overrides = {
+                key.removeprefix(prefix): value
+                for key, value in parsed_args.items()
+                if key.startswith(prefix)
+            }
+            if overrides:
+                merged = recursive_dict_merge(subconfig.model_dump(), unflatten_dict(overrides))
+                setattr(self, name, type(subconfig).model_validate(merged))
 
     @staticmethod
     def apply_base_configs(cfg_dict: dict[str, Any], config_dir: str | Path, seen: list[str] | None = None) -> dict:
@@ -287,24 +310,17 @@ class RunConfig(ConfigBase):
         if not base_configs:
             return cfg_dict
 
-        seen = seen.copy() if seen else []
-
-        new_cfg_dict = {}
+        seen = seen or []
+        merged_bases = {}
         for base_config in reversed(base_configs):
             if base_config in seen:
                 raise RecursionError(
                     f"Cyclic base config reference: {base_config} found in {seen}"
                 )
-            seen.append(base_config)
-
             base_cfg_dict = load_config_file(Path(config_dir, base_config))
-            base_cfg_dict = RunConfig.apply_base_configs(base_cfg_dict, config_dir, seen=seen)
+            base_cfg_dict = RunConfig.apply_base_configs(
+                base_cfg_dict, config_dir, seen=seen + [base_config]
+            )
+            merged_bases = recursive_dict_merge(merged_bases, base_cfg_dict)
 
-            # 'base_cfg_dict' overrides 'new_cfg_dict'
-            new_cfg_dict = recursive_dict_merge(new_cfg_dict, base_cfg_dict)
-
-            seen.pop()
-
-        new_cfg_dict = recursive_dict_merge(new_cfg_dict, cfg_dict)
-
-        return new_cfg_dict
+        return recursive_dict_merge(merged_bases, cfg_dict)

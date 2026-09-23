@@ -35,7 +35,6 @@ from vlm.utils.helper import (
     seed_everything,
     load_config_file,
     recursive_dict_merge,
-    merge_config_with_cli_args,
 )
 from vlm.utils.load_and_save_files import load_json, save_json, save_yaml
 from vlm.utils.logging import setup_logger, log_banner
@@ -198,8 +197,10 @@ class UnifiedVLMInference:
         log_banner("Successfully finished Inference")
 
 
-def parse_args() -> Namespace:
-    parser = argparse.ArgumentParser(description="Vision Language Model Inference")
+def parse_args() -> tuple[Namespace, list[str]]:
+    parser = argparse.ArgumentParser(
+        description="Vision Language Model Inference", allow_abbrev=False
+    )
     group = parser.add_mutually_exclusive_group()
 
     group.add_argument(
@@ -247,16 +248,20 @@ def parse_args() -> Namespace:
         help="Optional list of base config files",
     )
 
-    args, _ = parser.parse_known_args()
-    return args
+    return parser.parse_known_args()
 
 
 def main_cli():
-    args = parse_args()
-    main(args)
+    args, config_cli_args = parse_args()
+    main(args, config_cli_args=config_cli_args)
 
 
-def main(args, vision_input_path: str | None = None, is_main: bool = True):
+def main(
+    args,
+    vision_input_path: str | None = None,
+    is_main: bool = True,
+    config_cli_args: list[str] | None = None,
+):
     seed_everything(0)  # Set a fixed seed for reproducibility
 
     if args.run_dir:
@@ -280,39 +285,20 @@ def main(args, vision_input_path: str | None = None, is_main: bool = True):
 
     if is_main:  # we don't want to merge args if this was called by train.py
         if getattr(args, "overwrite_config_from_files", None):
-            # 1. Dump the current config to a dictionary
-            # We don't need to exclude defaults here because we WANT the overrides
-            # to crush anything currently existing in the config.
             cfg_dict = cfg.model_dump()
-
-            # 2. Process each override file in the order they were provided
             for override_file in args.overwrite_config_from_files:
                 override_path = Path(VLM_CONFIG_DIR, override_file)
-
-                # Load the YAML file
                 override_cfg_dict = load_config_file(override_path)
-
-                # Optional but safe: If the override file itself defines base_configs, resolve them
                 override_cfg_dict = RunConfig.apply_base_configs(
-                    cfg_dict=override_cfg_dict,
-                    config_dir=VLM_CONFIG_DIR
+                    cfg_dict=override_cfg_dict, config_dir=VLM_CONFIG_DIR
                 )
-
-                # 3. Merge the override ON TOP OF the current config dict
-                # recursive_dict_merge(base, override) -> override wins
                 cfg_dict = recursive_dict_merge(cfg_dict, override_cfg_dict)
 
+            cfg = RunConfig.model_validate(cfg_dict)
             logger.info_main(f"Applied overrides from: {args.overwrite_config_from_files}")
 
-            # 4. Re-instantiate the model!
-            # This forces Pydantic to parse all nested dicts and validate the new types.
-            cfg = RunConfig.model_validate(cfg_dict)
-
-            logger.info_main(f"Cfg: {cfg}")
-
-        # 5. Apply explicit CLI arguments (e.g., --batch_size 8)
-        # This remains at the end so explicit CLI args take absolute final precedence
-        cfg.merge_subconfigs_with_cli_args()
+        # CLI values take precedence over file overrides.
+        cfg.merge_subconfigs_with_cli_args(config_cli_args or [])
 
     if getattr(args, "is_staged", False):
         cfg.data.vision_input_path = str(get_local_vision_input_path())

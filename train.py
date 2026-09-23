@@ -317,7 +317,9 @@ class UnifiedVLMTrainer:
 
 
 def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
-    args_parser = argparse.ArgumentParser(description="Train a Vision Language Model")
+    args_parser = argparse.ArgumentParser(
+        description="Train a Vision Language Model", allow_abbrev=False
+    )
 
     args_parser.add_argument(
         "--train_config",
@@ -340,7 +342,7 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
         help="Run directory to continue training from.",
     )
 
-    args, _ = args_parser.parse_known_args()
+    args, config_cli_args = args_parser.parse_known_args()
 
     if args.continue_training_run_dir is None and args.train_config is None:
         args_parser.error("--train_config or --continue_training_run_dir is required.")
@@ -357,7 +359,7 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
 
         logger.info_main(f"Continuing training from run directory: {cfg.general.output_dir}")
 
-        cfg.merge_subconfigs_with_cli_args()
+        cfg.merge_subconfigs_with_cli_args(config_cli_args)
         cfg.general.output_dir = str(runtime_args.continue_training_run_dir)
         cfg.apply_conditional_resets()
 
@@ -376,7 +378,7 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
 
     if args.add_base_configs:
         # Give base configs that are passed via CLI higher prio
-        cfg_dict["base_configs"] = args.add_base_configs + cfg_dict.get("base_configs", [])
+        cfg_dict["base_configs"] = args.add_base_configs + (cfg_dict.get("base_configs") or [])
 
     # Merge base configs into cfg_dict
     cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
@@ -384,7 +386,7 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
     # Set to absolute path
     cfg_dict["general"]["train_config"] = str(train_config_path)
 
-    # Parse all args into their respective Pydantic models/configs
+    # Validate the file config before registering CLI override options.
     cfg = RunConfig.model_validate(cfg_dict)
 
     # Setup output directory and log file
@@ -400,7 +402,7 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
     logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
     print(f"Successfully set up output directory at {cfg.general.output_dir}")
 
-    cfg.merge_subconfigs_with_cli_args()
+    cfg.merge_subconfigs_with_cli_args(config_cli_args)
     cfg.apply_conditional_resets()
 
     if is_main_process():
