@@ -1,4 +1,3 @@
-import glob
 from typing import Optional, Union
 
 import torch
@@ -15,14 +14,9 @@ from transformers.models.qwen3_vl.modeling_qwen3_vl import (
 from transformers.cache_utils import Cache
 from transformers.processing_utils import Unpack
 from transformers.utils.generic import check_model_inputs
-from transformers.utils import (
-    is_torchdynamo_compiling, can_return_tuple,
-    TransformersKwargs, auto_docstring
-)
+from transformers.utils import can_return_tuple, TransformersKwargs
 
 from vlm.configs.model.model_config import ModelConfig
-from vlm.utils.helper import get_config_from_plans
-from vlm.utils import logger
 
 
 class QwenVLModel3D(Qwen3VLModel, Qwen3VLPreTrainedModel):
