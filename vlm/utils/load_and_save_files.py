@@ -4,6 +4,15 @@ from pathlib import Path
 from typing import Any
 
 
+def load_config_file(config_path: str | Path) -> dict:
+    file_ext = Path(config_path).suffix.lower()
+    if file_ext in (".yaml", ".yml"):
+        return load_yaml(config_path)
+    if file_ext == ".json":
+        return load_json(config_path)
+    raise ValueError(f"Unsupported config file format: {file_ext}")
+
+
 def load_json(path: str | Path) -> Any:
     path = Path(path)
     with path.open("r", encoding="utf-8") as f:

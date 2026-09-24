@@ -13,33 +13,27 @@ class EvaluationConfig(ConfigBase):
 
     # 'Callback' and 'After Training' parameters
     max_new_tokens: int = Field(640, description="Maximum number of new tokens to generate.")
-    per_device_batch_size: int = Field(20, description="Inference batch size per device.")
+    per_device_batch_size: int = Field(32, description="Inference batch size per device.")
 
     # 'After Training' parameters
     run_inference: bool = Field(True, description="Run inference after training completes.")
-    dataset_json_path: str | None = Field(
-        None,
-        description=(
-            "Optional path to the dataset JSON file. "
-            "If not provided and split='val', the validation dataset JSON from the data config is used. "
-            "If not provided and split='test', an error is raised. "
-            "Specify this path explicitly when running validation in a different environment, "
-            "or when performing final testing, where the test set JSON must be provided."
-        ),
-    )
-    mode: Literal["best_metric", "best", "final"] = Field("final", description="Which checkpoint to load for inference.")
+    test_dataset_json_path: str | None = Field(None, description="Path to the test dataset JSON file")
+    mode: Literal["best_metric", "best", "final"] = Field("best", description="Which checkpoint to load for inference.")
     split: Literal["val", "test"] = Field("val", description="The split to run inference on.")
-    n_samples: int | None = Field(None, description="Number of samples. Run all if 'None'.")
-    num_dataloader_workers: int | None = Field(6, description="Number of subprocesses per device to use for data loading during inference.")
+    num_dataloader_workers: int | None = Field(4, description="Number of subprocesses per device to use for data loading during inference.")
 
     run_eval: bool = Field(True, description="Run evaluation after inference (only if 'run_inference' is True).")
     num_eval_processes: int | None = Field(None, description="Number of subprocesses to use for evaluation. "
                                                              "If None, use half the number of CPUs in the system.")
-    calculate_radbert_score: bool = Field(False, description="Additionally calculate the radbert metrics on evaluation.")
 
-    dataset_json_path: str | None = Field(
-        None, description="Path to the test dataset JSON file."
+    callback_n_samples: int | Literal["unique"] | None = Field(
+        None,
+        description=(
+            "Number of samples. Run all if 'None'. For CT-RATE, use 'unique' to select "
+            "one deterministic random image version per unique image."
+        ),
     )
+    calculate_radbert_score: bool = Field(False, description="Additionally calculate the radbert metrics on evaluation.")
 
     @model_validator(mode="after")
     def check_inference_eval(self):

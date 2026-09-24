@@ -57,8 +57,8 @@ class MHXAttention(nn.Module):
         batch_size, num_latents, _ = latents.shape
 
         # Keep projection inputs aligned with parameter dtype (e.g. DeepSpeed bf16).
-        latents = latents.to(dtype=self.to_q.weight.dtype)
-        context = context.to(dtype=self.to_kv.weight.dtype)
+        # latents = latents.to(dtype=self.to_q.weight.dtype)
+        # context = context.to(dtype=self.to_kv.weight.dtype)
 
         q = self.to_q(latents)
         k, v = self.to_kv(context).chunk(2, dim=-1)

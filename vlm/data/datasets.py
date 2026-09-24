@@ -14,6 +14,7 @@ import torch
 from einops import rearrange
 from torch.utils.data import Dataset
 
+from vlm.data.embedding_transforms import EmbeddingCompose
 from vlm.utils import logger
 from vlm.utils.dataset_utils import get_training_image_transforms, preprocess_3d_image
 from vlm.utils.regex_patterns import (
@@ -22,7 +23,7 @@ from vlm.utils.regex_patterns import (
     VQA_OPTION_LETTERS_IN_TEXT_PATTERN,
 )
 from vlm.utils.vision_input_type import VisionInputType
-
+from vlm.models.phi4mini.phi4mini_vlm import PHI_VISION_PLACEHOLDER_TOKEN
 from vlm.configs.run_config import RunConfig
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
@@ -72,10 +73,13 @@ class MedicalImageDataset(Dataset, ABC):
     def __init__(
         self,
         cfg: RunConfig,
+        split: Literal["train", "val", "test"],
         vision_encoder_patch_size: Tuple[int, ...],
-        split: Literal["train", "val", "test"] = "train",
+        n_samples: int | None = None,
     ):
         super().__init__()
+
+        self.n_samples = n_samples
 
         self.vision_input_path = Path(cfg.data.vision_input_path)
         self.vision_input_type = cfg.data.vision_input_type
@@ -88,19 +92,17 @@ class MedicalImageDataset(Dataset, ABC):
         self.vision_encoder_patch_size = vision_encoder_patch_size
         self.is_stacked_2d_embedding = cfg.data.is_stacked_2d_embedding
         self.reduce_to_n_slices = cfg.data.reduce_to_n_slices
+        self.embedding_transforms = self._build_embedding_transforms(cfg)
+
         if self.split == "train":
-            self.n_samples = cfg.data.n_train_samples
             self.dataset_json_path = Path(cfg.data.train_dataset_json_path)
             self.do_sentence_shuffle = cfg.data.do_sentence_shuffle
         elif self.split == "val":
-            self.n_samples = cfg.data.n_val_samples
             self.dataset_json_path = Path(cfg.data.val_dataset_json_path)
             self.do_sentence_shuffle = False
         elif self.split == "test":
-            # TODO: which dataset_json_path to add here..?
-            self.n_samples = cfg.eval.n_samples
+            self.dataset_json_path = Path(cfg.eval.test_dataset_json_path)
             self.do_sentence_shuffle = False
-            self.dataset_json_path = Path(cfg.eval.dataset_json_path)
 
         logger.info_main(
             f"Using vision_input_path for {self.__class__.__name__} ({self.split}): {self.vision_input_path}"
@@ -132,8 +134,7 @@ class MedicalImageDataset(Dataset, ABC):
 
         self.samples = self._filter_samples(self.samples)
 
-        if self.n_samples is not None:
-            self.samples = list(np.random.choice(self.samples, self.n_samples, replace=False))
+        self.samples = self._select_samples(self.samples)
 
         if self.do_transforms:
             if self.vision_input_type != VisionInputType.IMAGE:
@@ -144,10 +145,46 @@ class MedicalImageDataset(Dataset, ABC):
         else:
             self.training_transforms = None
 
+    def _build_embedding_transforms(self, cfg: RunConfig) -> EmbeddingCompose | None:
+        if self.split != "train" or self.vision_input_type != VisionInputType.EMBEDDING:
+            return None
+
+        transforms = [transform_cfg.to_instance() for transform_cfg in cfg.data.embedding_transforms]
+        if not transforms:
+            return None
+
+        return EmbeddingCompose(transforms)
+
     @abstractmethod
     def _get_vision_input_path(self, image_id) -> Path:
         """Load vision input path for a given image ID"""
         pass
+
+    def _select_samples(self, samples: list[dict]) -> list[dict]:
+        if self.n_samples is None:
+            return samples
+
+        if not isinstance(self.n_samples, int):
+            raise ValueError(
+                f"Unsupported n_samples={self.n_samples!r} for {self.__class__.__name__}. "
+                "MedicalImageDataset only supports integer n_samples; subclasses must "
+                "override _select_samples to support custom sampling modes."
+            )
+
+        if self.n_samples > len(samples):
+            logger.warning_main(
+                f"Requested n_samples={self.n_samples} for {self.__class__.__name__} "
+                f"({self.split}), but only {len(samples)} samples are available."
+            )
+            return samples
+
+        if self.n_samples < len(samples):
+            # Use a local RNG so this subset does not depend on earlier random draws.
+            rng = np.random.default_rng(42)
+            sample_indices = rng.choice(len(samples), self.n_samples, replace=False)
+            return [samples[i] for i in sample_indices]
+
+        return samples
 
     def _filter_samples(self, samples):
         """Filter samples based on answer type"""
@@ -197,10 +234,6 @@ class MedicalImageDataset(Dataset, ABC):
         elif str(vision_input_path).endswith(".bl2"):
             # remove batch dimension
             vision_input = blosc2.load_array(vision_input_path)
-
-            # TEMPORARY FIX FOR CURIA EMBEDS THAT ARE SAVED AS FLOAT64
-            if vision_input.dtype != "float32":
-                vision_input = vision_input.astype("float32")
 
             if vision_input.ndim == 5 and vision_input.shape[0] == 1:
                 vision_input = vision_input.squeeze(0)
@@ -266,9 +299,6 @@ class MedicalImageDataset(Dataset, ABC):
     # def modify_sample(self, result: Dict) -> Dict:
     #     return result
 
-    def modify_input(self, formatted_qa, formatted_qa_prompt_only, result):
-        return formatted_qa, formatted_qa_prompt_only
-
     def __getitem__(self, index):
         sample = self.samples[index]
 
@@ -291,13 +321,10 @@ class MedicalImageDataset(Dataset, ABC):
             system_text=sample["system_text"],
         )
 
-        formatted_qa, formatted_qa_prompt_only = self.modify_input(formatted_qa, formatted_qa_prompt_only, result)
-
         result["formatted_qa"] = formatted_qa
         result["formatted_qa_prompt_only"] = formatted_qa_prompt_only
 
         if not self.text_only:
-            # Load embedding
             result = self._load_embeddings(sample, result)
         else:
             result["vision_input"] = None
@@ -319,6 +346,8 @@ class MedicalImageDataset(Dataset, ABC):
                     f"Unsupported embedding constant type: {type(self.embedding_constant)}"
                 )
         else:
+            if self.embedding_transforms is not None:
+                vision_input = self.embedding_transforms(vision_input)
             result["vision_input"] = vision_input
 
         return result
@@ -346,18 +375,29 @@ class MedicalImageDataset(Dataset, ABC):
             self, question, answer, system_text=SYSTEM_TEXT
     ):
 
-        system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
-
-        # TODO check if I can use the same template
-        if self.model_type in ["qwen", "qwen3"]:
+        if "qwen" in self.model_type.lower():
+            system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
             user_message = {
                 "role": "user",
-                "content": ([{"type": "video"}] if not self.text_only else []) + [{"type": "text", "text": question}]
+                "content": ([{"type": "video"}] if not self.text_only else [])
+                + [{"type": "text", "text": question}],
             }
+            answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
+        elif "gemma" in self.model_type.lower():
+            system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
+            user_message = {
+                "role": "user",
+                "content": ([{"type": "image"}] if not self.text_only else [])
+                + [{"type": "text", "text": question}],
+            }
+            answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
+        elif "phi" in self.model_type.lower():
+            system_message = {"role": "system", "content": system_text}
+            vision_prefix = f"{PHI_VISION_PLACEHOLDER_TOKEN}\n" if not self.text_only else ""
+            user_message = {"role": "user", "content": f"{vision_prefix}{question}"}
+            answer_message = {"role": "assistant", "content": answer}
         else:
             raise ValueError(f"Unsupported model name: {self.model_type}")
-
-        answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
 
         full_conversation = [system_message, user_message, answer_message]
         prompt_only_conversation = [system_message, user_message]
@@ -489,6 +529,29 @@ class CTRATEDataset(MedicalImageDataset):
         do_transforms (bool, optional): If True, apply data augmentations to images
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
+
+    @staticmethod
+    def _base_image_id(image_id: str) -> str:
+        return image_id.rsplit("_", 1)[0]
+
+    def _select_samples(self, samples: list[dict]) -> list[dict]:
+        if self.n_samples != "unique":
+            return super()._select_samples(samples)
+
+        grouped_indices: dict[str, list[int]] = {}
+        for index, sample in enumerate(samples):
+            base_image_id = self._base_image_id(sample["image_id"])
+            grouped_indices.setdefault(base_image_id, []).append(index)
+
+        # Use the same local deterministic RNG pattern as integer n_samples selection.
+        rng = np.random.default_rng(42)
+        selected_indices = [int(rng.choice(indices)) for indices in grouped_indices.values()]
+
+        logger.info_main(
+            f"Selected {len(selected_indices)} unique CT-RATE images from "
+            f"{len(samples)} samples for {self.__class__.__name__} ({self.split})."
+        )
+        return [samples[i] for i in selected_indices]
 
     def _get_vision_input_path(self, image_id, split_path=None) -> Path:
         """Load vision input path for a given image ID"""
@@ -664,8 +727,25 @@ class MerlinDataset(CTRATEDataset):
             impression_sentences = [
                 s.strip() for s in impression_part.split("\n") if s.strip()
             ]
-            if len(impression_sentences) > 1:
-                random.shuffle(impression_sentences)
+            summary_idx = next(
+                (
+                    idx
+                    for idx, sentence in enumerate(impression_sentences)
+                    if re.match(r"^SUMMARY\b:?", sentence, flags=re.IGNORECASE)
+                ),
+                None,
+            )
+            if summary_idx is None:
+                shuffled_impression_sentences = impression_sentences
+                summary_sentences = []
+            else:
+                shuffled_impression_sentences = impression_sentences[:summary_idx]
+                summary_sentences = impression_sentences[summary_idx:]
+
+            if len(shuffled_impression_sentences) > 1:
+                random.shuffle(shuffled_impression_sentences)
+
+            impression_sentences = shuffled_impression_sentences + summary_sentences
             result += f"\n{impression_header}\n" + "\n".join(impression_sentences)
 
         # print("answer after shuffling:", result)
@@ -876,6 +956,10 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
                     f"Unsupported embedding constant type: {type(self.embedding_constant)}"
                 )
         else:
+            if self.embedding_transforms is not None:
+                vision_input = [
+                    self.embedding_transforms(embedding) for embedding in vision_input
+                ]
             result["vision_input"] = vision_input
 
         return result
@@ -929,7 +1013,7 @@ Output a report in the following format:
 Now analyze the following:
         """
 
-        if self.model_type in ["qwen", "qwen3"]:
+        if "qwen" in self.model_type.lower():
             user_message = {
                 "role": "user",
                 "content": [{"type": "text", "text": question_p1}] + ([{"type": "video"}] if not self.text_only else [])
@@ -1003,3 +1087,17 @@ class BonnDatasetRetrieval(BonnDataset, CTRATEDatasetRetrieval):
 
 class BonnDatasetRetrievalWithImage(BonnDataset, CTRATEDatasetRetrievalWithImage):
     pass
+
+
+class ToothFairy4Dataset(MedicalImageDataset):
+    """
+    ToothFairy4 dataset - dental CBCT scans with reports.
+    """
+
+    def _get_vision_input_path(self, image_id) -> Path:
+        if self.vision_input_type == VisionInputType.IMAGE:
+            return self.vision_input_path / f"{image_id}.nii.gz"
+        elif self.vision_input_type == VisionInputType.EMBEDDING:
+            return self.vision_input_path / f"{image_id}{self.image_id_suffix}_embedding.bl2"
+        else:
+            raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")

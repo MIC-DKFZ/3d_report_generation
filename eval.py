@@ -19,6 +19,13 @@ from torch.utils.data import SequentialSampler, DataLoader
 
 from vlm.evaluation.ctrate_radbert.calculate_metrics import calculate_metrics
 from vlm.evaluation.ctrate_radbert.utils import CTDataset, RadBertClassifier, RadBertInference, ctrate_label_cols
+from vlm.evaluation.merlin_modernbert.calculate_metrics import calculate_metrics as calculate_metrics_merlin
+from vlm.evaluation.merlin_modernbert.utils import (
+    MerlinBertClassifier,
+    MerlinBertInference,
+    MerlinDataset,
+    load_label_cols,
+)
 from vlm.utils import logger
 from vlm.evaluation.hf_evaluate.scorers import BLEUScorer, ROUGELScorer, METEORScorer
 from vlm.utils.helper import add_datetime_tag, chunkify
@@ -76,11 +83,22 @@ def eval_report_generation_pycocoeval(preds: list, gts: list) -> tuple[dict, dic
         meteor_score, meteor_per_image = meteor_scorer.compute_score(gts=in_gts, res=in_res)
         aggregate["meteor_score"] = meteor_score
         per_case["meteor_score"] = list(meteor_per_image)
+        # Collect raw per-sentence statistics strings so calc_statistics.py can
+        # bootstrap the *corpus-level* METEOR by resampling stats and re-running EVAL,
+        # rather than resampling per-sentence scores (which gives CI for a different quantity).
+        meteor_scorer.lock.acquire()
+        meteor_stats = [
+            meteor_scorer._stat(in_res[i][0], in_gts[i])
+            for i in sorted(in_gts.keys())
+        ]
+        meteor_scorer.lock.release()
+        per_case["meteor_stats"] = meteor_stats
     except Exception as e:
         logger.error(f"METEOR score calculation failed: {e}")
         meteor_scorer.lock.release()
         aggregate["meteor_score"] = -1.0
         per_case["meteor_score"] = [-1.0] * n
+        per_case["meteor_stats"] = [""] * n
 
     # === ROUGE ===
     try:
@@ -142,11 +160,61 @@ def inference_ctrate_radbert(reports: list[str], ckpt_path: str | Path, hf_radbe
     return result
 
 
-def eval_ctrate_radbert(preds: list, gts: list) -> tuple[dict, pd.DataFrame | None, pd.DataFrame | None]:
+def load_aligned_gt_labels(
+    gt_labels_path: Path,
+    image_ids: list[str],
+    label_cols: list[str],
+) -> pd.DataFrame:
+    image_ids = [str(image_id) for image_id in image_ids]
+    gt_labels = pd.read_csv(gt_labels_path, dtype={"image_id": str})
+    if "image_id" not in gt_labels.columns:
+        raise ValueError(f"{gt_labels_path} is missing the required 'image_id' column")
+
+    duplicate_image_ids = gt_labels.loc[
+        gt_labels["image_id"].duplicated(keep=False), "image_id"
+    ].unique()
+    if len(duplicate_image_ids):
+        raise ValueError(
+            f"{gt_labels_path} contains duplicate image_id values: "
+            f"{duplicate_image_ids[:10].tolist()}"
+        )
+
+    missing_label_cols = set(label_cols) - set(gt_labels.columns)
+    if missing_label_cols:
+        raise ValueError(
+            f"{gt_labels_path} is missing label columns: {sorted(missing_label_cols)}"
+        )
+
+    gt_labels = gt_labels.set_index("image_id")
+    missing_image_ids = sorted(set(image_ids) - set(gt_labels.index))
+    if missing_image_ids:
+        raise ValueError(
+            f"{gt_labels_path} is missing {len(missing_image_ids)} requested image_id(s): "
+            f"{missing_image_ids[:10]}"
+        )
+
+    return gt_labels.loc[image_ids, label_cols].reset_index(drop=True)
+
+
+def validate_classifier_inputs(preds: list, gts: list, image_ids: list[str]) -> None:
+    if not (len(preds) == len(gts) == len(image_ids)):
+        raise ValueError(
+            "Classifier evaluation inputs must have equal lengths: "
+            f"preds={len(preds)}, gts={len(gts)}, image_ids={len(image_ids)}"
+        )
+
+
+def eval_ctrate_radbert(
+    preds: list,
+    gts: list,
+    image_ids: list[str],
+    default_gt_df: pd.DataFrame | None = None,
+) -> tuple[dict, pd.DataFrame | None, pd.DataFrame | None]:
     """
     Returns (aggregate_metrics, pred_df, gt_df).
     pred_df / gt_df are [N, C] DataFrames of binary class predictions; None when RadBERT is unavailable.
     """
+    validate_classifier_inputs(preds, gts, image_ids)
     radbert_dir = os.getenv("VLM_CTRATE_RADBERT_DIR")
     if radbert_dir is None:
         logger.warning_main("The environment variable 'VLM_CTRATE_RADBERT_DIR' is not set. "
@@ -158,9 +226,86 @@ def eval_ctrate_radbert(preds: list, gts: list) -> tuple[dict, pd.DataFrame | No
     hf_radbert_dir = radbert_dir / "RadBERT-RoBERTa-4m"
 
     pred_df = inference_ctrate_radbert(preds, radbert_ckpt, hf_radbert_dir)
-    gt_df = inference_ctrate_radbert(gts, radbert_ckpt, hf_radbert_dir)
+    gt_labels_path = radbert_dir / "gt_labels.csv"
+    if default_gt_df is not None:
+        gt_df = default_gt_df.reset_index(drop=True)
+    elif gt_labels_path.is_file():
+        logger.info_main(f"Loading CT-RATE ground-truth labels from {gt_labels_path}")
+        gt_df = load_aligned_gt_labels(gt_labels_path, image_ids, ctrate_label_cols)
+    else:
+        gt_df = inference_ctrate_radbert(gts, radbert_ckpt, hf_radbert_dir)
 
     results = calculate_metrics(pred_df, gt_df)
+    return results, pred_df, gt_df
+
+
+def _as_report_list(reports):
+    """Accept either a list of strings or the pycocoeval dict {i: [text]}."""
+    if isinstance(reports, dict):
+        return [reports[k][0] if isinstance(reports[k], (list, tuple)) else reports[k]
+                for k in sorted(reports)]
+    return list(reports)
+
+
+def inference_merlin_modernbert(reports, model_dir: str | Path):
+    """Classify reports with the fine-tuned Merlin ModernBERT model -> [N, 30] binary df.
+
+    Unlike RadBERT (a custom module + ``.pth``), the Merlin model is a
+    self-contained ``AutoModelForSequenceClassification`` directory, so
+    ``model_dir`` points straight at it (no separate base-model / checkpoint).
+    """
+    reports = _as_report_list(reports)
+    label_cols = load_label_cols(model_dir)
+    df = pd.DataFrame({"reports": reports})
+
+    batch_size = 32
+    if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
+        batch_size = 96
+
+    ds = MerlinDataset(df, len(label_cols), label_cols, hf_model_dir=str(model_dir))
+    loader = DataLoader(
+        ds, sampler=SequentialSampler(ds), batch_size=batch_size, num_workers=4, pin_memory=True
+    )
+
+    model = MerlinBertClassifier(n_classes=len(label_cols), hf_model_dir=str(model_dir))
+    model = model.cuda().eval()
+
+    trainer = MerlinBertInference(model, {"test": loader}, len(label_cols), label_cols)
+    preds = trainer.infer()  # ndarray [N, C]
+    return pd.DataFrame(preds.astype(int), columns=label_cols)
+
+
+def eval_merlin_modernbert(
+    preds,
+    gts,
+    image_ids: list[str],
+    default_gt_df: pd.DataFrame | None = None,
+) -> tuple[dict, pd.DataFrame | None, pd.DataFrame | None]:
+    """Merlin-dataset analogue of ``eval_ctrate_radbert``.
+
+    Returns (aggregate_metrics, pred_df, gt_df); the dfs are [N, 30] binary
+    class predictions, or None when the classifier dir is not configured.
+    """
+    validate_classifier_inputs(preds, gts, image_ids)
+    model_dir = os.getenv("VLM_MERLIN_MODERNBERT_DIR")
+    if model_dir is None:
+        logger.warning_main("The environment variable 'VLM_MERLIN_MODERNBERT_DIR' is not set. "
+                            "Cannot proceed with Merlin ModernBERT inference.")
+        return {}, None, None
+
+    model_dir = Path(model_dir)
+    label_cols = load_label_cols(model_dir)
+    pred_df = inference_merlin_modernbert(preds, model_dir)
+    gt_labels_path = model_dir / "gt_labels.csv"
+    if default_gt_df is not None:
+        gt_df = default_gt_df.reset_index(drop=True)
+    elif gt_labels_path.is_file():
+        logger.info_main(f"Loading MERLIN ground-truth labels from {gt_labels_path}")
+        gt_df = load_aligned_gt_labels(gt_labels_path, image_ids, label_cols)
+    else:
+        gt_df = inference_merlin_modernbert(gts, model_dir)
+
+    results = calculate_metrics_merlin(pred_df, gt_df)
     return results, pred_df, gt_df
 
 
@@ -436,10 +581,20 @@ def main(args):
     aggregate_results.update(nlp_aggregate)
 
     radbert_pred_df = radbert_gt_df = None
-    if args.dataset_name == "ctrate":
-        radbert_metrics, radbert_pred_df, radbert_gt_df = eval_ctrate_radbert(preds, gts)
-        aggregate_results.update(radbert_metrics)
 
+    dataset_name = args.dataset_name
+    if dataset_name == "ctrate":
+        radbert_metrics, radbert_pred_df, radbert_gt_df = eval_ctrate_radbert(
+            preds, gts, image_ids
+        )
+    elif dataset_name == "merlin":
+        radbert_metrics, radbert_pred_df, radbert_gt_df = eval_merlin_modernbert(
+            preds, gts, image_ids
+        )
+    else:
+        raise ValueError(f"Unknown dataset_name: {dataset_name}")
+
+    aggregate_results.update(radbert_metrics)
     logger.info_main("[METRICS] Evaluation Summary:")
     for metric_name, value in aggregate_results.items():
         logger.info_main(f"    > {metric_name}: {value:.4f}")

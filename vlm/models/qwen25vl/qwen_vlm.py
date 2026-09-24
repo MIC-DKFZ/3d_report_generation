@@ -1,10 +1,10 @@
-import os
 import torch
 import torch.nn.functional as F
 import numpy as np
 from vlm.models.qwen25vl.processing_3d import QwenVLProcessor3D
 from vlm.models.qwen25vl.Qwen3D import QwenVLForConditionalGeneration3D, QwenVLModel3D
 from vlm.utils.filter_batch import extract_raw_samples_from_batch
+from vlm.utils.paths import get_hf_hub_cache_dir
 
 from vlm.models.abstract_vlm import AbstractVLMModel
 
@@ -32,10 +32,7 @@ class QwenVLModel(AbstractVLMModel):
     def setup_model(self):
         """Initialize model, processor and tokenizer"""
 
-        if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
-            cache_dir = os.getenv("HF_HUB_CACHE")
-        else:
-            cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+        cache_dir = get_hf_hub_cache_dir()
 
         self.model = QwenVLForConditionalGeneration3D.from_pretrained(
             self.model_cfg.model_id,
@@ -111,6 +108,9 @@ class QwenVLModel(AbstractVLMModel):
         batch = self.processor(
             text=texts,
             num_vision_tokens=num_vision_tokens,
+            do_truncation=self.do_truncation,
+            truncate_after=self.truncate_after,
+            truncate_at=self.truncate_at,
             return_tensors="pt",
             padding=True,
             padding_side="right",

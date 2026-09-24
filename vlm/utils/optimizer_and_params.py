@@ -1,6 +1,52 @@
 import torch.nn as nn
+from torch.optim import Optimizer
 from transformers.trainer_pt_utils import get_parameter_names
 from vlm.models.owl.modeling_hyper_qwen2 import Qwen2RMSNorm
+
+
+def print_model_parameters(model: nn.Module, file=None, width=120, **kwargs):
+    """Prints model parameters and their requires_grad status to stdout and optionally to a file."""
+
+    def _out(text=""):
+        print(text)
+        if file is not None:
+            print(text, file=file)
+
+    print("\n" + "=" * width)
+    print(f"{'Model parameters (requires_grad status):':^{width}}")
+    print("=" * width + "\n")
+
+    for name, param in model.named_parameters(**kwargs):
+        _out(f"{name:100} requires_grad={param.requires_grad}")
+
+    print("\n" + "=" * width)
+    print(f"{'End of model parameter listing':^{width}}")
+    print("=" * width + "\n")
+
+
+def log_param_groups(model: nn.Module, optimizer: Optimizer, file_path=None):
+    """Prints optimizer param groups to stdout and optionally to a file."""
+
+    # Build a mapping: param -> name
+    param_to_name = {p: n for n, p in model.named_parameters()}
+
+    with open(file_path, "w") as f:
+        def print_to_file(s):
+            print(s, file=f)
+
+        for i, param_group in enumerate(optimizer.param_groups):
+            print_to_file(f"\n=== Parameter Group {i} ===")
+            # print_to_file(f"Learning rate : {param_group.get('lr')}",)
+            print_to_file(f"Weight decay: {param_group['weight_decay']}")
+            print_to_file("Parameters:")
+
+            for p in param_group["params"]:
+                name = param_to_name.get(p, "<unnamed>")
+                print_to_file(f"  - {name:100} shape={str(tuple(p.shape)):25}")
+
+
+def count_parameters(module: nn.Module) -> int:
+    return sum(p.numel() for p in module.parameters())
 
 
 def get_decay_parameter_names(model: nn.Module, forbidden_name_patterns_for_wd: list[str]) -> list[str]:
@@ -79,4 +125,3 @@ def get_param_groups(
                                 f"{missing_params}")
 
     return param_groups
-

@@ -4,7 +4,7 @@ from torch.optim.lr_scheduler import LRScheduler
 
 
 class ConstantLR(LRScheduler):
-    def __init__(self, optimizer, param_groups: list[dict], current_step: int = None):
+    def __init__(self, optimizer, param_groups: list[dict], current_step: int = None, **kwargs):
         self.optimizer = optimizer
         self.max_lrs = [param_group["lr"] for param_group in param_groups]
         self.ctr = 0

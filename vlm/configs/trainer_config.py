@@ -30,13 +30,15 @@ class SFTTrainerConfig(ConfigBase):
 
     logging_steps: int = Field(25, ge=1, description="Number of steps between logging events.")
 
-    eval_steps: int | None = Field(400, ge=1, description="Number of steps between evaluation runs.")
-    eval_strategy: Literal["no", "steps", "epoch"] | None = Field("steps", description="Evaluation strategy to adopt during training.")
+    eval_steps: int | None = Field(1, ge=1, description="Number of steps between evaluation runs.")
+    eval_strategy: Literal["no", "steps", "epoch"] | None = Field("epoch", description="Evaluation strategy to adopt during training.")
     metric_for_best_model: str | None = Field("eval_loss", description="Metric to use for selecting the best model (e.g. eval_loss, accuracy).")
     greater_is_better: bool = Field(False, description="Whether the chosen metric should be maximized (True) or minimized (False).")
+    early_stopping_patience: int | None = Field(None, ge=1, description="Number of evaluation calls without metric improvement before stopping. None disables early stopping.")
+    early_stopping_threshold: float = Field(0.0, ge=0.0, description="Minimum metric improvement required to reset early stopping patience.")
 
-    save_steps: int = Field(400, ge=1, description="Save checkpoint every X steps when using save_strategy='steps'.")
-    save_strategy: Literal["no", "steps", "epoch"] = Field("steps", description="Checkpoint saving strategy during training.")
+    save_steps: int = Field(1, ge=1, description="Save checkpoint every X steps when using save_strategy='steps'.")
+    save_strategy: Literal["no", "steps", "epoch"] = Field("epoch", description="Checkpoint saving strategy during training.")
     save_total_limit: int = Field(2, description="Maximum number of checkpoints to keep. Older ones are deleted.")
 
     load_best_model_at_end: bool = Field(False, description="Enables saving of best checkpoint if True! (And whether to load the best model found during training at the end). "

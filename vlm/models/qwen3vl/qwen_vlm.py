@@ -1,9 +1,9 @@
-import os
 import torch
 import numpy as np
 from vlm.models.qwen3vl.processing_3d import QwenVLProcessor3D
 from vlm.models.qwen3vl.Qwen3D import QwenVLForConditionalGeneration3D, QwenVLModel3D
 from vlm.utils.filter_batch import extract_raw_samples_from_batch
+from vlm.utils.paths import get_hf_hub_cache_dir
 
 from vlm.models.abstract_vlm import AbstractVLMModel
 
@@ -13,6 +13,11 @@ class QwenVLModel(AbstractVLMModel):
         super().__init__(*args, **kwargs)
         self._model_str = "qwen"
         self.batch_count = 0
+
+        self.forbidden_name_patterns_for_wd.extend(
+            # Add LoRA layers and the token embedding layer (which is also the LM head) to forbidden name patterns.
+            ["lora", "embed_tokens", "lm_head"]
+        )
 
     @property
     def module_attr_map(self) -> dict[str, str]:
@@ -26,10 +31,7 @@ class QwenVLModel(AbstractVLMModel):
     def setup_model(self):
         """Initialize model, processor and tokenizer"""
 
-        if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
-            cache_dir = os.getenv("HF_HUB_CACHE")
-        else:
-            cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+        cache_dir = get_hf_hub_cache_dir()
 
         self.model = QwenVLForConditionalGeneration3D.from_pretrained(
             self.model_cfg.model_id,
@@ -90,13 +92,6 @@ class QwenVLModel(AbstractVLMModel):
                 for vi in vision_inputs
             ]
 
-            # TODO: MERLIN HACKING SHHHH DON'T TELL ANYONE
-            vision_inputs = [
-                (np.pad(vi, ((0, 0), (0, 0), (0, 1), (0, 1)), mode="edge")
-                 if vi.ndim >= 3 and vi.shape[-3:] == (10, 7, 7) else vi)
-                for vi in vision_inputs
-            ]
-
             if len(vision_inputs) == 0:
                 raise ValueError("Received an empty vision input list in QwenVLModel.collate_fn")
 
@@ -112,9 +107,12 @@ class QwenVLModel(AbstractVLMModel):
         batch = self.processor(
             text=texts,
             num_vision_tokens=num_vision_tokens,
+            do_truncation=self.do_truncation,
+            truncate_after=self.truncate_after,
+            truncate_at=self.truncate_at,
             return_tensors="pt",
             padding=True,
-            padding_side="right"
+            padding_side="right",
         )
 
         batch_prompt_only = self.processor(
@@ -122,7 +120,7 @@ class QwenVLModel(AbstractVLMModel):
             num_vision_tokens=num_vision_tokens,
             return_tensors="pt",
             padding=True,
-            padding_side="left"
+            padding_side="left",
         )
 
         labels = batch["input_ids"].clone()

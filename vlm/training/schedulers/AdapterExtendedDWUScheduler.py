@@ -2,6 +2,7 @@ from abc import ABC
 from enum import StrEnum
 from pathlib import Path
 
+from accelerate.optimizer import AcceleratedOptimizer
 from vlm.training.schedulers.lr_schedulers import LinearIncreasingLR, LinearIncreasingOffsetLR, \
     CosineAnnealingOffsetLR, ConstantLR
 from torch.optim import Optimizer
@@ -46,6 +47,11 @@ class AdapterExtendedDWUScheduler(SchedulerBase, ABC):
         self.warmup_1_2_duration = warmup_1_2_duration
         self.warmup_2_duration = warmup_2_duration
         self.reset_optimizer = reset_optimizer
+
+        self.lr_scheduler_wu_1_1 = LinearIncreasingLR
+        self.lr_scheduler_wu_1_2 = ConstantLR
+        self.lr_scheduler_wu_2 = LinearIncreasingOffsetLR
+        self.lr_scheduler_default = CosineAnnealingOffsetLR
 
         self.warmup_1_1_max_step = None
         self.warmup_1_2_max_step = None
@@ -129,19 +135,22 @@ class AdapterExtendedDWUScheduler(SchedulerBase, ABC):
 
         # Guard against resume mismatches: when stage transitions skip intermediate stages,
         # the existing optimizer can carry stale param groups from an earlier stage.
-        if optimizer is not None and len(optimizer.param_groups) != len(param_groups):
+        if not should_rebuild_optimizer and (optimizer is not None and len(optimizer.param_groups) != len(param_groups)):
             logger.warning_main(
                 "[SCHEDULER] Rebuilding optimizer due to param-group mismatch "
                 f"(current={len(optimizer.param_groups)}, expected={len(param_groups)})."
             )
             should_rebuild_optimizer = True
 
+        # TODO: Not sure if needed, added quick fix as optimizer is always 'AcceleratedOptimizer' for DDP
         # Guard against wrapped optimizers (e.g. DeepSpeedOptimizerWrapper). For stage transitions
         # we need a base torch optimizer so `accelerator.prepare(model, optimizer)` can rebuild
         # engine/param mappings from scratch.
         if (
-                optimizer is not None
+                not should_rebuild_optimizer
+                and optimizer is not None
                 and not isinstance(optimizer, self.optimizer_class)
+                and not isinstance(optimizer, AcceleratedOptimizer)
                 and self.training_stage == self._Stage.WARMUP_2
         ):
             logger.warning_main(
@@ -157,25 +166,25 @@ class AdapterExtendedDWUScheduler(SchedulerBase, ABC):
 
         if self.training_stage == self._Stage.WARMUP_1_1:
             logger.info_main("[SCHEDULER] Adapter-Only Training. First Warmup, Part 1.")
-            lr_scheduler = LinearIncreasingLR(optimizer=optimizer,
-                                              param_groups=param_groups,
-                                              max_steps=self.warmup_1_1_max_step)
+            lr_scheduler = self.lr_scheduler_wu_1_1(optimizer=optimizer,
+                                                    param_groups=param_groups,
+                                                    max_steps=self.warmup_1_1_max_step)
         elif self.training_stage == self._Stage.WARMUP_1_2:
             logger.info_main("[SCHEDULER] Adapter-Only Training. First Warmup, Part 2.")
-            lr_scheduler = ConstantLR(optimizer=optimizer,
-                                      param_groups=param_groups)
+            lr_scheduler = self.lr_scheduler_wu_1_2(optimizer=optimizer,
+                                                    param_groups=param_groups)
         elif self.training_stage == self._Stage.WARMUP_2:
             logger.info_main("[SCHEDULER] Normal Training. Second Warmup.")
-            lr_scheduler = LinearIncreasingOffsetLR(optimizer=optimizer,
-                                                    param_groups=param_groups,
-                                                    max_steps=self.warmup_2_max_step,
-                                                    start_step=self.warmup_1_2_max_step)
+            lr_scheduler = self.lr_scheduler_wu_2(optimizer=optimizer,
+                                                  param_groups=param_groups,
+                                                  max_steps=self.warmup_2_max_step,
+                                                  start_step=self.warmup_1_2_max_step)
         elif self.training_stage == self._Stage.DEFAULT:
             logger.info_main("[SCHEDULER] Normal Training. Warmups Done.")
-            lr_scheduler = CosineAnnealingOffsetLR(optimizer=optimizer,
-                                                   param_groups=param_groups,
-                                                   max_steps=self.max_steps,
-                                                   start_step=self.warmup_2_max_step)
+            lr_scheduler = self.lr_scheduler_default(optimizer=optimizer,
+                                                     param_groups=param_groups,
+                                                     max_steps=self.max_steps,
+                                                     start_step=self.warmup_2_max_step)
         else:
             raise RuntimeError(f"unknown training stage: {self.training_stage}")
 
@@ -183,3 +192,10 @@ class AdapterExtendedDWUScheduler(SchedulerBase, ABC):
             f"[SCHEDULER] Initialized {self.training_stage} lr_scheduler ({type(lr_scheduler).__name__})")
 
         return optimizer, lr_scheduler
+
+
+class AdapterExtendedDWUConstScheduler(AdapterExtendedDWUScheduler):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lr_scheduler_default = ConstantLR

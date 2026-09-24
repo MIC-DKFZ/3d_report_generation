@@ -1,57 +1,11 @@
-import argparse
 import os
 import random
 import string
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Literal, TypeVar, Dict
-from collections.abc import Container
+from typing import Any
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.optim import Optimizer
-from pydantic import BaseModel, create_model
-from transformers.trainer import TRAINER_STATE_NAME
-
-from vlm.utils.load_and_save_files import load_json, load_yaml
-from vlm.utils.paths import VLM_OUTPUT_DIR
-
-
-def create_and_instantiate_model_from_dict(data_dict: Dict[str, Any]) -> BaseModel:
-    """
-    Dynamically creates a Pydantic BaseModel based on the keys and inferred
-    types of the input dictionary, and then returns an instance of that model
-    populated with the dictionary data.
-    """
-
-    # 1. Infer Pydantic Field Definitions
-    # We iterate over the dictionary and create the field definitions for create_model.
-    # We use type(value) for the field's type and the value itself as the default
-    # (though we'll pass the data separately for instantiation).
-
-    # For robust type checking, it's better to treat all fields as required
-    # and infer their type based on the value's type.
-    # The format required by create_model for a required field is: (Type, ...)
-
-    field_definitions = {}
-    for key, value in data_dict.items():
-        # Get the Python type of the value
-        field_type = type(value)
-        # Define the field as a required field of that type
-        field_definitions[key] = (field_type, ...)
-
-    # 2. Dynamically Create the Model Class
-    DynamicModel = create_model(
-        'InferredModel', # Name the dynamic class
-        **field_definitions
-    )
-
-    # 3. Instantiate and Validate the Model
-    # We pass the original data_dict as keyword arguments to the new model
-    instance = DynamicModel(**data_dict)
-
-    return instance
 
 
 def seed_everything(seed: int):
@@ -83,291 +37,8 @@ def setattr_nested(obj, attr_path: str, value) -> None:
     setattr(obj, parts[-1], value)
 
 
-def load_config_file(config_path: str | Path) -> dict:
-    file_ext = os.path.splitext(str(config_path))[1].lower()
-    if file_ext == ".yaml" or file_ext == ".yml":
-        config_file = load_yaml(config_path)
-    elif file_ext == ".json":
-        config_file = load_json(config_path)
-    else:
-        raise ValueError(f"Unsupported config file format: {file_ext}")
-
-    return config_file
-
-
-def get_config_from_plans(plans_file_path):
-    # see here https://git.dkfz.de/mic/personal/group4/culrich/nnunet_finetuning/-/blob/fine_tuning_rocket/nnunetv2/training/nnUNetTrainer/variants/pretraining/eva_pretrained.py?ref_type=heads#L167
-
-    plans = load_json(plans_file_path)
-    pretrained_config = plans['configurations']['3d_fullres']
-
-    config = {
-        # "vit_patch_size": pretrained_config['vit_patch_size'],
-        "patch_embed_size": pretrained_config['vit_patch_size'],
-        "input_shape": pretrained_config['patch_size'],
-        "embed_dim": pretrained_config['embed_dim'],
-        "encoder_eva_depth": pretrained_config['encoder_eva_depth'],
-        "encoder_eva_numheads": pretrained_config['encoder_eva_numheads'],
-    }
-    return config
-
-
 def add_datetime_tag(s: str, sep: str = "__") -> str:
     return datetime.now().strftime(f"{s}{sep}%Y-%m-%d_%H-%M-%S")
-
-
-def unflatten_dict(d: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Recursively transforms a flat dictionary with dot-separated keys into
-    a nested dictionary structure.
-    """
-    nested_dict: Dict[str, Any] = {}
-
-    # Group keys by the part before the first dot
-    grouped_keys: Dict[str, Dict[str, Any]] = {}
-
-    for key, value in d.items():
-        if '.' in key:
-            # Split key at the first dot
-            stem, rest = key.split('.', 1)
-
-            # Initialize the inner dictionary for the stem if it doesn't exist
-            if stem not in grouped_keys:
-                grouped_keys[stem] = {}
-
-            # Store the remaining part of the key and the value
-            grouped_keys[stem][rest] = value
-        else:
-            # Keys without a dot are added directly to the final dictionary
-            nested_dict[key] = value
-
-    # Recursively process the grouped keys
-    for stem, inner_dict in grouped_keys.items():
-        # The value for the 'stem' is the result of unflattening the inner_dict
-        nested_dict[stem] = unflatten_dict(inner_dict)
-
-    return nested_dict
-
-
-ConfigT = TypeVar("ConfigT", bound=BaseModel)
-def merge_config_with_cli_args(default_model: ConfigT, ignore_keys: str | list[str] | None = None, parent_key: str = "") -> ConfigT:
-    """
-    Update a Pydantic BaseModel with matching CLI arguments.
-
-    Args:
-        default_model: A Pydantic model (e.g. GeneralConfig, ModelConfig, ...).
-        ignore_keys: A list of keys for values that should not be merged even if provided via CLI.
-        parent_key: The subconfiguration that is to be overwritten by the CLI arguments.
-
-    Returns:
-        A new instance of the same model type with updated fields.
-    """
-    if ignore_keys is None:
-        ignore_keys = []
-    elif isinstance(ignore_keys, str):
-        ignore_keys = [ignore_keys]
-
-    if parent_key != "":
-        parent_key = parent_key + "."
-
-    parser = argparse.ArgumentParser()
-
-    def _iterate_config(
-            parser: argparse.ArgumentParser,
-            default_model: ConfigT,
-            ignore_keys: str | list[str],
-            parent_key: str = ""):
-        from vlm.configs.base import DynamicClassConfigBase
-
-        for key, field in default_model.model_fields.items():
-
-            if key in ignore_keys:
-                continue
-
-            value = getattr(default_model, key)
-            arg_type = field.annotation
-
-            # Pydantic models or dictionaries should not be passed via CLI.
-            # Without this check, we would replace the pydantic models by dictionaries.
-            if isinstance(arg_type, (dict, BaseModel)):
-                continue
-
-            # if isinstance(arg_type, type) and issubclass(arg_type, BaseModel):
-            if issubclass(type(value), BaseModel):
-                _iterate_config(
-                    parser,
-                    value,
-                    ignore_keys,
-                    parent_key + f"{key}."
-                )
-            if "kwargs" in key and issubclass(type(default_model), DynamicClassConfigBase):
-                assert isinstance(value, dict)
-                _iterate_config(
-                    parser,
-                    create_and_instantiate_model_from_dict(value),
-                    ignore_keys,
-                    parent_key + f"{key}."
-                )
-
-            elif arg_type == bool:
-                # Handle boolean values with store_true/store_false
-                if value:
-                    parser.add_argument(
-                        f"--{parent_key}no-{key}",
-                        action="store_false",
-                        dest=f"{parent_key}{key}",
-                        help=f"Disable {key} (default: enabled)",
-                    )
-                else:
-                    parser.add_argument(
-                        f"--{parent_key}{key}",
-                        action="store_true",
-                        help=f"Enable {key} (default: disabled)",
-                    )
-            elif issubclass(type(value), Container) and not isinstance(value, str):
-                parser.add_argument(
-                    f"--{parent_key}{key}",
-                    type=str,           # force CLI args to be parsed as strings; Pydantic will handle casting/validation.
-                                        # prevents argparse from using type=NoneType when the default value is None
-                    nargs="+",
-                    default=value,
-                    help=f"Set {key} (default: {value})",
-                )
-            else:
-                parser.add_argument(
-                    f"--{parent_key}{key}",
-                    type=str,           # force CLI args to be parsed as strings; Pydantic will handle casting/validation.
-                                        # prevents argparse from using type=NoneType when the default value is None
-                    default=value,
-                    help=f"Set {key} (default: {value})",
-                )
-
-    _iterate_config(parser, default_model, ignore_keys, parent_key)
-
-    args_parsed, _ = parser.parse_known_args()
-    args_parsed = {k.removeprefix(parent_key): v for k, v in vars(args_parsed).items()}
-    args_parsed = unflatten_dict(args_parsed)
-    return default_model.__class__.model_validate(
-        {**default_model.model_dump(), **args_parsed}
-    )
-
-
-def resolve_ckpt_dir_in_run_dir(run_dir: str | Path, mode: Literal["final", "best", "best_metric"]) -> Path:
-    """
-    Determine the checkpoint directory within a run directory.
-
-    Args:
-        run_dir: Path to the run directory containing checkpoint subdirectories.
-        mode: Select the 'final' or the 'best' checkpoint within the run directory.
-
-    Returns:
-        Path to the resolved checkpoint directory.
-    """
-    run_dir = Path(run_dir)
-    if not run_dir.exists():
-        raise FileNotFoundError(f"The specified run directory does not exist: {run_dir}")
-    if mode == "best_metric":
-        our_best_ckpt_dir = Path(run_dir, "best_model")
-        if not our_best_ckpt_dir.is_dir():
-            raise FileNotFoundError(f"No 'best_model' directory found in {run_dir}")
-        ckpt_dir = our_best_ckpt_dir
-    else:
-        ckpt_dirs = [d for d in run_dir.glob("checkpoint-*") if d.is_dir()]
-        if not ckpt_dirs:
-            raise FileNotFoundError(f"No HF trainer checkpoint directories found in {run_dir}")
-        ckpt_dirs_sorted = sorted(ckpt_dirs, key=lambda d: int(d.name.split("-")[-1]))
-
-        final_ckpt_dir = ckpt_dirs_sorted[-1]
-        if mode == "final":
-            ckpt_dir = final_ckpt_dir
-        elif mode == "best":
-            final_trainer_state = load_json(final_ckpt_dir / TRAINER_STATE_NAME)
-            best_ckpt_dir = Path(final_trainer_state["best_model_checkpoint"])
-            if not best_ckpt_dir.is_dir():
-                raise FileNotFoundError(f"The HF trainer 'best_model_checkpoint' directory does not exist in {run_dir}")
-            ckpt_dir = best_ckpt_dir
-        else:
-            raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
-
-    return ckpt_dir
-
-
-def recursive_dict_merge(d1: dict[str, Any], d2: dict[str, Any]) -> dict[str, Any]:
-    """
-    Recursively merge two dictionaries.
-
-    Values from d2 override those from d1.
-    Nested dictionaries are merged recursively, all other values are replaced.
-    """
-    merged = dict(d1)
-    for key, value in d2.items():
-        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
-            merged[key] = recursive_dict_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def print_model_parameters(model: nn.Module, file=None, width=120, **kwargs):
-    """Prints model parameters and their requires_grad status to stdout and optionally to a file."""
-
-    def _out(text=""):
-        print(text)
-        if file is not None:
-            print(text, file=file)
-
-    print("\n" + "=" * width)
-    print(f"{'Model parameters (requires_grad status):':^{width}}")
-    print("=" * width + "\n")
-
-    for name, param in model.named_parameters(**kwargs):
-        _out(f"{name:100} requires_grad={param.requires_grad}")
-
-    print("\n" + "=" * width)
-    print(f"{'End of model parameter listing':^{width}}")
-    print("=" * width + "\n")
-
-
-def log_param_groups(model: nn.Module, optimizer: Optimizer, file_path=None):
-    """Prints optimizer param groups to stdout and optionally to a file."""
-
-    # Build a mapping: param -> name
-    param_to_name = {p: n for n, p in model.named_parameters()}
-
-    with open(file_path, "w") as f:
-        def print_to_file(s):
-            print(s, file=f)
-
-        for i, param_group in enumerate(optimizer.param_groups):
-            print_to_file(f"\n=== Parameter Group {i} ===")
-            # print_to_file(f"Learning rate : {param_group.get('lr')}",)
-            print_to_file(f"Weight decay: {param_group['weight_decay']}")
-            print_to_file("Parameters:")
-
-            for p in param_group["params"]:
-                name = param_to_name.get(p, "<unnamed>")
-                print_to_file(f"  - {name:100} shape={str(tuple(p.shape)):25}")
-
-
-def count_parameters(module: nn.Module) -> int:
-    return sum(p.numel() for p in module.parameters())
-
-
-def get_trainable_state_dict(model: nn.Module):
-    """Return a state dict containing only parameters with requires_grad=True."""
-    trainable_names = {name for name, p in model.named_parameters() if p.requires_grad}
-    state_dict = {name: p for name, p in model.state_dict().items() if name in trainable_names}
-
-    return state_dict
-
-
-def find_run_dir_in_output_dir(run_dir: str):
-    matches = list(Path(VLM_OUTPUT_DIR).rglob(run_dir))
-    if len(matches) > 1:
-        raise ValueError(f"Multiple matches found for run_dir '{run_dir}': {matches}")
-    elif not matches:
-        raise FileNotFoundError(f"No directory named '{run_dir}' found under {VLM_OUTPUT_DIR}")
-    return matches[0]
 
 
 def get_class_from_registry(class_name: str, registry: list[type]) -> type | None:
@@ -375,6 +46,14 @@ def get_class_from_registry(class_name: str, registry: list[type]) -> type | Non
     if candidates:
         return candidates[0]
     return None
+
+
+def find_sublist(lis: list, sub: list):
+    m = len(sub)
+    for i in range(len(lis) - m + 1):
+        if lis[i:i + m] == sub:
+            return i
+    return -1
 
 
 def chunkify(lis: list, num_chunks: int):
@@ -385,18 +64,3 @@ def chunkify(lis: list, num_chunks: int):
 
 def get_random_uid(length: int = 4) -> str:
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-
-
-def is_main_process():
-    """
-    Check if this is the main process (rank 0).
-    As recommended in the JSC tutorial, only rank 0 should handle logging, saving, etc.
-    """
-    return int(os.environ.get("RANK", "0")) == 0
-
-
-def get_process_rank() -> int:
-    return int(os.environ.get("RANK", "0"))
-
-def get_local_process_rank() -> int:
-    return int(os.environ.get("LOCAL_RANK", "0"))

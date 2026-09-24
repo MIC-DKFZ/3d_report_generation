@@ -1,4 +1,3 @@
-import glob
 from typing import Optional, Union
 
 import torch
@@ -20,8 +19,6 @@ from transformers.utils import (
 )
 
 from vlm.configs.model.model_config import ModelConfig
-from vlm.utils.helper import get_config_from_plans
-from vlm.utils import logger
 
 
 class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):

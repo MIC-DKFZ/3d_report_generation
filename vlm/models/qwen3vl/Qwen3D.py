@@ -1,4 +1,3 @@
-import glob
 from typing import Optional, Union
 
 import torch
@@ -15,15 +14,9 @@ from transformers.models.qwen3_vl.modeling_qwen3_vl import (
 from transformers.cache_utils import Cache
 from transformers.processing_utils import Unpack
 from transformers.utils.generic import check_model_inputs
-from transformers.utils import (
-    is_torchdynamo_compiling, can_return_tuple,
-    TransformersKwargs, auto_docstring
-)
+from transformers.utils import can_return_tuple, TransformersKwargs
 
 from vlm.configs.model.model_config import ModelConfig
-from vlm.utils.helper import get_config_from_plans
-from vlm.registries.vision_encoder_registry import vision_encoder_registry
-from vlm.utils import logger
 
 
 class QwenVLModel3D(Qwen3VLModel, Qwen3VLPreTrainedModel):
@@ -57,23 +50,7 @@ class QwenVLModel3D(Qwen3VLModel, Qwen3VLPreTrainedModel):
         )
 
     def setup_vision_encoder(self):
-        vision_encoder_path = self.model_cfg.vision_encoder.vision_encoder_path
-        plans_file = f"{vision_encoder_path}/plans.json"
-        checkpoint_paths = glob.glob(f"{vision_encoder_path}/fold_all/checkpoint_*.pth")
-        if len(checkpoint_paths) > 1:
-            checkpoint_path = [c for c in checkpoint_paths if "final" in c][0]
-            logger.info_main(f"Multiple VE checkpoints found, using final: {checkpoint_path}")
-            if len(checkpoint_path) == 0:
-                checkpoint_path = checkpoint_paths[0]
-                logger.info_main(f"Multiple VE checkpoints found, using first: {checkpoint_path}")
-        else:
-            checkpoint_path = checkpoint_paths[0]
-
-        config = get_config_from_plans(plans_file)
-        vision_encoder_class = vision_encoder_registry[self.model_cfg.vision_encoder.type]
-        self.vision_encoder = vision_encoder_class(
-            input_channels=1, output_channels=1, pretrained_weights_file=checkpoint_path, **config
-        )
+        self.vision_encoder = self.model_cfg.build_vision_encoder()
 
     def get_rope_index(
         self,
@@ -211,82 +188,32 @@ class QwenVLModel3D(Qwen3VLModel, Qwen3VLPreTrainedModel):
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Cache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        pixel_values: Optional[torch.Tensor] = None,
         pixel_values_videos: Optional[torch.FloatTensor] = None,
-        image_grid_thw: Optional[torch.LongTensor] = None,
-        video_grid_thw: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
-
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
-
         **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, Qwen3VLModelOutputWithPast]:
-        r"""
-        image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
-            The temporal, height and width of feature shape of each image in LLM.
-        video_grid_thw (`torch.LongTensor` of shape `(num_videos, 3)`, *optional*):
-            The temporal, height and width of feature shape of each video in LLM.
-        """
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
-        image_mask = None
-        video_mask = None
-
-        if pixel_values is not None:
-            image_embeds, deepstack_image_embeds = self.get_image_features(pixel_values, image_grid_thw)
-            image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
-            image_mask, _ = self.get_placeholder_mask(
-                input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
-            )
-            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
-
+        visual_pos_masks = None
         if pixel_values_videos is not None:
-            ######
-            # Changing upstream implementation here
             video_embeds = pixel_values_videos
             if self.vision_encoder is not None:
                 video_embeds = self.vision_encoder(video_embeds)
             if self.vision_adapter is not None:
                 video_embeds = self.vision_adapter(video_embeds, adapter_args)
-            video_embeds = video_embeds.view(-1, video_embeds.shape[-1])  # Flatten to (total_features, embed_dim)
-            ######
-
-            # video_embeds, deepstack_video_embeds = self.get_video_features(pixel_values_videos, video_grid_thw)
-            # video_embeds = torch.cat(video_embeds, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
+            video_embeds = video_embeds.view(-1, video_embeds.shape[-1])
             video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
             _, video_mask = self.get_placeholder_mask(
                 input_ids, inputs_embeds=inputs_embeds, video_features=video_embeds
             )
             inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
-
-        visual_pos_masks = None
-        deepstack_visual_embeds = None
-        if image_mask is not None and video_mask is not None:
-            # aggregate visual_pos_masks and deepstack_visual_embeds
-            image_mask = image_mask[..., 0]
-            video_mask = video_mask[..., 0]
-            visual_pos_masks = image_mask | video_mask
-            deepstack_visual_embeds = []
-            image_mask_joint = image_mask[visual_pos_masks]
-            video_mask_joint = video_mask[visual_pos_masks]
-            for img_embed, vid_embed in zip(deepstack_image_embeds, deepstack_video_embeds):
-                embed_joint = img_embed.new_zeros(visual_pos_masks.sum(), img_embed.shape[-1]).to(img_embed.device)
-                embed_joint[image_mask_joint, :] = img_embed
-                embed_joint[video_mask_joint, :] = vid_embed
-                deepstack_visual_embeds.append(embed_joint)
-        elif image_mask is not None:
-            image_mask = image_mask[..., 0]
-            visual_pos_masks = image_mask
-            deepstack_visual_embeds = deepstack_image_embeds
-        elif video_mask is not None:
-            video_mask = video_mask[..., 0]
-            visual_pos_masks = video_mask
-            # deepstack_visual_embeds = deepstack_video_embeds
+            visual_pos_masks = video_mask[..., 0]
 
         if position_ids is None:
             past_key_values_length = 0 if past_key_values is None else past_key_values.get_seq_length()
@@ -316,7 +243,7 @@ class QwenVLModel3D(Qwen3VLModel, Qwen3VLPreTrainedModel):
             inputs_embeds=inputs_embeds,
             cache_position=cache_position,
             visual_pos_masks=visual_pos_masks,
-            deepstack_visual_embeds=deepstack_visual_embeds,
+            deepstack_visual_embeds=None,
             **kwargs,
         )
 
@@ -356,40 +283,30 @@ class QwenVLForConditionalGeneration3D(Qwen3VLForConditionalGeneration, Generati
         past_key_values: Optional[Cache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
-        pixel_values: Optional[torch.Tensor] = None,
         pixel_values_videos: Optional[torch.FloatTensor] = None,
-        image_grid_thw: Optional[torch.LongTensor] = None,
-        video_grid_thw: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
-
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
-
         **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, Qwen3VLCausalLMOutputWithPast]:
         """
-        Our additional forward kwargs 'vision_position_ids' and 'adapter_kwargs' are passed on via the kwargs argument,
+        Our additional forward kwargs 'vision_position_ids' and 'adapter_args' are passed on via the kwargs argument,
         so we wouldn't have to override this function. However, the GenerationMixin._validate_model_kwargs() function
         looks for unused forward arguments by inspecting the signature of this forward function, hence we add
-        'vision_position_ids' and 'adapter_kwargs' to the function signature.
+        'vision_position_ids' and 'adapter_args' to the function signature.
         """
 
         outputs = self.model(
             input_ids=input_ids,
-            pixel_values=pixel_values,
             pixel_values_videos=pixel_values_videos,
-            image_grid_thw=image_grid_thw,
-            video_grid_thw=video_grid_thw,
             position_ids=position_ids,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
             cache_position=cache_position,
-
             vision_position_ids=vision_position_ids,
             adapter_args=adapter_args,
-
             **kwargs,
         )
 

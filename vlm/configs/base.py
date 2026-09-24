@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, ClassVar, Callable, Type, OrderedDict, List, Tuple, get_type_hints, get_origin, get_args
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from types import UnionType
+from typing import Any, ClassVar, Callable, Type, OrderedDict, List, Tuple, Union, get_type_hints, get_origin
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
 from vlm.utils.find_class_by_name import recursive_find_python_class
 import vlm
 import inspect
-from inspect import Signature, Parameter
+from inspect import Parameter
 
 from vlm.utils.helper import get_class_from_registry
 
@@ -14,7 +15,7 @@ def _get_signatures(cls: Type) -> OrderedDict[str, Any]:
     """
     Collects and merges the *type hints* of all __init__ arguments
     from a class and its ancestors in the MRO.
-    Returns: OrderedDict[str, Any] where Any is the type hint (e.g., int, List[str]).
+    Returns: OrderedDict[str, Any] where Any is the type hint (e.g., int, list[str]).
     """
     mro_chain = inspect.getmro(cls)
     classes_to_check = mro_chain[:-1]  # Exclude 'object'
@@ -56,46 +57,29 @@ def _convert_value(value: Any, expected_type: Any) -> Any:
     Attempts to convert a value (typically a string from argparse)
     to the expected type from the type hint.
     """
-    if expected_type is Parameter.empty or expected_type is Any:
-        # No hint or Any: assume value is correct
+    if expected_type in (Parameter.empty, Any):
         return value
 
-    # Handle Simple Types (e.g., int, float, str, bool)
-    if isinstance(expected_type, type) and not issubclass(expected_type, (list, tuple)):
-        # Attempt direct conversion using the type's constructor
-        try:
-            return expected_type(value)
-        except (ValueError, TypeError):
-            # If conversion fails, you might want to log an error or raise a more specific one.
-            # For now, we'll return the original value, assuming it might be correct already.
-            if not isinstance(value, expected_type):
-                raise TypeError(f"Could not convert value '{value}' to expected type '{expected_type}'")
+    origin = get_origin(expected_type)
+    if expected_type is bool or origin in (Union, UnionType, list, List, tuple, Tuple):
+        return TypeAdapter(
+            expected_type, config=ConfigDict(arbitrary_types_allowed=True)
+        ).validate_python(value)
+
+    if expected_type in (list, tuple):
+        return value  # Avoid splitting strings with list(value) or tuple(value).
+
+    if not isinstance(expected_type, type):
+        return value  # Leave unsupported annotations unchanged.
+
+    try:
+        return expected_type(value)
+    except (ValueError, TypeError) as exc:
+        if isinstance(value, expected_type):
             return value
-
-    # Handle List Types (e.g., List[int], List[str])
-    if get_origin(expected_type) in (list, List, tuple, Tuple):
-        # Extract the inner type (e.g., int from List[int])
-        inner_types = get_args(expected_type)
-        if not inner_types:
-            # If no inner type (e.g., List), just return the list
-            return value
-
-        inner_type = inner_types[0]
-
-        if isinstance(value, str):
-            # This is common for argparse which may return a single comma-separated string
-            # If so, you'll need logic to split it first.
-            # Assuming you get a list-like structure (e.g., [ "1", "2" ]):
-            pass
-
-        if isinstance(value, (list, tuple)):
-            # Convert each item in the list
-            return [_convert_value(item, inner_type) for item in value]
-
-    # Handle other complex types (e.g., Optional, Union, Dict, etc.)
-    # ... more logic for these can be added here ...
-
-    return value # Fallback for unhandled complex types
+        raise TypeError(
+            f"Could not convert value '{value}' to expected type '{expected_type}'"
+        ) from exc
 
 
 class ConfigBase(BaseModel, ABC):
@@ -153,13 +137,7 @@ class DynamicClassConfigBase(ConfigBase, ABC):
         """
         for key, value in self.class_kwargs.items():
             if key in signatures:
-                expected_type = signatures[key]
-
-                # Convert the value
-                converted_value = _convert_value(value, expected_type)
-
-                # Update the dictionary with the converted value
-                self.class_kwargs[key] = converted_value
+                self.class_kwargs[key] = _convert_value(value, signatures[key])
 
     def to_instance(self, **kwargs) -> Any:
         return self._resolved_class(**kwargs, **self.class_kwargs)

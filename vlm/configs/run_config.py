@@ -1,3 +1,4 @@
+import argparse
 import os
 from pathlib import Path
 from typing import Any
@@ -10,8 +11,11 @@ from vlm.configs.general_config import GeneralConfig
 from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.scheduler.scheduler_config import SchedulerClassConfig
 from vlm.configs.trainer_config import SFTTrainerConfig
-from vlm.utils.helper import load_config_file, recursive_dict_merge, add_datetime_tag, setattr_nested, is_main_process, \
-    get_random_uid, merge_config_with_cli_args
+from vlm.configs.cli import add_config_cli_args, add_new_class_kwarg_cli_args
+from vlm.configs.merging import recursive_dict_merge, unflatten_dict
+from vlm.utils.ddp_utils import is_main_process
+from vlm.utils.helper import add_datetime_tag, setattr_nested, get_random_uid
+from vlm.utils.load_and_save_files import load_config_file
 from vlm.utils.paths import VLM_OUTPUT_DIR, VLM_CONFIG_DIR
 from vlm.utils.vision_input_type import VisionInputType
 from vlm.utils import logger
@@ -40,22 +44,12 @@ class RunConfig(ConfigBase):
     eval: EvaluationConfig
 
     @model_validator(mode="after")
-    def set_default_eval_dataset_json_path(self):
-        # fall back to the val dataset JSON from data config if none is provided
-        if self.eval.split == "val" and self.eval.dataset_json_path is None:
-            self.eval.dataset_json_path = self.data.val_dataset_json_path
-        return self
-
-    @model_validator(mode="after")
     def check_eval_dataset_json(self):
         if self.eval.run_eval:
-            # 'dataset_json_path' can only be None if split='test' and no dataset JSON was provided.
-            # RunConfig.set_default_eval_dataset_json_path() assigns the validation dataset JSON
-            # when split='val' and no path is specified.
-            if self.eval.split == "test" and self.eval.dataset_json_path is None:
-                raise ValueError("The 'dataset_json' has to be specified if 'split=test'")
-            if not Path(self.eval.dataset_json_path).is_file():
-                raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.eval.dataset_json_path}")
+            if self.eval.test_dataset_json_path is None:
+                raise ValueError("The 'dataset_json' has to be specified if 'run_eval=True'")
+            if not Path(self.eval.test_dataset_json_path).is_file():
+                raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.eval.test_dataset_json_path}")
         return self
 
     @model_validator(mode="after")
@@ -69,6 +63,48 @@ class RunConfig(ConfigBase):
                 "When 'data.text_only' is enabled, the language model must have trainable parameters. "
                 "Otherwise, there are no gradient paths for optimization."
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_sharded_vision_input_requires_local_staging(self):
+        if self.data.vision_input_is_sharded and not self.general.stage_vision_input_to_local:
+            raise ValueError(
+                "data.vision_input_is_sharded=True requires "
+                "general.stage_vision_input_to_local=True. Sharded vision input is only "
+                "handled by the local staging step; the dataset loader itself expects "
+                "normal per-sample files."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_early_stopping_specific_args(self):
+        if not self.general.do_early_stopping:
+            return self
+
+        if self.data.val_dataset_json_path is None:
+            raise ValueError(
+                "general.do_early_stopping=True requires data.val_dataset_json_path to be set."
+            )
+        if self.trainer.early_stopping_patience is None:
+            raise ValueError(
+                "general.do_early_stopping=True requires trainer.early_stopping_patience to be set."
+            )
+        if self.trainer.metric_for_best_model is None:
+            raise ValueError(
+                "general.do_early_stopping=True requires trainer.metric_for_best_model to be set."
+            )
+        if self.trainer.eval_strategy == "no":
+            raise ValueError(
+                "general.do_early_stopping=True requires trainer.eval_strategy to be 'steps' or 'epoch'."
+            )
+        if (
+            self.trainer.metric_for_best_model in {"eval_radbert_f1", "radbert_f1"}
+            and not self.eval.calculate_radbert_score
+        ):
+            raise ValueError(
+                "Early stopping is configured for 'eval_radbert_f1', but eval.calculate_radbert_score is disabled."
+            )
+
         return self
 
     @model_validator(mode="after")
@@ -200,6 +236,7 @@ class RunConfig(ConfigBase):
             _lis = [
                 (["trainer.eval_steps", "trainer.metric_for_best_model"], None),
                 (["trainer.eval_strategy"], "no"),
+                (["general.do_early_stopping"], False),
             ]
             for _modules, _val in _lis:
                 for _module in _modules:
@@ -207,16 +244,59 @@ class RunConfig(ConfigBase):
                     if is_main_process():
                         logger.info(f"  > cfg.{_module} set to {_val}")
 
+    def _maybe_reset_early_stopping_specific_args(self):
+        """
+        When early stopping is disabled, reset early-stopping-specific arguments.
+        This keeps inherited base-config values from enabling the callback implicitly.
+        """
+        if self.general.do_early_stopping:
+            return
+
+        logger.info_main("[Early Stopping] Resetting early-stopping-specific arguments:")
+
+        _lis = [
+            (["trainer.early_stopping_patience"], None),
+            (["trainer.early_stopping_threshold"], 0.0),
+        ]
+        for _modules, _val in _lis:
+            for _module in _modules:
+                setattr_nested(self, _module, _val)
+                if is_main_process():
+                    logger.info(f"  > cfg.{_module} set to {_val}")
+
     def apply_conditional_resets(self) -> None:
         self._maybe_reset_vision_related_specific_args()
         self._maybe_reset_validation_specific_args()
+        self._maybe_reset_early_stopping_specific_args()
 
-    def merge_subconfigs_with_cli_args(self):
-        """ Apply CLI argument overrides to configs """
-        for subconfig_name, field in self.model_fields.items():
-            subconfig = getattr(self, subconfig_name)
+    def merge_subconfigs_with_cli_args(self, cli_args: list[str]) -> None:
+        """Parse and apply dotted CLI overrides, rejecting unknown arguments."""
+        if not cli_args:
+            return
+
+        parser = argparse.ArgumentParser(allow_abbrev=False)
+        subconfigs = {}
+        for name in type(self).model_fields:
+            subconfig = getattr(self, name)
             if isinstance(subconfig, ConfigBase):
-                setattr(self, subconfig_name, merge_config_with_cli_args(subconfig, parent_key=subconfig_name))
+                subconfigs[name] = subconfig
+        dynamic_kwargs_paths = set()
+        for name, subconfig in subconfigs.items():
+            dynamic_kwargs_paths.update(add_config_cli_args(parser, subconfig, parent_key=name))
+
+        add_new_class_kwarg_cli_args(parser, cli_args, dynamic_kwargs_paths)
+
+        parsed_args = vars(parser.parse_args(cli_args))
+        for name, subconfig in subconfigs.items():
+            prefix = f"{name}."
+            overrides = {
+                key.removeprefix(prefix): value
+                for key, value in parsed_args.items()
+                if key.startswith(prefix)
+            }
+            if overrides:
+                merged = recursive_dict_merge(subconfig.model_dump(), unflatten_dict(overrides))
+                setattr(self, name, type(subconfig).model_validate(merged))
 
     @staticmethod
     def apply_base_configs(cfg_dict: dict[str, Any], config_dir: str | Path, seen: list[str] | None = None) -> dict:
@@ -233,24 +313,17 @@ class RunConfig(ConfigBase):
         if not base_configs:
             return cfg_dict
 
-        seen = seen.copy() if seen else []
-
-        new_cfg_dict = {}
+        seen = seen or []
+        merged_bases = {}
         for base_config in reversed(base_configs):
             if base_config in seen:
                 raise RecursionError(
                     f"Cyclic base config reference: {base_config} found in {seen}"
                 )
-            seen.append(base_config)
-
             base_cfg_dict = load_config_file(Path(config_dir, base_config))
-            base_cfg_dict = RunConfig.apply_base_configs(base_cfg_dict, config_dir, seen=seen)
+            base_cfg_dict = RunConfig.apply_base_configs(
+                base_cfg_dict, config_dir, seen=seen + [base_config]
+            )
+            merged_bases = recursive_dict_merge(merged_bases, base_cfg_dict)
 
-            # 'base_cfg_dict' overrides 'new_cfg_dict'
-            new_cfg_dict = recursive_dict_merge(new_cfg_dict, base_cfg_dict)
-
-            seen.pop()
-
-        new_cfg_dict = recursive_dict_merge(new_cfg_dict, cfg_dict)
-
-        return new_cfg_dict
+        return recursive_dict_merge(merged_bases, cfg_dict)
