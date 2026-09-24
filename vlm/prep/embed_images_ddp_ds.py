@@ -21,7 +21,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from einops import rearrange
 
-# from evavit import PretrainedEvaEncFromEvaMAE, get_config_from_plans
 
 # Assuming nnssl is in the python path or installed
 # from nnssl.preprocessing.normalization.normalization_schemes import apply_normalization, NormalizationScheme
@@ -332,27 +331,6 @@ def get_seg_path_from_img_path(img_path: str, raw2rocket: dict, segmentation_bas
 def setup_model(base_path: str):
     import primus
     model, config = primus.setup_model(base_path)
-    return model, config
-    """Loads the model and configuration from the specified base path."""
-    plans_file = os.path.join(base_path, "plans.json")
-    checkpoint_path = os.path.join(base_path, "fold_all", "checkpoint_final.pth")
-
-    if not os.path.exists(plans_file):
-        raise FileNotFoundError(f"Plans file not found: {plans_file}")
-    if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
-
-    print(f"Loading model config from: {plans_file}")
-    print(f"Loading model weights from: {checkpoint_path}")
-
-    config = get_config_from_plans(plans_file)
-    model = PretrainedEvaEncFromEvaMAE(
-        input_channels=1,
-        output_channels=1, # This might be unused if only encoder is needed
-        pretrained_weights_file=checkpoint_path,
-        **config
-    )
-    model.eval()
     return model, config
 
 

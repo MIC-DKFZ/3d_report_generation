@@ -38,11 +38,12 @@ from vlm.training.checkpointing import (
 from vlm.training.trainers import VLMSFTTrainer
 from vlm.registries.vlm_registry import VLM_REGISTRY
 from vlm.utils import logger
-from vlm.utils.ddp_utils import setup_ddp
-from vlm.utils.helper import seed_everything, load_config_file, \
-    is_main_process, count_parameters, collect_image_ids_from_config_dataset_jsons
+from vlm.utils.ddp_utils import setup_ddp, is_main_process
+from vlm.utils.helper import seed_everything
+from vlm.utils.dataset_utils import collect_image_ids_from_config_dataset_jsons
+from vlm.utils.optimizer_and_params import count_parameters
 from vlm.utils.local_staging import stage_vision_input_to_local
-from vlm.utils.load_and_save_files import save_json
+from vlm.utils.load_and_save_files import load_config_file, save_json
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.memory_utils import (
     aggressive_cleanup,

@@ -3,7 +3,7 @@ import numpy as np
 from vlm.models.qwen3vl.processing_3d import QwenVLProcessor3D
 from vlm.models.qwen3vl.Qwen3D import QwenVLForConditionalGeneration3D, QwenVLModel3D
 from vlm.utils.filter_batch import extract_raw_samples_from_batch
-from vlm.utils.helper import get_hf_hub_cache_dir
+from vlm.utils.paths import get_hf_hub_cache_dir
 
 from vlm.models.abstract_vlm import AbstractVLMModel
 

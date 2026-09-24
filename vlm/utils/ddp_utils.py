@@ -8,6 +8,19 @@ from vlm.utils import logger
 from torch import distributed as dist
 
 
+def is_main_process():
+    """Check if this is the main process (rank 0)."""
+    return get_process_rank() == 0
+
+
+def get_process_rank() -> int:
+    return int(os.environ.get("RANK", "0"))
+
+
+def get_local_process_rank() -> int:
+    return int(os.environ.get("LOCAL_RANK", "0"))
+
+
 def get_ddp_timeout() -> timedelta:
     value = os.environ.get("VLM_DDP_TIMEOUT_SECONDS", str(1800))
     try:

@@ -9,7 +9,8 @@ from transformers import AutoTokenizer
 from vlm.models.abstract_vlm import AbstractVLMModel
 from vlm.models.phi4mini.Phi3D import PhiVLForConditionalGeneration
 from vlm.utils.filter_batch import extract_raw_samples_from_batch
-from vlm.utils.helper import find_sublist, get_hf_hub_cache_dir
+from vlm.utils.helper import find_sublist
+from vlm.utils.paths import get_hf_hub_cache_dir
 
 
 PHI_VISION_PLACEHOLDER_TOKEN = "<|endofprompt|>"

@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from vlm.evaluation.hf_evaluate.bleu.bleu import Bleu
 from vlm.evaluation.hf_evaluate.meteor.meteor import Meteor
 from vlm.evaluation.hf_evaluate.rouge.rouge import Rouge
-from vlm.utils.helper import get_local_process_rank
+from vlm.utils.ddp_utils import get_local_process_rank
 
 
 class BaseScorer(ABC):

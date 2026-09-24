@@ -11,7 +11,7 @@ from transformers.trainer import OPTIMIZER_NAME, SCHEDULER_NAME, TRAINER_STATE_N
 from vlm.configs.run_config import RunConfig
 from vlm.training.checkpoint_state import read_manifest
 from vlm.utils import logger
-from vlm.utils.helper import find_run_dir_in_output_dir
+from vlm.utils.paths import find_run_dir_in_output_dir
 from vlm.utils.load_and_save_files import load_json, load_yaml, save_yaml
 
 if TYPE_CHECKING:
