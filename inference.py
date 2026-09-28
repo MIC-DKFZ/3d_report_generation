@@ -213,9 +213,9 @@ def parse_args() -> tuple[Namespace, list[str]]:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["best_metric", "best", "final"],
+        choices=["best", "final"],
         default="final",
-        help="When using --run_dir, choose which checkpoint to load: 'best_metric', 'best' or 'final'.",
+        help="When using --run_dir, choose which checkpoint to load: 'best' or 'final'.",
     )
 
     parser.add_argument(

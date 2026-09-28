@@ -41,18 +41,12 @@ class CheckpointPlan:
 
 def resolve_ckpt_dir_in_run_dir(
     run_dir: str | Path,
-    mode: Literal["final", "best", "best_metric"],
+    mode: Literal["final", "best"],
 ) -> Path:
     """Resolve a final or best checkpoint within a training run directory."""
     run_dir = Path(run_dir)
     if not run_dir.exists():
         raise FileNotFoundError(f"The specified run directory does not exist: {run_dir}")
-    if mode == "best_metric":
-        best_metric_dirs = list(run_dir.glob("best_model-*"))
-        if len(best_metric_dirs) != 1 or not best_metric_dirs[0].is_dir():
-            raise FileNotFoundError(f"Expected exactly one 'best_model-*' directory in {run_dir}")
-        return best_metric_dirs[0]
-
     checkpoint_dirs = [path for path in run_dir.glob("checkpoint-*") if path.is_dir()]
     if not checkpoint_dirs:
         raise FileNotFoundError(f"No HF trainer checkpoint directories found in {run_dir}")

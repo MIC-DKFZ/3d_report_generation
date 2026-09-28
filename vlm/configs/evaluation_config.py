@@ -18,7 +18,7 @@ class EvaluationConfig(ConfigBase):
     # 'After Training' parameters
     run_inference: bool = Field(True, description="Run inference after training completes.")
     test_dataset_json_path: str | None = Field(None, description="Path to the test dataset JSON file")
-    mode: Literal["best_metric", "best", "final"] = Field("best", description="Which checkpoint to load for inference.")
+    mode: Literal["best", "final"] = Field("best", description="Which checkpoint to load for inference.")
     split: Literal["val", "test"] = Field("val", description="The split to run inference on.")
     num_dataloader_workers: int | None = Field(4, description="Number of subprocesses per device to use for data loading during inference.")
 
