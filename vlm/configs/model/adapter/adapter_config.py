@@ -13,7 +13,7 @@ class AdapterClassConfig(RecursiveFindClassConfigBase):
     ) -> AdapterBase:
         """
         Instantiate the resolved adapter class, evaluating any string expressions
-        in `class_kwargs` using the provided embedding parameters.
+        in 'class_kwargs' using the provided embedding parameters.
         """
 
         # These are always given by default and thus should not be provided in the config

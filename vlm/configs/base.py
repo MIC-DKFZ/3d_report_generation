@@ -13,7 +13,7 @@ from vlm.utils.helper import get_class_from_registry
 
 def _get_signatures(cls: Type) -> OrderedDict[str, Any]:
     """
-    Collects and merges the *type hints* of all __init__ arguments
+    Collects and merges the type hints of all '__init__' arguments
     from a class and its ancestors in the MRO.
     Returns: OrderedDict[str, Any] where Any is the type hint (e.g., int, list[str]).
     """
@@ -23,7 +23,7 @@ def _get_signatures(cls: Type) -> OrderedDict[str, Any]:
     all_hints: OrderedDict[str, Any] = OrderedDict()
 
     for current_cls in classes_to_check:
-        if '__init__' not in current_cls.__dict__:
+        if "__init__" not in current_cls.__dict__:
             continue
 
         init_method: Callable = current_cls.__init__
@@ -41,7 +41,7 @@ def _get_signatures(cls: Type) -> OrderedDict[str, Any]:
             continue
 
         for name in sig.parameters:
-            if name in ('self', 'args', 'kwargs'):
+            if name in ("self", "args", "kwargs"):
                 continue
 
             # 2. Merge: child class hints take precedence
@@ -132,7 +132,7 @@ class DynamicClassConfigBase(ConfigBase, ABC):
 
     def _sanitize_class_kwargs(self, signatures: OrderedDict[str, Any]):
         """
-        Checks and converts argument values in self.class_kwargs based on
+        Checks and converts argument values in 'self.class_kwargs' based on
         the type hints provided in the signatures.
         """
         for key, value in self.class_kwargs.items():

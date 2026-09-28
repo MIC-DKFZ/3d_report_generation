@@ -69,8 +69,8 @@ class RunConfig(ConfigBase):
     def validate_sharded_vision_input_requires_local_staging(self):
         if self.data.vision_input_is_sharded and not self.general.stage_vision_input_to_local:
             raise ValueError(
-                "data.vision_input_is_sharded=True requires "
-                "general.stage_vision_input_to_local=True. Sharded vision input is only "
+                "'data.vision_input_is_sharded=True' requires "
+                "'general.stage_vision_input_to_local=True'. Sharded vision input is only "
                 "handled by the local staging step; the dataset loader itself expects "
                 "normal per-sample files."
             )
@@ -83,26 +83,26 @@ class RunConfig(ConfigBase):
 
         if self.data.val_dataset_json_path is None:
             raise ValueError(
-                "general.do_early_stopping=True requires data.val_dataset_json_path to be set."
+                "'general.do_early_stopping=True' requires 'data.val_dataset_json_path' to be set."
             )
         if self.trainer.early_stopping_patience is None:
             raise ValueError(
-                "general.do_early_stopping=True requires trainer.early_stopping_patience to be set."
+                "'general.do_early_stopping=True' requires 'trainer.early_stopping_patience' to be set."
             )
         if self.trainer.metric_for_best_model is None:
             raise ValueError(
-                "general.do_early_stopping=True requires trainer.metric_for_best_model to be set."
+                "'general.do_early_stopping=True' requires 'trainer.metric_for_best_model' to be set."
             )
         if self.trainer.eval_strategy == "no":
             raise ValueError(
-                "general.do_early_stopping=True requires trainer.eval_strategy to be 'steps' or 'epoch'."
+                "'general.do_early_stopping=True' requires 'trainer.eval_strategy' to be 'steps' or 'epoch'."
             )
         if (
             self.trainer.metric_for_best_model in {"eval_radbert_f1", "radbert_f1"}
             and not self.eval.calculate_radbert_score
         ):
             raise ValueError(
-                "Early stopping is configured for 'eval_radbert_f1', but eval.calculate_radbert_score is disabled."
+                "Early stopping is configured for 'eval_radbert_f1', but 'eval.calculate_radbert_score' is disabled."
             )
 
         return self
@@ -139,8 +139,8 @@ class RunConfig(ConfigBase):
 
             if run_name[0] is None:
                 raise RuntimeError(
-                    "run_name is None after distributed broadcast. "
-                    "This indicates a synchronization or initialization error in torch.distributed."
+                    "'run_name' is 'None' after distributed broadcast. "
+                    "This indicates a synchronization or initialization error in 'torch.distributed'."
                 )
         self.general.run_name = run_name[0]
 
@@ -222,11 +222,11 @@ class RunConfig(ConfigBase):
         for _val, _modules in _dic.items():
             for _module in sorted(_modules):
                 setattr_nested(self, _module, _val)
-                logger.info_main(f"  > cfg.{_module} set to {_val}")
+                logger.info_main(f"  > 'cfg.{_module}' set to {_val}")
 
     def _maybe_reset_validation_specific_args(self):
         """
-        When doing no validation (val_dataset_json_path=None), reset validation-specific arguments.
+        When doing no validation ('val_dataset_json_path=None'), reset validation-specific arguments.
         This is especially important for SFTTrainer args, which would otherwise raise errors.
         """
         if self.data.val_dataset_json_path is None:
@@ -242,7 +242,7 @@ class RunConfig(ConfigBase):
                 for _module in _modules:
                     setattr_nested(self, _module, _val)
                     if is_main_process():
-                        logger.info(f"  > cfg.{_module} set to {_val}")
+                        logger.info(f"  > 'cfg.{_module}' set to {_val}")
 
     def _maybe_reset_early_stopping_specific_args(self):
         """
@@ -262,7 +262,7 @@ class RunConfig(ConfigBase):
             for _module in _modules:
                 setattr_nested(self, _module, _val)
                 if is_main_process():
-                    logger.info(f"  > cfg.{_module} set to {_val}")
+                    logger.info(f"  > 'cfg.{_module}' set to {_val}")
 
     def apply_conditional_resets(self) -> None:
         self._maybe_reset_vision_related_specific_args()
@@ -301,7 +301,7 @@ class RunConfig(ConfigBase):
     @staticmethod
     def apply_base_configs(cfg_dict: dict[str, Any], config_dir: str | Path, seen: list[str] | None = None) -> dict:
         """
-        Recursively applies base configurations defined in 'cfg_dict["base_configs"]'.
+        Recursively applies base configurations defined by the 'base_configs' key in 'cfg_dict'.
 
         Base configs are merged in reverse order so that earlier entries override later ones.
         Values in 'cfg_dict' itself take final precedence over all base configurations.

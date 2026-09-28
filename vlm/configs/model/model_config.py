@@ -15,12 +15,12 @@ class ModelConfig(ConfigBase):
 
     vision_encoder: VisionEncoderClassConfig | None = Field(
         None,
-        description="Should only be None, if you train with embeddings instead of images or have text-only inputs."
+        description="Should only be 'None', if you train with embeddings instead of images or have text-only inputs."
     )
 
     adapter: AdapterClassConfig | None = Field(
         None,
-        description="Should only be None, if you have text-only inputs."
+        description="Should only be 'None', if you have text-only inputs."
     )
 
     trainable_params: TrainableParamsConfig

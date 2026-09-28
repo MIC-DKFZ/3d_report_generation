@@ -22,9 +22,9 @@ class EvaluationConfig(ConfigBase):
     split: Literal["val", "test"] = Field("val", description="The split to run inference on.")
     num_dataloader_workers: int | None = Field(4, description="Number of subprocesses per device to use for data loading during inference.")
 
-    run_eval: bool = Field(True, description="Run evaluation after inference (only if 'run_inference' is True).")
+    run_eval: bool = Field(True, description="Run evaluation after inference (only if 'run_inference' is 'True').")
     num_eval_processes: int | None = Field(None, description="Number of subprocesses to use for evaluation. "
-                                                             "If None, use half the number of CPUs in the system.")
+                                                             "If 'None', use half the number of CPUs in the system.")
 
     callback_n_samples: int | Literal["unique"] | None = Field(
         None,
@@ -38,5 +38,5 @@ class EvaluationConfig(ConfigBase):
     @model_validator(mode="after")
     def check_inference_eval(self):
         if self.run_eval and not self.run_inference:
-            raise ValueError("'run_eval' can only be enabled when 'run_inference' is True.")
+            raise ValueError("'run_eval' can only be enabled when 'run_inference' is 'True'.")
         return self

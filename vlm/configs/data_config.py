@@ -33,7 +33,7 @@ class DataConfig(ConfigBase):
     )
     vision_input_is_sharded: bool = Field(
         False,
-        description="Whether vision_input_path points to split folders containing tar shards.",
+        description="Whether 'vision_input_path' points to split folders containing tar shards.",
     )
     vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
     embed_dim: int | None = Field(
@@ -82,7 +82,7 @@ class DataConfig(ConfigBase):
     )
 
 
-    is_stacked_2d_embedding: bool = Field(False, description="Set to True for vision encoders such as 'Curia' "
+    is_stacked_2d_embedding: bool = Field(False, description="Set to 'True' for vision encoders such as 'Curia' "
                                                              "where the input embeddings are shaped "
                                                              "(n_slices, class_token + n_patch_tokens, embed_dim).")
     reduce_to_n_slices: int | None = Field(None, description="The number of slices to reduce the stacked 2D embeddings to.")
@@ -122,7 +122,7 @@ class DataConfig(ConfigBase):
     def validate_embed_dims_for_embedding_input(self):
         if self.vision_input_type == VisionInputType.EMBEDDING and (self.embed_dim is None or self.embed_size is None):
             raise ValueError("Missing parameters for embedding mode: "
-                             "please specify both 'embed_dim' and 'embed_size' when vision_input_type='embedding'.")
+                             "please specify both 'embed_dim' and 'embed_size' when 'vision_input_type' is 'embedding'.")
         return self
 
     @model_validator(mode="after")
@@ -135,13 +135,13 @@ class DataConfig(ConfigBase):
     def validate_if_stacked_2d_embeddings(self):
         if self.is_stacked_2d_embedding and self.reduce_to_n_slices is None:
             raise ValueError("Missing parameters for stacked 2D embeddings input: "
-                             "please specify 'reduce_to_n_slices' when is_stacked_2d_embedding=True.")
+                             "please specify 'reduce_to_n_slices' when 'is_stacked_2d_embedding=True'.")
         return self
 
     @model_validator(mode="after")
     def validate_embedding_augmentations(self):
         if self.embedding_transforms and self.vision_input_type != VisionInputType.EMBEDDING:
-            raise ValueError("embedding_transforms require vision_input_type='embedding'.")
+            raise ValueError("'embedding_transforms' require 'vision_input_type' to be 'embedding'.")
 
         return self
 

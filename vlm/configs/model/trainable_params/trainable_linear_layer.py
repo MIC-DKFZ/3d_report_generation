@@ -37,13 +37,13 @@ class TrainableLinearConfig(ConfigBase):
     )
     peft: PEFTLinearConfig | None = Field(
         None,
-        description="PEFT Linear layer; required if mode='peft'."
+        description="PEFT Linear layer; required if 'mode' is 'peft'."
     )
 
     @model_validator(mode="after")
     def check_peft_consistency(self):
         if self.mode == "peft" and self.peft is None:
-            raise ValueError("Must provide 'peft' config when mode='peft'.")
+            raise ValueError("Must provide 'peft' config when 'mode' is 'peft'.")
         if self.mode == "full" and self.peft is not None:
-            raise ValueError("'peft' must be None for mode='full'; frozen PEFT modules are supported.")
+            raise ValueError("'peft' must be 'None' when 'mode' is 'full'; frozen PEFT modules are supported.")
         return self
