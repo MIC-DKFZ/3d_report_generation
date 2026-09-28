@@ -10,7 +10,6 @@ import blosc2
 from scipy.ndimage import gaussian_filter
 
 import torch.distributed as dist
-import os
 
 def setup_distributed():
     """Initialize distributed training"""
