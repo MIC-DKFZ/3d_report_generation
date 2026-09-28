@@ -29,7 +29,7 @@ from vlm.utils.decoding import decode_generated_answers, decode_prompts
 from vlm.utils.ddp_utils import setup_ddp, gather_inference_outputs, is_main_process
 from vlm.utils.filter_batch import extract_batch_prompt_only
 from vlm.utils.helper import add_datetime_tag, seed_everything
-from vlm.configs.merging import recursive_dict_merge
+from vlm.utils.config.merging import recursive_dict_merge
 from vlm.utils.load_and_save_files import load_config_file, save_json, save_yaml
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.paths import VLM_CONFIG_DIR, find_run_dir_in_output_dir

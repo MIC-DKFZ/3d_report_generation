@@ -11,8 +11,8 @@ from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.model.trainable_params.trainable_linear_layer import TrainableLinearConfig
 from vlm.configs.model.trainable_params.trainable_module import TrainableModuleConfig
 from vlm.configs.run_config import RunConfig
-from vlm.training.checkpointing import resolve_ckpt_dir_in_run_dir
-from vlm.training.checkpoint_state import (
+from vlm.utils.training.checkpointing import resolve_ckpt_dir_in_run_dir
+from vlm.utils.training.checkpoint_state import (
     initialize_checkpoint_state, load_model_checkpoint,
 )
 from vlm.utils import logger

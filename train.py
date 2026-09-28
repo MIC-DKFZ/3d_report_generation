@@ -27,7 +27,7 @@ from inference import main as inference_main
 from vlm.models.abstract_vlm import AbstractVLMModel
 from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
     TerminateOnNaNLossCallback, EveryNEpochsCallback
-from vlm.training.checkpointing import (
+from vlm.utils.training.checkpointing import (
     CheckpointPlan,
     TrainRuntimeArgs,
     create_checkpoint_plan,
