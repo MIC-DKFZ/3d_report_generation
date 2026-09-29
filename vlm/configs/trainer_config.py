@@ -16,16 +16,6 @@ class SFTTrainerConfig(ConfigBase):
     gradient_checkpointing: bool = Field(False, description="Enable gradient checkpointing to save memory at the cost of extra compute.")
     gradient_checkpointing_kwargs: dict = Field(default_factory=lambda: {"use_reentrant": False}, description="Additional keyword arguments for gradient checkpointing.")
 
-    # optim: str = Field("adamw_torch", description="Optimizer to use (e.g. adamw_torch, adamw_torch_fused, adamw_hf).")
-    # learning_rate: float | None = Field(2e-4, gt=0, description="Initial learning rate for optimizer.")
-    # lr_scheduler_type: str | None = Field("cosine", description="Learning rate scheduler type (e.g. linear, cosine, polynomial).")
-    # weight_decay: float | None = Field(
-    #     0.0,
-    #     description="Weight decay coefficient for the optimizer. Use 0.0 to disable weight decay. "
-    #                 "Note: To control which parameters are affected by weight decay, refer to "
-    #                 "'AbstractVLMModel.forbidden_name_patterns_for_wd'."
-    # )
-    # warmup_ratio: float | None = Field(0.03, ge=0, le=1, description="Ratio of total steps used for linear learning rate warmup.")
     max_grad_norm: float = Field(0.3, gt=0, description="Maximum gradient norm for gradient clipping.")
 
     logging_steps: int = Field(25, ge=1, description="Number of steps between logging events.")

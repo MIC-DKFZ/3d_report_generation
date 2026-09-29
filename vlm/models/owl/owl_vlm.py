@@ -7,10 +7,10 @@ from vlm.models.owl.modeling_mplugowl3 import mPLUGOwl3Model
 from vlm.utils import logger
 from vlm.utils.filter_batch import extract_raw_samples_from_batch
 
-from vlm.models.abstract_vlm import AbstractVLMModel
+from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 
 
-class OwlVLModel(AbstractVLMModel):
+class OwlVLModel(AbstractVLWrapper):
     def __init__(
         self,
         model_id,

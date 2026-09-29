@@ -1,3 +1,3 @@
-from vlm.models.qwen3.qwen3_vlm import Qwen3TextVLModel
+from vlm.models.qwen3.wrapper import Qwen3TextVLWrapper
 
-__all__ = ["Qwen3TextVLModel"]
+__all__ = ["Qwen3TextVLWrapper"]

@@ -1,14 +1,14 @@
 import torch
-import numpy as np
-from vlm.models.qwen3vl.processing_3d import QwenVLProcessor3D
-from vlm.models.qwen3vl.Qwen3D import QwenVLForConditionalGeneration3D, QwenVLModel3D
+import torch.nn.functional as F
+from vlm.models.qwen25vl.processing_3d import QwenVLProcessor3D
+from vlm.models.qwen25vl.modeling_qwen25_vl import Qwen25VLForConditionalGeneration
 from vlm.utils.filter_batch import extract_raw_samples_from_batch
 from vlm.utils.paths import get_hf_hub_cache_dir
 
-from vlm.models.abstract_vlm import AbstractVLMModel
+from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 
 
-class QwenVLModel(AbstractVLMModel):
+class Qwen25VLWrapper(AbstractVLWrapper):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._model_str = "qwen"
@@ -19,35 +19,19 @@ class QwenVLModel(AbstractVLMModel):
             ["lora", "embed_tokens", "lm_head"]
         )
 
-    @property
-    def module_attr_map(self) -> dict[str, str]:
-        return {
-            "vision_encoder": "model.vision_encoder",
-            "adapter": "model.vision_adapter",
-            "language_model": "model.language_model",
-            "lm_head": "lm_head",
-        }
-
     def setup_model(self):
         """Initialize model, processor and tokenizer"""
 
         cache_dir = get_hf_hub_cache_dir()
 
-        self.model = QwenVLForConditionalGeneration3D.from_pretrained(
+        self.model = Qwen25VLForConditionalGeneration.from_pretrained(
             self.model_cfg.model_id,
-            model_cfg=self.model_cfg.model_dump(),
-            vision_embed_dim=self.vision_embed_dim,
-            vision_embed_size=self.vision_embed_size,
             torch_dtype=torch.bfloat16
         )
 
-        model: QwenVLModel3D = self.model.model
+        self._setup_vision_components()
         if self.model_cfg.vision_encoder is not None:
-            model.setup_vision_encoder()
-            self.downsample_factor = model.vision_encoder.downsample_factor
-        if self.model_cfg.adapter is not None:
-            model.setup_vision_adapter()
-            self.vision_adapter = model.vision_adapter
+            self.downsample_factor = self.model_cfg.vision_encoder.downsample_factor
 
         self.processor = QwenVLProcessor3D.from_pretrained(
             self.model_cfg.model_id,
@@ -55,18 +39,18 @@ class QwenVLModel(AbstractVLMModel):
         )
         self.tokenizer = self.processor.tokenizer
 
-        self.model.post_init()
-
         return self.model
 
     def collate_fn(self, examples):
         """Custom collate function for Qwen model"""
-        # Get the texts and images, and apply the chat template
-        texts = [self.processor.apply_chat_template(example["formatted_qa"], tokenize=False) for example in examples]
-
+        texts = [
+            self._apply_chat_template(example["formatted_qa"], add_generation_prompt=False)
+            for example in examples
+        ]
         texts_prompt_only = [
-            self.processor.apply_chat_template(example["formatted_qa_prompt_only"],
-                                               tokenize=False) + "<|im_start|>assistant\n"
+            self._apply_chat_template(
+                example["formatted_qa_prompt_only"], add_generation_prompt=True
+            )
             for example in examples
         ]
 
@@ -87,22 +71,12 @@ class QwenVLModel(AbstractVLMModel):
                 else:
                     vision_inputs.append(vi)
 
-            vision_inputs = [
-                vi.detach().cpu().numpy() if isinstance(vi, torch.Tensor) else np.asarray(vi)
-                for vi in vision_inputs
-            ]
-
-            if len(vision_inputs) == 0:
-                raise ValueError("Received an empty vision input list in QwenVLModel.collate_fn")
-
-            num_vision_tokens, vision_position_ids, adapter_args = self.vision_adapter.get_adapter_args(
+            (
                 vision_inputs,
-                self.vision_input_type,
-                downsample_factor=self.downsample_factor
-            )
-
-            # This only works if we use homogenous image inputs!
-            vision_inputs = torch.from_numpy(np.stack(vision_inputs))
+                num_vision_tokens,
+                vision_position_ids,
+                adapter_args,
+            ) = self._prepare_vision_inputs(vision_inputs)
 
         batch = self.processor(
             text=texts,
@@ -128,8 +102,7 @@ class QwenVLModel(AbstractVLMModel):
 
         if vision_inputs is not None:
             if isinstance(self.processor, QwenVLProcessor3D):
-                # Including also the "<|vision_pad|>" (151654) and "<|video_pad|>" (151656) tokens?
-                image_tokens = [151652, 151653, 151654, 151655, 151656]
+                image_tokens = [151652, 151653, 151655]
             else:
                 image_tokens = [self.processor.tokenizer.convert_tokens_to_ids(self.processor.image_token)]
 
@@ -163,10 +136,3 @@ class QwenVLModel(AbstractVLMModel):
         }
         self.batch_count += 1
         return batch_out
-
-    def get_model_specific_training_args(self):
-        """Return model-specific training arguments"""
-        return {
-            "bf16": True,
-            "tf32": True,
-        }

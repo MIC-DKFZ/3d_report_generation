@@ -7,40 +7,27 @@ from torch import nn
 from transformers.cache_utils import Cache
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
-from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3Model
+from transformers.models.gemma3.modeling_gemma3 import (
+    Gemma3ForCausalLM,
+    Gemma3ForConditionalGeneration,
+    Gemma3PreTrainedModel,
+    Gemma3TextModel,
+)
 
-from vlm.configs.model.model_config import ModelConfig
 
-
-class PhiVLModel3D(nn.Module):
+class Gemma3TextVLModel(nn.Module):
     def __init__(
         self,
         config,
-        model_cfg: dict,
-        vision_embed_dim: int,
-        vision_embed_size: tuple[int, int, int],
-        language_model: Phi3Model | None = None,
+        language_model: Gemma3TextModel | None = None,
     ):
         super().__init__()
         self.config = config
-        self.language_model = language_model or Phi3Model(config)
+        self.language_model = (
+            language_model if language_model is not None else Gemma3TextModel(config)
+        )
         self.vision_adapter = None
         self.vision_encoder = None
-
-        self.model_cfg = ModelConfig(**model_cfg)
-        self.vision_embed_dim = vision_embed_dim
-        self.vision_embed_size = vision_embed_size
-        self.text_embed_dim: int = config.hidden_size
-
-    def setup_vision_adapter(self):
-        self.vision_adapter = self.model_cfg.build_adapter(
-            vision_embed_dim=self.vision_embed_dim,
-            vision_embed_size=self.vision_embed_size,
-            text_embed_dim=self.text_embed_dim,
-        )
-
-    def setup_vision_encoder(self):
-        self.vision_encoder = self.model_cfg.build_vision_encoder()
 
     def get_input_embeddings(self):
         return self.language_model.get_input_embeddings()
@@ -52,21 +39,21 @@ class PhiVLModel3D(nn.Module):
         self,
         input_ids: torch.LongTensor,
         inputs_embeds: torch.FloatTensor,
-        video_features: torch.FloatTensor,
+        image_features: torch.FloatTensor,
     ) -> torch.BoolTensor:
-        video_token_id = getattr(self.config, "video_token_id", None)
-        if video_token_id is None:
-            raise ValueError("Phi VLM config is missing 'video_token_id'.")
+        image_token_id = getattr(self.config, "image_token_id", None)
+        if image_token_id is None:
+            raise ValueError("Gemma3 text VLM config is missing 'image_token_id'.")
 
-        n_video_tokens = (input_ids == video_token_id).sum()
-        n_video_features = video_features.shape[0]
-        if n_video_tokens != n_video_features:
+        n_image_tokens = (input_ids == image_token_id).sum()
+        n_image_features = image_features.shape[0]
+        if n_image_tokens != n_image_features:
             raise ValueError(
-                "Video features and video tokens do not match: "
-                f"tokens: {n_video_tokens}, features {n_video_features}"
+                "Image features and image tokens do not match: "
+                f"tokens: {n_image_tokens}, features {n_image_features}"
             )
 
-        return (input_ids == video_token_id).unsqueeze(-1).expand_as(inputs_embeds)
+        return (input_ids == image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
 
     def forward(
         self,
@@ -92,20 +79,20 @@ class PhiVLModel3D(nn.Module):
 
         if pixel_values_videos is not None:
             if input_ids is None:
-                raise ValueError("input_ids are required when inserting Phi vision embeddings")
+                raise ValueError("input_ids are required when inserting Gemma3 vision embeddings")
 
-            video_embeds = pixel_values_videos
+            image_embeds = pixel_values_videos
             if self.vision_encoder is not None:
-                video_embeds = self.vision_encoder(video_embeds)
+                image_embeds = self.vision_encoder(image_embeds)
             if self.vision_adapter is not None:
-                video_embeds = self.vision_adapter(video_embeds, adapter_args or {})
+                image_embeds = self.vision_adapter(image_embeds, adapter_args or {})
 
-            video_embeds = video_embeds.view(-1, video_embeds.shape[-1])
-            video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
-            video_mask = self.get_placeholder_mask(input_ids, inputs_embeds, video_embeds)
+            image_embeds = image_embeds.view(-1, image_embeds.shape[-1])
+            image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+            image_mask = self.get_placeholder_mask(input_ids, inputs_embeds, image_embeds)
             inputs_embeds = inputs_embeds.masked_scatter(
-                video_mask.to(inputs_embeds.device),
-                video_embeds,
+                image_mask.to(inputs_embeds.device),
+                image_embeds,
             )
 
         return self.language_model(
@@ -123,7 +110,7 @@ class PhiVLModel3D(nn.Module):
         )
 
 
-class PhiVLForConditionalGeneration(Phi3ForCausalLM, GenerationMixin):
+class Gemma3TextVLForConditionalGeneration(Gemma3ForCausalLM, GenerationMixin):
     _checkpoint_conversion_mapping = {}
     _tied_weights_keys = ["lm_head.weight"]
 
@@ -132,43 +119,42 @@ class PhiVLForConditionalGeneration(Phi3ForCausalLM, GenerationMixin):
         cls,
         pretrained_model_name_or_path,
         *model_args,
-        model_cfg: dict,
-        vision_embed_dim: int,
-        vision_embed_size: tuple[int, int, int],
         **kwargs,
     ):
-        pretrained_phi = Phi3ForCausalLM.from_pretrained(
+        pretrained_gemma = Gemma3ForConditionalGeneration.from_pretrained(
             pretrained_model_name_or_path,
             *model_args,
             **kwargs,
         )
         model = cls(
-            pretrained_phi.config,
-            model_cfg=model_cfg,
-            vision_embed_dim=vision_embed_dim,
-            vision_embed_size=vision_embed_size,
+            pretrained_gemma.config.get_text_config(),
+            language_model=pretrained_gemma.model.language_model,
+            lm_head=pretrained_gemma.lm_head,
         )
-        model.model.language_model = pretrained_phi.model
-        model.lm_head = pretrained_phi.lm_head
-        model.generation_config = pretrained_phi.generation_config
+        model.generation_config = pretrained_gemma.generation_config
+        model.config._name_or_path = (
+            getattr(pretrained_gemma.config, "_name_or_path", None)
+            or str(pretrained_model_name_or_path)
+        )
+        model.model.language_model.config._name_or_path = model.config._name_or_path
         return model
 
     def __init__(
         self,
         config,
-        model_cfg: dict,
-        vision_embed_dim: int,
-        vision_embed_size: tuple[int, int, int],
+        language_model: Gemma3TextModel | None = None,
+        lm_head: nn.Linear | None = None,
     ):
-        super().__init__(config)
-        language_model = self.model
-        self.model = PhiVLModel3D(
-            config,
-            model_cfg=model_cfg,
-            vision_embed_dim=vision_embed_dim,
-            vision_embed_size=vision_embed_size,
-            language_model=language_model,
+        # Initialize HF metadata without constructing a second decoder.
+        Gemma3PreTrainedModel.__init__(self, config)
+        self.model = Gemma3TextVLModel(config, language_model=language_model)
+        self.vocab_size = config.vocab_size
+        self.lm_head = (
+            lm_head
+            if lm_head is not None
+            else nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         )
+        self.post_init()
 
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()
@@ -213,6 +199,8 @@ class PhiVLForConditionalGeneration(Phi3ForCausalLM, GenerationMixin):
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
             cache_position=cache_position,
+            output_attentions=kwargs.pop("output_attentions", None),
+            output_hidden_states=kwargs.pop("output_hidden_states", None),
             return_dict=True if return_dict is None else return_dict,
             pixel_values_videos=pixel_values_videos,
             vision_position_ids=vision_position_ids,
@@ -227,6 +215,10 @@ class PhiVLForConditionalGeneration(Phi3ForCausalLM, GenerationMixin):
             else logits_to_keep
         )
         logits = self.lm_head(hidden_states[:, slice_indices, :])
+        if self.config.final_logit_softcapping is not None:
+            logits = logits / self.config.final_logit_softcapping
+            logits = torch.tanh(logits)
+            logits = logits * self.config.final_logit_softcapping
 
         loss = None
         if labels is not None:

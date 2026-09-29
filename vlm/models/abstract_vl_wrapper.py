@@ -3,6 +3,7 @@ import gc
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Literal
+import numpy as np
 import torch
 from peft import PeftModel
 from transformers import PreTrainedModel
@@ -20,7 +21,7 @@ from vlm.utils.helper import getattr_nested, setattr_nested
 from vlm.utils.load_and_save_files import load_yaml
 
 
-class AbstractVLMModel(ABC):
+class AbstractVLWrapper(ABC):
     def __init__(self,
                  model_cfg: ModelConfig,
                  vision_input_type: str,
@@ -38,7 +39,6 @@ class AbstractVLMModel(ABC):
         self.tokenizer = None
         self.processor = None
         self.downsample_factor = None
-        self.vision_adapter = None
 
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.vision_input_type = vision_input_type
@@ -63,6 +63,17 @@ class AbstractVLMModel(ABC):
         """
         pass
 
+    def initialize_model(self) -> PreTrainedModel:
+        """Assemble and prepare the model before restoring checkpoint weights.
+
+        PEFT layers must exist before checkpoint tracking and weight restoration.
+        Checkpoint selection and restoration remain the caller's responsibility.
+        """
+        self.setup_model()
+        self.configure_model_for_training()
+        self.initialize_checkpoint_tracking()
+        return self.model
+
     @abstractmethod
     def collate_fn(self, batch):
         """
@@ -76,47 +87,91 @@ class AbstractVLMModel(ABC):
         """
         pass
 
-    @abstractmethod
-    def get_model_specific_training_args(self):
-        """
-        Get model-specific training arguments.
+    def _apply_chat_template(self, messages: list[dict], add_generation_prompt: bool) -> str:
+        """Format structured messages using the model's processor."""
+        return self.processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
+        )
 
-        Returns:
-            A dictionary with model-specific training arguments
+    def _prepare_vision_inputs(
+        self, vision_inputs: list
+    ) -> tuple[torch.Tensor, list[int], list[torch.Tensor], dict]:
+        """Convert a flat image list, prepare adapter metadata, and stack matching shapes.
+
+        Callers handle model-specific validation and multi-image flattening.
         """
-        pass
+        vision_inputs = [
+            vi.detach().cpu().numpy() if isinstance(vi, torch.Tensor) else np.asarray(vi)
+            for vi in vision_inputs
+        ]
+        if not vision_inputs:
+            raise ValueError(
+                f"Received an empty vision input list in {type(self).__name__}.collate_fn"
+            )
+
+        num_vision_tokens, vision_position_ids, adapter_args =  self.vision_adapter.get_adapter_args(
+            vision_inputs,
+            self.vision_input_type,
+            downsample_factor=self.downsample_factor,
+        )
+        return (
+            torch.from_numpy(np.stack(vision_inputs)),
+            num_vision_tokens,
+            vision_position_ids,
+            adapter_args,
+        )
+
+    def get_model_specific_training_args(self):
+        """Return default precision settings; subclasses can override these as needed."""
+        return {"bf16": True, "tf32": True}
 
     @property
-    @abstractmethod
     def module_attr_map(self) -> dict[str, str]:
         """
-        Mapping of submodule names to their attribute paths (relative to 'self.model'!!!).
+        Map component names to attribute paths relative to `self.model`.
 
-        Required keys:
-          - "vision_encoder"
-          - "adapter"
-          - "language_model"
-          - "lm_head"
-
-        Modules might be nested within the model, e.g., 'self.model.model.vision_encoder'.
-        Each value should be a string path.
-
-        Example
-        -------
-        {
+        Subclasses with a different module structure should override this mapping.
+        """
+        return {
             "vision_encoder": "model.vision_encoder",
             "adapter": "model.vision_adapter",
             "language_model": "model.language_model",
             "lm_head": "lm_head",
         }
+
+    @property
+    def vision_adapter(self) -> torch.nn.Module | None:
+        """Return the current adapter, including any PEFT wrapper."""
+        if self.model is None:
+            return None
+        return getattr_nested(self.model, self.module_attr_map["adapter"])
+
+    def _setup_vision_components(self) -> None:
+        """Build and attach vision components after loading the pretrained backbone.
+
+        Components initialize their own weights; no global HF initialization follows.
+        Subclasses set `downsample_factor` according to their encoder/config convention.
         """
-        ...
+        if self.model_cfg.vision_encoder is not None:
+            encoder = self.model_cfg.build_vision_encoder()
+            setattr_nested(self.model, self.module_attr_map["vision_encoder"], encoder)
+        if self.model_cfg.adapter is not None:
+            language_model = getattr_nested(self.model, self.module_attr_map["language_model"])
+            text_embed_dim = language_model.get_input_embeddings().weight.shape[-1]
+            adapter = self.model_cfg.build_adapter(
+                vision_embed_dim=self.vision_embed_dim,
+                vision_embed_size=self.vision_embed_size,
+                text_embed_dim=text_embed_dim,
+            )
+            setattr_nested(self.model, self.module_attr_map["adapter"], adapter)
 
     def configure_model_for_training(self) -> None:
         """
         Apply the configured training mode to each model component.
 
-        The 'self.module_attr_map' property must be defined in the subclass before calling this function.
+        The `module_attr_map` property specifies the component paths within the model.
         Components can be frozen, fully trainable, or wrapped with PEFT layers. A component may also
         specify a PEFT configuration together with ``mode='frozen'``. In that case, the PEFT wrapper is
         constructed so weights from an earlier partial checkpoint have matching parameter names, and
@@ -191,7 +246,7 @@ class AbstractVLMModel(ABC):
         initialize_checkpoint_state(self.model)
 
     @staticmethod
-    def load_from_run_dir(run_dir: str | Path, mode: Literal["best", "final"] = "final") -> tuple[AbstractVLMModel, RunConfig, Path]:
+    def load_from_run_dir(run_dir: str | Path, mode: Literal["best", "final"] = "final") -> tuple[AbstractVLWrapper, RunConfig, Path]:
         """
         Load a trained VLM model from a run directory.
 
@@ -207,7 +262,7 @@ class AbstractVLMModel(ABC):
         ckpt_dir = resolve_ckpt_dir_in_run_dir(run_dir=run_dir, mode=mode)
         logger.info_main(f"Loading {mode} model from {str(run_dir)}")
 
-        return AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir) + (ckpt_dir,)
+        return AbstractVLWrapper.load_from_checkpoint_dir(ckpt_dir) + (ckpt_dir,)
 
     def load_weights_from_checkpoint_dir(
         self,
@@ -223,7 +278,7 @@ class AbstractVLMModel(ABC):
         return load_model_checkpoint(self.model, ckpt_dir)
 
     @staticmethod
-    def load_from_checkpoint_dir(ckpt_dir: str | Path) -> tuple[AbstractVLMModel, RunConfig]:
+    def load_from_checkpoint_dir(ckpt_dir: str | Path) -> tuple[AbstractVLWrapper, RunConfig]:
         """
         Restore a VLM model from a checkpoint directory.
 
@@ -243,7 +298,7 @@ class AbstractVLMModel(ABC):
 
         from vlm.registries.vlm_registry import VLM_REGISTRY
         vlm_model_class = VLM_REGISTRY[cfg.model.model_type].model_class
-        vlm_model: AbstractVLMModel = vlm_model_class(
+        vlm_model: AbstractVLWrapper = vlm_model_class(
             model_cfg=cfg.model,
             vision_input_type=cfg.data.vision_input_type,
             vision_embed_dim=cfg.get_vision_embed_dim(),
@@ -254,9 +309,7 @@ class AbstractVLMModel(ABC):
             truncate_at=cfg.data.truncate_at,
             local_files_only=cfg.general.local_files_only
         )
-        vlm_model.setup_model()
-        vlm_model.configure_model_for_training()
-        vlm_model.initialize_checkpoint_tracking()
+        vlm_model.initialize_model()
         vlm_model.load_weights_from_checkpoint_dir(ckpt_dir)
         return vlm_model, cfg
 

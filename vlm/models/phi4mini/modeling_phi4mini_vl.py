@@ -7,40 +7,24 @@ from torch import nn
 from transformers.cache_utils import Cache
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
-from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM, Qwen3Model
+from transformers.models.phi3.modeling_phi3 import (
+    Phi3ForCausalLM,
+    Phi3Model,
+    Phi3PreTrainedModel,
+)
 
-from vlm.configs.model.model_config import ModelConfig
 
-
-class Qwen3TextVLModel3D(nn.Module):
+class Phi4MiniVLModel(nn.Module):
     def __init__(
         self,
         config,
-        model_cfg: dict,
-        vision_embed_dim: int,
-        vision_embed_size: tuple[int, int, int],
-        language_model: Qwen3Model | None = None,
+        language_model: Phi3Model | None = None,
     ):
         super().__init__()
         self.config = config
-        self.language_model = language_model or Qwen3Model(config)
+        self.language_model = language_model if language_model is not None else Phi3Model(config)
         self.vision_adapter = None
         self.vision_encoder = None
-
-        self.model_cfg = ModelConfig(**model_cfg)
-        self.vision_embed_dim = vision_embed_dim
-        self.vision_embed_size = vision_embed_size
-        self.text_embed_dim: int = config.hidden_size
-
-    def setup_vision_adapter(self):
-        self.vision_adapter = self.model_cfg.build_adapter(
-            vision_embed_dim=self.vision_embed_dim,
-            vision_embed_size=self.vision_embed_size,
-            text_embed_dim=self.text_embed_dim,
-        )
-
-    def setup_vision_encoder(self):
-        self.vision_encoder = self.model_cfg.build_vision_encoder()
 
     def get_input_embeddings(self):
         return self.language_model.get_input_embeddings()
@@ -56,7 +40,7 @@ class Qwen3TextVLModel3D(nn.Module):
     ) -> torch.BoolTensor:
         video_token_id = getattr(self.config, "video_token_id", None)
         if video_token_id is None:
-            raise ValueError("Qwen3 text VLM config is missing 'video_token_id'.")
+            raise ValueError("Phi VLM config is missing 'video_token_id'.")
 
         n_video_tokens = (input_ids == video_token_id).sum()
         n_video_features = video_features.shape[0]
@@ -92,7 +76,7 @@ class Qwen3TextVLModel3D(nn.Module):
 
         if pixel_values_videos is not None:
             if input_ids is None:
-                raise ValueError("input_ids are required when inserting Qwen3 vision embeddings")
+                raise ValueError("input_ids are required when inserting Phi vision embeddings")
 
             video_embeds = pixel_values_videos
             if self.vision_encoder is not None:
@@ -123,7 +107,7 @@ class Qwen3TextVLModel3D(nn.Module):
         )
 
 
-class Qwen3TextVLForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
+class Phi4MiniVLForConditionalGeneration(Phi3ForCausalLM, GenerationMixin):
     _checkpoint_conversion_mapping = {}
     _tied_weights_keys = ["lm_head.weight"]
 
@@ -132,43 +116,37 @@ class Qwen3TextVLForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
         cls,
         pretrained_model_name_or_path,
         *model_args,
-        model_cfg: dict,
-        vision_embed_dim: int,
-        vision_embed_size: tuple[int, int, int],
         **kwargs,
     ):
-        pretrained_qwen = Qwen3ForCausalLM.from_pretrained(
+        pretrained_phi = Phi3ForCausalLM.from_pretrained(
             pretrained_model_name_or_path,
             *model_args,
             **kwargs,
         )
         model = cls(
-            pretrained_qwen.config,
-            model_cfg=model_cfg,
-            vision_embed_dim=vision_embed_dim,
-            vision_embed_size=vision_embed_size,
+            pretrained_phi.config,
+            language_model=pretrained_phi.model,
+            lm_head=pretrained_phi.lm_head,
         )
-        model.model.language_model = pretrained_qwen.model
-        model.lm_head = pretrained_qwen.lm_head
-        model.generation_config = pretrained_qwen.generation_config
+        model.generation_config = pretrained_phi.generation_config
         return model
 
     def __init__(
         self,
         config,
-        model_cfg: dict,
-        vision_embed_dim: int,
-        vision_embed_size: tuple[int, int, int],
+        language_model: Phi3Model | None = None,
+        lm_head: nn.Linear | None = None,
     ):
-        super().__init__(config)
-        language_model = self.model
-        self.model = Qwen3TextVLModel3D(
-            config,
-            model_cfg=model_cfg,
-            vision_embed_dim=vision_embed_dim,
-            vision_embed_size=vision_embed_size,
-            language_model=language_model,
+        # Initialize HF metadata without constructing a second decoder.
+        Phi3PreTrainedModel.__init__(self, config)
+        self.model = Phi4MiniVLModel(config, language_model=language_model)
+        self.vocab_size = config.vocab_size
+        self.lm_head = (
+            lm_head
+            if lm_head is not None
+            else nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         )
+        self.post_init()
 
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()

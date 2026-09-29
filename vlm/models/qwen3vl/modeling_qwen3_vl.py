@@ -5,8 +5,8 @@ from torch import nn
 from transformers.generation import GenerationMixin
 from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
-    Qwen3VLForConditionalGeneration,
-    Qwen3VLModel,
+    Qwen3VLForConditionalGeneration as HFQwen3VLForConditionalGeneration,
+    Qwen3VLModel as HFQwen3VLModel,
     Qwen3VLModelOutputWithPast,
     Qwen3VLPreTrainedModel,
     Qwen3VLTextModel, Qwen3VLCausalLMOutputWithPast,
@@ -16,41 +16,21 @@ from transformers.processing_utils import Unpack
 from transformers.utils.generic import check_model_inputs
 from transformers.utils import can_return_tuple, TransformersKwargs
 
-from vlm.configs.model.model_config import ModelConfig
 
-
-class QwenVLModel3D(Qwen3VLModel, Qwen3VLPreTrainedModel):
+class Qwen3VLModel(HFQwen3VLModel, Qwen3VLPreTrainedModel):
     base_model_prefix = ""
     _checkpoint_conversion_mapping = {"^model": "language_model"}
     config: Qwen3VLConfig
     _no_split_modules = ["Qwen3VLTextDecoderLayer", "Qwen3VLVisionBlock"]
 
-    def __init__(self, config, model_cfg: dict, vision_embed_dim: int, vision_embed_size: tuple[int, int, int]):
-        # we need to replace Qwen25VL init because it inits 'visual'
+    def __init__(self, config):
+        # The HF model constructor also creates the unused native vision tower.
         Qwen3VLPreTrainedModel.__init__(self, config)
-        self.vision_adapter = None  # init in self.setup_vision_adapter()
-        self.vision_encoder = None  # init in self.setup_vision_encoder()
+        self.vision_adapter = None
+        self.vision_encoder = None
         self.language_model = Qwen3VLTextModel._from_config(config.text_config)
         self.rope_deltas = None     # cache rope_deltas here
-
-        self.model_cfg = ModelConfig(**model_cfg)
-
-        self.vision_embed_dim = vision_embed_dim
-        self.vision_embed_size = vision_embed_size
-        self.text_embed_dim: int = config.text_config.hidden_size
-
-        # Initialize weights and apply final processing
-        # self.post_init()
-
-    def setup_vision_adapter(self):
-        self.vision_adapter = self.model_cfg.build_adapter(
-            vision_embed_dim=self.vision_embed_dim,
-            vision_embed_size=self.vision_embed_size,
-            text_embed_dim=self.text_embed_dim
-        )
-
-    def setup_vision_encoder(self):
-        self.vision_encoder = self.model_cfg.build_vision_encoder()
+        self.post_init()
 
     def get_rope_index(
         self,
@@ -255,24 +235,18 @@ class QwenVLModel3D(Qwen3VLModel, Qwen3VLPreTrainedModel):
 
 
 
-class QwenVLForConditionalGeneration3D(Qwen3VLForConditionalGeneration, GenerationMixin):
+class Qwen3VLForConditionalGeneration(HFQwen3VLForConditionalGeneration, GenerationMixin):
     _checkpoint_conversion_mapping = {}
     _tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
     config: Qwen3VLConfig
     # Reference: fix gemma3 grad acc #37208
     accepts_loss_kwargs = False
 
-    def __init__(self, config, model_cfg: dict, vision_embed_dim: int, vision_embed_size: tuple[int, int, int]):
-        super().__init__(config)
-        self.model = QwenVLModel3D(
-            config,
-            model_cfg=model_cfg,
-            vision_embed_dim=vision_embed_dim,
-            vision_embed_size=vision_embed_size
-        )
+    def __init__(self, config):
+        Qwen3VLPreTrainedModel.__init__(self, config)
+        self.model = Qwen3VLModel(config)
         self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
-
-        # self.post_init()
+        self.post_init()
 
     @can_return_tuple
     def forward(

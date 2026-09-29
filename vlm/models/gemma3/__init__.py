@@ -1,3 +1,3 @@
-from vlm.models.gemma3.gemma3_vlm import Gemma3TextVLModel
+from vlm.models.gemma3.wrapper import Gemma3TextVLWrapper
 
-__all__ = ["Gemma3TextVLModel"]
+__all__ = ["Gemma3TextVLWrapper"]

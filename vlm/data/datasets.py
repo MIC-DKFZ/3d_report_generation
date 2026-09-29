@@ -23,7 +23,7 @@ from vlm.utils.regex_patterns import (
     VQA_OPTION_LETTERS_IN_TEXT_PATTERN,
 )
 from vlm.utils.vision_input_type import VisionInputType
-from vlm.models.phi4mini.phi4mini_vlm import PHI_VISION_PLACEHOLDER_TOKEN
+from vlm.models.phi4mini.wrapper import PHI_VISION_PLACEHOLDER_TOKEN
 from vlm.configs.run_config import RunConfig
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."

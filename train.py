@@ -24,7 +24,7 @@ from vlm.data.datasets import (
 )
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
 from inference import main as inference_main
-from vlm.models.abstract_vlm import AbstractVLMModel
+from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
     TerminateOnNaNLossCallback, EveryNEpochsCallback
 from vlm.utils.training.checkpointing import (
@@ -62,7 +62,7 @@ WANDB_CONFIG_BACKUP_FILENAME = "config_backup.json"
 class UnifiedVLMTrainer:
     def __init__(
         self,
-        vlm_model: AbstractVLMModel,
+        vlm_model: AbstractVLWrapper,
         cfg: RunConfig,
         checkpoint_plan: CheckpointPlan,
         ddp_setup: tuple[bool, int, int, int, int],
@@ -71,12 +71,12 @@ class UnifiedVLMTrainer:
         Initialize the unified VLM trainer.
 
         Args:
-            vlm_model: An instance of a class derived from AbstractVLMModel
+            vlm_model: An instance of a class derived from AbstractVLWrapper
             cfg: The RunConfig of the experiment
             checkpoint_plan: Ordered model and training-state checkpoint sources
             ddp_setup: Distributed topology initialized by main
         """
-        self.vlm_model: AbstractVLMModel = vlm_model
+        self.vlm_model: AbstractVLWrapper = vlm_model
         self.trainer: VLMSFTTrainer | None = None
         self.cfg: RunConfig = cfg
         self.checkpoint_plan = checkpoint_plan
@@ -138,13 +138,8 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training Setup")
 
-        # Setup model, processor and tokenizer
-        model = self.vlm_model.setup_model()
-
-        # Configure component trainability and construct any configured PEFT layers.
-        self.vlm_model.configure_model_for_training()
-
-        self.vlm_model.initialize_checkpoint_tracking()
+        # Assemble the model and prepare PEFT/trainability before restoring weights.
+        model = self.vlm_model.initialize_model()
 
         # Sparse checkpoints are applied in dependency order; resume weights come last.
         restore_model_checkpoints(self.vlm_model, self.checkpoint_plan)
@@ -465,7 +460,7 @@ def ensure_wandb_config_logging():
 
 
 def create_comprehensive_wandb_config(
-    vlm_model: AbstractVLMModel, cfg: RunConfig, world_size: int = 1, rank: int = 0
+    vlm_model: AbstractVLWrapper, cfg: RunConfig, world_size: int = 1, rank: int = 0
 ):
     """
     Create a comprehensive configuration dictionary for WandB logging.

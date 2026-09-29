@@ -23,7 +23,7 @@ from vlm.data.datasets import (
         ToothFairy4Dataset,
 )
 from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
-from vlm.models.abstract_vlm import AbstractVLMModel
+from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.utils import logger
 from vlm.utils.decoding import decode_generated_answers, decode_prompts
 from vlm.utils.ddp_utils import setup_ddp, gather_inference_outputs, is_main_process
@@ -40,7 +40,7 @@ from eval import main as eval_main
 class UnifiedVLMInference:
     def __init__(
         self,
-        vlm_model: AbstractVLMModel,
+        vlm_model: AbstractVLWrapper,
         cfg: RunConfig,
         output_dir: str | Path,
         per_device_batch_size: int,
@@ -50,7 +50,7 @@ class UnifiedVLMInference:
         """
         Initialize the unified VLM inference.
         Args:
-            vlm_model: An instance of a class derived from AbstractVLMModel
+            vlm_model: An instance of a class derived from AbstractVLWrapper
             cfg: The RunConfig instance from the training run
             output_dir: Directory to save inference outputs
         """
@@ -264,10 +264,10 @@ def main(
         if not run_dir.is_dir():
             run_dir = find_run_dir_in_output_dir(str(run_dir))
 
-        vlm_model, cfg, ckpt_dir = AbstractVLMModel.load_from_run_dir(run_dir, args.mode)
+        vlm_model, cfg, ckpt_dir = AbstractVLWrapper.load_from_run_dir(run_dir, args.mode)
     else:  # if args.checkpoint_dir
         ckpt_dir = args.checkpoint_dir
-        vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
+        vlm_model, cfg = AbstractVLWrapper.load_from_checkpoint_dir(ckpt_dir)
 
     # Moved this bevor `is_main`
     inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "inference_dir_suffix", ""))

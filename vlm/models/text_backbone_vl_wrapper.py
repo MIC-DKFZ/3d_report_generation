@@ -1,77 +1,69 @@
-from __future__ import annotations
-
 from contextlib import contextmanager
+from typing import ClassVar
 
-import numpy as np
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedModel
 
-from vlm.models.abstract_vlm import AbstractVLMModel
-from vlm.models.phi4mini.Phi3D import PhiVLForConditionalGeneration
+from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.utils.filter_batch import extract_raw_samples_from_batch
 from vlm.utils.helper import find_sublist
 from vlm.utils.paths import get_hf_hub_cache_dir
 
 
-PHI_VISION_PLACEHOLDER_TOKEN = "<|endofprompt|>"
+class TextBackboneVLWrapper(AbstractVLWrapper):
+    """Framework interface for text backbones augmented with a vision encoder and adapter.
 
+    Subclasses supply their model class, name, and placeholder token. They can customize
+    tokenizer setup and chat formatting while sharing the single-image batch pipeline.
+    """
 
-class Phi4MiniVLModel(AbstractVLMModel):
+    model_class: ClassVar[type[PreTrainedModel]]
+    model_name: ClassVar[str]
+    vision_placeholder_token: ClassVar[str]
+    vision_token_id_attr: ClassVar[str] = "video_token_id"
+    vision_content_types: ClassVar[tuple[str, ...]] = ("video",)
+    extra_forbidden_name_patterns_for_wd: ClassVar[tuple[str, ...]] = ()
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._model_str = "phi4mini"
+        self._model_str = self.model_name
         self.batch_count = 0
         self._max_length = None
-
-    @property
-    def module_attr_map(self) -> dict[str, str]:
-        return {
-            "vision_encoder": "model.vision_encoder",
-            "adapter": "model.vision_adapter",
-            "language_model": "model.language_model",
-            "lm_head": "lm_head",
-        }
+        self.forbidden_name_patterns_for_wd.extend(self.extra_forbidden_name_patterns_for_wd)
 
     def setup_model(self):
-        """Initialize model, tokenizer and Phi VLM wrapper."""
+        """Load the tokenizer and model, then initialize the configured vision components."""
         cache_dir = get_hf_hub_cache_dir()
-
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_cfg.model_id,
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
         )
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        self._configure_tokenizer()
 
-        self.model = PhiVLForConditionalGeneration.from_pretrained(
+        self.model = self.model_class.from_pretrained(
             self.model_cfg.model_id,
-            model_cfg=self.model_cfg.model_dump(),
-            vision_embed_dim=self.vision_embed_dim,
-            vision_embed_size=self.vision_embed_size,
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
             torch_dtype=torch.bfloat16,
         )
-        self.model.config.video_token_id = self.tokenizer.convert_tokens_to_ids(
-            PHI_VISION_PLACEHOLDER_TOKEN
-        )
-        if self.model.config.video_token_id is None:
+        token_id = self.tokenizer.convert_tokens_to_ids(self.vision_placeholder_token)
+        if token_id is None:
             raise ValueError(
-                f"Phi tokenizer does not contain the placeholder token "
-                f"{PHI_VISION_PLACEHOLDER_TOKEN!r}."
+                f"{self.model_name} tokenizer does not contain the placeholder token "
+                f"{self.vision_placeholder_token!r}."
             )
+        setattr(self.model.config, self.vision_token_id_attr, token_id)
 
-        model = self.model.model
+        self._setup_vision_components()
         if self.model_cfg.vision_encoder is not None:
-            model.setup_vision_encoder()
-            self.downsample_factor = model.vision_encoder.downsample_factor
-        if self.model_cfg.adapter is not None:
-            model.setup_vision_adapter()
-            self.vision_adapter = model.vision_adapter
+            self.downsample_factor = self.model.model.vision_encoder.downsample_factor
 
         self.processor = self.tokenizer
         return self.model
+
+    def _configure_tokenizer(self) -> None:
+        """Apply any model-specific tokenizer adjustments before loading the model."""
 
     @contextmanager
     def _padding_side(self, padding_side: str):
@@ -82,14 +74,23 @@ class Phi4MiniVLModel(AbstractVLMModel):
         finally:
             self.tokenizer.padding_side = original_padding_side
 
-    @staticmethod
-    def _content_to_text(content) -> str:
+    def _content_to_text(self, content) -> str:
         if isinstance(content, str):
             return content
 
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(item.get("text", ""))
+                elif isinstance(item, dict) and item.get("type") in self.vision_content_types:
+                    parts.append(self.vision_placeholder_token)
+                else:
+                    raise ValueError(f"Unsupported {self.model_name} message content item: {item}")
+            return "\n".join(part for part in parts if part)
+
         raise TypeError(
-            "Phi4Mini expects string chat message content. "
-            "Structured multimodal content is currently only supported by Qwen."
+            f"Unsupported {self.model_name} message content type: {type(content).__name__}"
         )
 
     def _normalize_messages(self, messages: list[dict]) -> list[dict]:
@@ -99,35 +100,36 @@ class Phi4MiniVLModel(AbstractVLMModel):
         ]
 
     def _apply_chat_template(self, messages: list[dict], add_generation_prompt: bool) -> str:
-        return self.tokenizer.apply_chat_template(
+        return super()._apply_chat_template(
             self._normalize_messages(messages),
-            tokenize=False,
             add_generation_prompt=add_generation_prompt,
         )
 
-    @staticmethod
-    def _expand_vision_tokens(texts: list[str], num_vision_tokens: list[int] | None) -> list[str]:
+    def _expand_vision_tokens(
+        self, texts: list[str], num_vision_tokens: list[int] | None
+    ) -> list[str]:
         if num_vision_tokens is None:
             return texts
 
         if len(num_vision_tokens) != len(texts):
             raise ValueError(
-                "Phi4Mini currently supports exactly one vision input per sample. "
+                f"{self.model_name} currently supports exactly one vision input per sample. "
                 f"Got {len(num_vision_tokens)} vision inputs for {len(texts)} text samples."
             )
 
         expanded = []
         for text, n_tokens in zip(texts, num_vision_tokens):
-            n_placeholders = text.count(PHI_VISION_PLACEHOLDER_TOKEN)
+            n_placeholders = text.count(self.vision_placeholder_token)
             if n_placeholders != 1:
                 raise ValueError(
-                    "Phi4Mini currently expects exactly one video placeholder per sample. "
+                    f"{self.model_name} currently expects exactly one vision placeholder "
+                    "per sample. "
                     f"Found {n_placeholders} placeholders."
                 )
             expanded.append(
                 text.replace(
-                    PHI_VISION_PLACEHOLDER_TOKEN,
-                    PHI_VISION_PLACEHOLDER_TOKEN * int(n_tokens),
+                    self.vision_placeholder_token,
+                    self.vision_placeholder_token * int(n_tokens),
                     1,
                 )
             )
@@ -138,16 +140,13 @@ class Phi4MiniVLModel(AbstractVLMModel):
             if self._max_length is None:
                 if self.truncate_after is None or self.truncate_at is None:
                     raise ValueError(
-                        "Phi truncation requires both 'truncate_after' and 'truncate_at'"
+                        f"{self.model_name} truncation requires both "
+                        "'truncate_after' and 'truncate_at'"
                     )
                 tokenized_marker = self.tokenizer(
-                    self.truncate_after,
-                    add_special_tokens=False,
+                    self.truncate_after, add_special_tokens=False
                 )["input_ids"]
-                tokenized_sample = self.tokenizer(
-                    texts[0],
-                    add_special_tokens=False,
-                )["input_ids"]
+                tokenized_sample = self.tokenizer(texts[0], add_special_tokens=False)["input_ids"]
                 marker_start_idx = find_sublist(tokenized_sample, tokenized_marker)
                 assert marker_start_idx >= 0, "'truncate_after' not found in sample"
                 self._max_length = marker_start_idx + len(tokenized_marker) + self.truncate_at
@@ -155,7 +154,7 @@ class Phi4MiniVLModel(AbstractVLMModel):
         else:
             truncation_kwargs = {"truncation": False}
 
-        with self._padding_side(padding_side):
+        with self._padding_side(padding_side=padding_side):
             return self.tokenizer(
                 texts,
                 return_tensors="pt",
@@ -165,37 +164,14 @@ class Phi4MiniVLModel(AbstractVLMModel):
 
     def _build_vision_inputs(self, examples):
         raw_vision_inputs = [example["vision_input"] for example in examples]
-
         if any(isinstance(vision_input, (list, tuple)) for vision_input in raw_vision_inputs):
             raise ValueError(
-                "Phi4Mini currently supports report generation with one image per sample. "
+                f"{self.model_name} currently supports report generation with one image "
+                "per sample. "
                 "Retrieval or multi-image prompts are not supported."
             )
 
-        vision_inputs = [
-            vi.detach().cpu().numpy() if isinstance(vi, torch.Tensor) else np.asarray(vi)
-            for vi in raw_vision_inputs
-        ]
-
-        if len(vision_inputs) == 0:
-            raise ValueError("Received an empty vision input list in Phi4MiniVLModel.collate_fn")
-
-        (
-            num_vision_tokens,
-            vision_position_ids,
-            adapter_args,
-        ) = self.vision_adapter.get_adapter_args(
-            vision_inputs,
-            self.vision_input_type,
-            downsample_factor=self.downsample_factor,
-        )
-
-        return (
-            torch.from_numpy(np.stack(vision_inputs)),
-            num_vision_tokens,
-            vision_position_ids,
-            adapter_args,
-        )
+        return self._prepare_vision_inputs(raw_vision_inputs)
 
     def collate_fn(self, examples):
         texts = [
@@ -204,8 +180,7 @@ class Phi4MiniVLModel(AbstractVLMModel):
         ]
         texts_prompt_only = [
             self._apply_chat_template(
-                example["formatted_qa_prompt_only"],
-                add_generation_prompt=True,
+                example["formatted_qa_prompt_only"], add_generation_prompt=True
             )
             for example in examples
         ]
@@ -227,12 +202,10 @@ class Phi4MiniVLModel(AbstractVLMModel):
 
         labels = batch["input_ids"].clone()
         labels[batch["attention_mask"] == 0] = -100
-
         prompt_lengths = batch_prompt_only["attention_mask"].sum(dim=1)
         for i, prompt_length in enumerate(prompt_lengths.tolist()):
             labels[i, :prompt_length] = -100
 
-        raw_samples = extract_raw_samples_from_batch(examples)
         batch_out = {
             "input_ids": batch["input_ids"],
             "input_ids_prompt_only": batch_prompt_only["input_ids"],
@@ -241,15 +214,9 @@ class Phi4MiniVLModel(AbstractVLMModel):
             "labels": labels,
             "pixel_values_videos": vision_inputs,
             "batch_count": self.batch_count,
-            "raw_samples": raw_samples,
+            "raw_samples": extract_raw_samples_from_batch(examples),
             "vision_position_ids": vision_position_ids,
             "adapter_args": adapter_args,
         }
         self.batch_count += 1
         return batch_out
-
-    def get_model_specific_training_args(self):
-        return {
-            "bf16": True,
-            "tf32": True,
-        }

@@ -5,8 +5,8 @@ from torch import nn
 from transformers.generation import GenerationMixin
 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-    Qwen2_5_VLForConditionalGeneration,
-    Qwen2_5_VLModel,
+    Qwen2_5_VLForConditionalGeneration as HFQwen25VLForConditionalGeneration,
+    Qwen2_5_VLModel as HFQwen25VLModel,
     Qwen2_5_VLModelOutputWithPast,
     Qwen2_5_VLPreTrainedModel,
     Qwen2_5_VLTextModel,
@@ -18,41 +18,21 @@ from transformers.utils import (
     is_torchdynamo_compiling, can_return_tuple
 )
 
-from vlm.configs.model.model_config import ModelConfig
 
-
-class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
+class Qwen25VLModel(HFQwen25VLModel, Qwen2_5_VLPreTrainedModel):
     base_model_prefix = ""
     _checkpoint_conversion_mapping = {"^model": "language_model"}
     config: Qwen2_5_VLConfig
     _no_split_modules = ["Qwen2_5_VLDecoderLayer", "Qwen2_5_VLVisionBlock"]
 
-    def __init__(self, config, model_cfg: dict, vision_embed_dim: int, vision_embed_size: tuple[int, int, int]):
-        # we need to replace Qwen25VL init because it inits 'visual'
+    def __init__(self, config):
+        # The HF model constructor also creates the unused native vision tower.
         Qwen2_5_VLPreTrainedModel.__init__(self, config)
-        self.vision_adapter = None  # init in self.setup_vision_adapter()
-        self.vision_encoder = None  # init in self.setup_vision_encoder()
+        self.vision_adapter = None
+        self.vision_encoder = None
         self.language_model = Qwen2_5_VLTextModel._from_config(config.text_config)
         self.rope_deltas = None  # cache rope_deltas here
-
-        self.model_cfg = ModelConfig(**model_cfg)
-
-        self.vision_embed_dim = vision_embed_dim
-        self.vision_embed_size = vision_embed_size
-        self.text_embed_dim: int = config.hidden_size
-
-        # Initialize weights and apply final processing
-        # self.post_init()
-
-    def setup_vision_adapter(self):
-        self.vision_adapter = self.model_cfg.build_adapter(
-            vision_embed_dim=self.vision_embed_dim,
-            vision_embed_size=self.vision_embed_size,
-            text_embed_dim=self.text_embed_dim
-        )
-
-    def setup_vision_encoder(self):
-        self.vision_encoder = self.model_cfg.build_vision_encoder()
+        self.post_init()
 
     def get_rope_index(
         self,
@@ -61,11 +41,10 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         attention_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        From 'Qwen2_5_VLModel.get_rope_index' adjusted to our usage.
+        From 'HFQwen25VLModel.get_rope_index' adjusted to our usage.
 
         Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
         """
-        # spatial_merge_size = self.model_cfg.adapter.reduce_block
         # image_token_id = self.config.image_token_id
         video_token_id = self.config.video_token_id
         vision_start_token_id = self.config.vision_start_token_id
@@ -236,7 +215,7 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
 
             if pixel_values_videos is not None:
                 ##########
-                # Only these lines are different from the original Qwen2_5_VLModel
+                # Only these lines are different from the original HFQwen25VLModel
                 video_embeds = pixel_values_videos
                 if self.vision_encoder is not None:
                     video_embeds = self.vision_encoder(video_embeds)
@@ -317,24 +296,18 @@ class QwenVLModel3D(Qwen2_5_VLModel, Qwen2_5_VLPreTrainedModel):
         return output if return_dict else output.to_tuple()
 
 
-class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, GenerationMixin):
+class Qwen25VLForConditionalGeneration(HFQwen25VLForConditionalGeneration, GenerationMixin):
     _checkpoint_conversion_mapping = {
         "^visual": "model.visual",
         r"^model(?!\.(language_model|visual|vision_adapter|vision_encoder))": "model.language_model",
     }
     _tied_weights_keys = ["lm_head.weight"]
 
-    def __init__(self, config, model_cfg: dict, vision_embed_dim: int, vision_embed_size: tuple[int, int, int]):
-        super().__init__(config)
-        self.model = QwenVLModel3D(
-            config,
-            model_cfg=model_cfg,
-            vision_embed_dim=vision_embed_dim,
-            vision_embed_size=vision_embed_size
-        )
+    def __init__(self, config):
+        Qwen2_5_VLPreTrainedModel.__init__(self, config)
+        self.model = Qwen25VLModel(config)
         self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
-
-        # self.post_init()
+        self.post_init()
 
     @can_return_tuple
     def forward(
@@ -411,4 +384,3 @@ class QwenVLForConditionalGeneration3D(Qwen2_5_VLForConditionalGeneration, Gener
             attentions=outputs.attentions,
             rope_deltas=outputs.rope_deltas,
         )
-

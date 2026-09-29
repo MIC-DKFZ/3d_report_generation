@@ -15,7 +15,7 @@ from vlm.utils.paths import find_run_dir_in_output_dir
 from vlm.utils.load_and_save_files import load_json, load_yaml, save_yaml
 
 if TYPE_CHECKING:
-    from vlm.models.abstract_vlm import AbstractVLMModel
+    from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 
 
 FINAL_CONFIG_FILENAME = "final_config.yml"
@@ -203,7 +203,7 @@ def log_checkpoint_load_result(
 
 
 def restore_model_checkpoints(
-    vlm_model: "AbstractVLMModel",
+    vlm_model: "AbstractVLWrapper",
     checkpoint_plan: CheckpointPlan,
 ) -> None:
     """Apply sparse model checkpoints in dependency order."""
