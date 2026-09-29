@@ -30,7 +30,7 @@ dependencies = [
     "timm==1.0.15",
     "batchgenerators==0.25.1",
     "batchgeneratorsv2==0.3.0",
-    "dynamic-network-architectures==0.4.2",
+    "dynamic-network-architectures>=0.4.2",
     "blosc2==3.11.0",
     "nibabel==5.3.2",
     "nnunetv2 @ git+https://git.dkfz.de/mic/personal/group4/culrich/mic_rocket_nnunete_finetuning.git@a7dbbc6a4e9841dfb4f7123bf87e1d9b714aa22e",
