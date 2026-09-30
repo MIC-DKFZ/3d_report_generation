@@ -90,19 +90,6 @@ class UnifiedVLMTrainer:
 
     def get_training_args(self):
         """Configure standard training arguments for distributed training"""
-        num_cores = os.cpu_count()
-
-        # Adjust number of workers based on distributed setup
-        if self.is_distributed:
-            # Reduce workers per process in distributed training
-            num_workers = max(1, (num_cores // 4) // self.local_world_size)
-        else:
-            num_workers = 2
-
-        # TODO: Do calculation before final_config.yml is logged
-        self.cfg.trainer.dataloader_num_workers = num_workers
-
-        # Add model-specific arguments
         model_args = self.vlm_model.get_model_specific_training_args()
 
         trainer_args = self.cfg.trainer.model_dump(
@@ -311,7 +298,18 @@ class UnifiedVLMTrainer:
         return already_complete_on_resume
 
 
-def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
+def resolve_dataloader_workers(
+    cfg: RunConfig, is_distributed: bool, local_world_size: int
+) -> None:
+    num_cores = os.cpu_count() or 1
+    cfg.trainer.dataloader_num_workers = (
+        max(1, (num_cores // 4) // local_world_size) if is_distributed else 2
+    )
+
+
+def setup_config_and_logging(
+    is_distributed: bool, local_world_size: int
+) -> tuple[RunConfig, TrainRuntimeArgs]:
     args_parser = argparse.ArgumentParser(
         description="Train a Vision Language Model", allow_abbrev=False
     )
@@ -357,6 +355,7 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
         cfg.merge_subconfigs_with_cli_args(config_cli_args)
         cfg.general.output_dir = str(runtime_args.continue_training_run_dir)
         cfg.apply_conditional_resets()
+        resolve_dataloader_workers(cfg, is_distributed, local_world_size)
 
         # Persist CLI overrides for future resumptions.
         if is_main_process():
@@ -399,6 +398,7 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
 
     cfg.merge_subconfigs_with_cli_args(config_cli_args)
     cfg.apply_conditional_resets()
+    resolve_dataloader_workers(cfg, is_distributed, local_world_size)
 
     if is_main_process():
         save_final_config(cfg)
@@ -585,7 +585,9 @@ def train_val_data_from_config(cfg: RunConfig):
 def main():
     # Set up DDP before config validation so generated run paths can be shared across ranks.
     ddp_setup = setup_ddp()
-    cfg, runtime_args = setup_config_and_logging()
+    cfg, runtime_args = setup_config_and_logging(
+        is_distributed=ddp_setup[0], local_world_size=ddp_setup[4]
+    )
     checkpoint_plan = create_checkpoint_plan(cfg, runtime_args)
 
     # Pass the actual run directory to the submission script for subsequent (test-set) inference.
