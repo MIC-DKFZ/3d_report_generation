@@ -4,7 +4,6 @@ from typing import Union, Tuple, List
 from batchgenerators.augmentations.utils import resize_segmentation
 import numpy as np
 import pandas as pd
-import torch
 from scipy.ndimage import map_coordinates
 from skimage.transform import resize
 ANISO_THRESHOLD = 3
@@ -64,50 +63,6 @@ def determine_do_sep_z_and_axis(
         else:
             axis = axis[0]
     return do_separate_z, axis
-
-
-def resample_data_or_seg_to_spacing(data: np.ndarray,
-                                    current_spacing: Union[Tuple[float, ...], List[float], np.ndarray],
-                                    new_spacing: Union[Tuple[float, ...], List[float], np.ndarray],
-                                    is_seg: bool = False,
-                                    order: int = 3, order_z: int = 0,
-                                    force_separate_z: Union[bool, None] = False,
-                                    separate_z_anisotropy_threshold: float = ANISO_THRESHOLD):
-    do_separate_z, axis = determine_do_sep_z_and_axis(force_separate_z, current_spacing, new_spacing,
-                                                      separate_z_anisotropy_threshold)
-
-    if data is not None:
-        assert data.ndim == 4, "data must be c x y z"
-
-    shape = np.array(data.shape)
-    new_shape = compute_new_shape(shape[1:], current_spacing, new_spacing)
-
-    data_reshaped = resample_data_or_seg(data, new_shape, is_seg, axis, order, do_separate_z, order_z=order_z)
-    return data_reshaped
-
-
-def resample_data_or_seg_to_shape(data: Union[torch.Tensor, np.ndarray],
-                                  new_shape: Union[Tuple[int, ...], List[int], np.ndarray],
-                                  current_spacing: Union[Tuple[float, ...], List[float], np.ndarray],
-                                  new_spacing: Union[Tuple[float, ...], List[float], np.ndarray],
-                                  is_seg: bool = False,
-                                  order: int = 3, order_z: int = 0,
-                                  force_separate_z: Union[bool, None] = False,
-                                  separate_z_anisotropy_threshold: float = ANISO_THRESHOLD):
-    """
-    needed for segmentation export. Stupid, I know
-    """
-    if isinstance(data, torch.Tensor):
-        data = data.numpy()
-
-    do_separate_z, axis = determine_do_sep_z_and_axis(force_separate_z, current_spacing, new_spacing,
-                                                      separate_z_anisotropy_threshold)
-
-    if data is not None:
-        assert data.ndim == 4, "data must be c x y z"
-
-    data_reshaped = resample_data_or_seg(data, new_shape, is_seg, axis, order, do_separate_z, order_z=order_z)
-    return data_reshaped
 
 
 def resample_data_or_seg(data: np.ndarray, new_shape: Union[Tuple[float, ...], List[float], np.ndarray],
