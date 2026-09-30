@@ -11,7 +11,7 @@ from transformers import TrainerCallback, TrainerControl, TrainerState, Training
 import wandb
 from vlm.utils.decoding import decode_generated_answers, decode_label_answers
 from vlm.utils.ddp_utils import gather_inference_outputs
-from vlm.utils.filter_batch import extract_batch_prompt_only
+from vlm.utils.data.filter_batch import extract_batch_prompt_only
 from vlm.utils import logger
 from vlm.utils.ddp_utils import is_main_process
 from vlm.utils.load_and_save_files import save_json

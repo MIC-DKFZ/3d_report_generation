@@ -1,11 +1,11 @@
 from pydantic import Field
 
 from vlm.configs.base import RecursiveFindClassConfigBase
-from vlm.vision_encoders.base import VisionEncoderBase
+from vlm.models.vision_encoders.base import VisionEncoderBase
 
 
 class VisionEncoderClassConfig(RecursiveFindClassConfigBase):
-    folder_to_search = "vlm.vision_encoders"
+    folder_to_search = "vlm.models.vision_encoders"
 
     checkpoint_path: str | None = Field(None, description="Path to the vision encoder checkpoint.")
     patch_size: tuple[int, int, int] | None = Field(

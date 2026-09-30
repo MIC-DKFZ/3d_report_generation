@@ -1,7 +1,7 @@
 import torch
 from vlm.models.qwen3vl.processing_3d import QwenVLProcessor3D
 from vlm.models.qwen3vl.modeling_qwen3_vl import Qwen3VLForConditionalGeneration
-from vlm.utils.filter_batch import extract_raw_samples_from_batch
+from vlm.utils.data.filter_batch import extract_raw_samples_from_batch
 from vlm.utils.paths import get_hf_hub_cache_dir
 
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper

@@ -6,7 +6,7 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from vlm.training.schedulers.base import SchedulerBase
 from vlm.utils import logger
-from vlm.utils.optimizer_and_params import get_param_groups
+from vlm.utils.training.optimizer_and_params import get_param_groups
 
 
 class WUScheduler(SchedulerBase, ABC):

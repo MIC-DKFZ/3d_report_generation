@@ -1,10 +1,10 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from pydantic import BaseModel
-from vlm.models.gemma3.gemma3_vlm import Gemma3TextVLModel
+from vlm.models.gemma3.wrapper import Gemma3TextVLWrapper
 from vlm.models.owl.owl_vlm import OwlVLModel
-from vlm.models.phi4mini.phi4mini_vlm import Phi4MiniVLModel
-from vlm.models.qwen3.qwen3_vlm import Qwen3TextVLModel
+from vlm.models.phi4mini.wrapper import Phi4MiniVLWrapper
+from vlm.models.qwen3.wrapper import Qwen3TextVLWrapper
 
 
 TRANSFORMERS_QWEN3_CUTOFF = (4, 53, 3)
@@ -47,9 +47,9 @@ except PackageNotFoundError:
     TRANSFORMERS_VERSION = (0, 0, 0)
 
 if _use_qwen25(TRANSFORMERS_VERSION):
-    from vlm.models.qwen25vl.qwen_vlm import QwenVLModel
+    from vlm.models.qwen25vl.wrapper import Qwen25VLWrapper
 else:
-    from vlm.models.qwen3vl.qwen_vlm import QwenVLModel
+    from vlm.models.qwen3vl.wrapper import Qwen3VLWrapper
 
 
 class VLMConfig(BaseModel):
@@ -70,37 +70,37 @@ VLM_REGISTRY: dict[str, VLMConfig] = {
 if _use_qwen25(TRANSFORMERS_VERSION):
     VLM_REGISTRY["Qwen25-VL-3B"] = VLMConfig(
         model_id="Qwen/Qwen2.5-VL-3B-Instruct",
-        model_class=QwenVLModel
+        model_class=Qwen25VLWrapper
     )
 else:
     VLM_REGISTRY["Qwen3-1.7B"] = VLMConfig(
         model_id="Qwen/Qwen3-1.7B",
-        model_class=Qwen3TextVLModel
+        model_class=Qwen3TextVLWrapper
     )
     VLM_REGISTRY["Qwen3-VL-2B"] = VLMConfig(
         model_id="Qwen/Qwen3-VL-2B-Instruct",
-        model_class=QwenVLModel
+        model_class=Qwen3VLWrapper
     )
     VLM_REGISTRY["Qwen3-VL-4B"] = VLMConfig(
         model_id="Qwen/Qwen3-VL-4B-Instruct",
-        model_class=QwenVLModel
+        model_class=Qwen3VLWrapper
     )
     VLM_REGISTRY["Qwen3-VL-8B"] = VLMConfig(
         model_id="Qwen/Qwen3-VL-8B-Instruct",
-        model_class=QwenVLModel
+        model_class=Qwen3VLWrapper
     )
 
 VLM_REGISTRY["Phi4Mini"] = VLMConfig(
     model_id="microsoft/Phi-4-mini-instruct",
-    model_class=Phi4MiniVLModel
+    model_class=Phi4MiniVLWrapper
 )
 
 VLM_REGISTRY["Qwen3-8B"] = VLMConfig(
     model_id="Qwen/Qwen3-8B",
-    model_class=Qwen3TextVLModel
+    model_class=Qwen3TextVLWrapper
 )
 
 VLM_REGISTRY["Gemma3-4B"] = VLMConfig(
     model_id="google/gemma-3-4b-it",
-    model_class=Gemma3TextVLModel
+    model_class=Gemma3TextVLWrapper
 )

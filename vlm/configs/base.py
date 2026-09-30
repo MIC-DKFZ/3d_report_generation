@@ -3,12 +3,10 @@ from pathlib import Path
 from types import UnionType
 from typing import Any, ClassVar, Callable, Type, OrderedDict, List, Tuple, Union, get_type_hints, get_origin
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
-from vlm.utils.find_class_by_name import recursive_find_python_class
+from vlm.utils.class_utils import get_class_from_registry, recursive_find_python_class
 import vlm
 import inspect
 from inspect import Parameter
-
-from vlm.utils.helper import get_class_from_registry
 
 
 def _get_signatures(cls: Type) -> OrderedDict[str, Any]:
@@ -150,7 +148,7 @@ class RecursiveFindClassConfigBase(DynamicClassConfigBase):
     """
     folder_to_search: ClassVar[str]  # Overwrite in subclass;
                                      # Should point to the module where to start the recursive search
-                                     # for the target class. Example: 'vlm.adapters'
+                                     # for the target class. Example: 'vlm.models.adapters'
 
     def resolve_target(self):
         """Resolve and store the Python object after validation."""

@@ -17,7 +17,7 @@ from vlm.utils.training.checkpoint_state import (
     initialize_checkpoint_state, load_model_checkpoint,
 )
 from vlm.utils import logger
-from vlm.utils.helper import getattr_nested, setattr_nested
+from vlm.utils.class_utils import getattr_nested, setattr_nested
 from vlm.utils.load_and_save_files import load_yaml
 
 

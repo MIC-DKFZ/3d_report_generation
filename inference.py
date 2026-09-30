@@ -27,13 +27,14 @@ from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.utils import logger
 from vlm.utils.decoding import decode_generated_answers, decode_prompts
 from vlm.utils.ddp_utils import setup_ddp, gather_inference_outputs, is_main_process
-from vlm.utils.filter_batch import extract_batch_prompt_only
-from vlm.utils.helper import add_datetime_tag, seed_everything
+from vlm.utils.data.filter_batch import extract_batch_prompt_only
+from vlm.utils.run_naming import add_datetime_tag
+from vlm.utils.seeding import seed_everything
 from vlm.utils.config.merging import recursive_dict_merge
 from vlm.utils.load_and_save_files import load_config_file, save_json, save_yaml
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.paths import VLM_CONFIG_DIR, find_run_dir_in_output_dir
-from vlm.utils.local_staging import get_local_vision_input_path
+from vlm.utils.data.local_staging import get_local_vision_input_path
 from eval import main as eval_main
 
 

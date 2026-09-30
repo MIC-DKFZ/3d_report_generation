@@ -7,7 +7,7 @@ from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import (
 )
 from transformers.processing_utils import Unpack
 from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
-from vlm.utils.helper import find_sublist
+from vlm.utils.sequences import find_sublist
 
 
 class QwenVLProcessor3D(Qwen2_5_VLProcessor):

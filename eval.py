@@ -28,7 +28,8 @@ from vlm.evaluation.merlin_modernbert.utils import (
 )
 from vlm.utils import logger
 from vlm.evaluation.hf_evaluate.scorers import BLEUScorer, ROUGELScorer, METEORScorer
-from vlm.utils.helper import add_datetime_tag, chunkify
+from vlm.utils.run_naming import add_datetime_tag
+from vlm.utils.sequences import chunkify
 from vlm.utils.load_and_save_files import load_json, save_json
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.regex_patterns import VQA_ANSWER_PATTERN

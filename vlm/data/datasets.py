@@ -16,13 +16,13 @@ from torch.utils.data import Dataset
 
 from vlm.data.embedding_transforms import EmbeddingCompose
 from vlm.utils import logger
-from vlm.utils.dataset_utils import get_training_image_transforms, preprocess_3d_image
+from vlm.utils.data.dataset_utils import get_training_image_transforms, preprocess_3d_image
 from vlm.utils.regex_patterns import (
     VQA_ANSWER_PATTERN,
     VQA_OPTION_PATTERN,
     VQA_OPTION_LETTERS_IN_TEXT_PATTERN,
 )
-from vlm.utils.vision_input_type import VisionInputType
+from vlm.utils.data.vision_input_type import VisionInputType
 from vlm.configs.run_config import RunConfig
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."

@@ -5,7 +5,7 @@ from transformers import AutoConfig, AutoTokenizer
 from vlm.models.owl.model import OwnOwlModel
 from vlm.models.owl.modeling_mplugowl3 import mPLUGOwl3Model
 from vlm.utils import logger
-from vlm.utils.filter_batch import extract_raw_samples_from_batch
+from vlm.utils.data.filter_batch import extract_raw_samples_from_batch
 
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 
