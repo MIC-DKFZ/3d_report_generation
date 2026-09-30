@@ -1,7 +1,6 @@
 import torch.nn as nn
 from torch.optim import Optimizer
 from transformers.trainer_pt_utils import get_parameter_names
-from vlm.models.owl.modeling_hyper_qwen2 import Qwen2RMSNorm
 
 
 def print_model_parameters(model: nn.Module, file=None, width=120, **kwargs):
@@ -50,8 +49,11 @@ def count_parameters(module: nn.Module) -> int:
 
 
 def get_decay_parameter_names(model: nn.Module, forbidden_name_patterns_for_wd: list[str]) -> list[str]:
-    decay_parameters = get_parameter_names(model, [nn.LayerNorm, nn.RMSNorm, Qwen2RMSNorm], forbidden_name_patterns_for_wd)
-    return decay_parameters
+    return get_parameter_names(
+        model,
+        [nn.LayerNorm, nn.RMSNorm],
+        forbidden_name_patterns_for_wd,
+    )
 
 
 def get_param_groups(

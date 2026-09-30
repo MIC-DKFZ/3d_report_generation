@@ -2,7 +2,6 @@ from importlib.metadata import PackageNotFoundError, version
 
 from pydantic import BaseModel
 from vlm.models.gemma3.wrapper import Gemma3TextVLWrapper
-from vlm.models.owl.owl_vlm import OwlVLModel
 from vlm.models.phi4mini.wrapper import Phi4MiniVLWrapper
 from vlm.models.qwen3.wrapper import Qwen3TextVLWrapper
 
@@ -60,12 +59,7 @@ class VLMConfig(BaseModel):
     model_class: type
 
 
-VLM_REGISTRY: dict[str, VLMConfig] = {
-    "owl": VLMConfig(
-        model_id="mPLUG/mPLUG-Owl3-1B-241014",
-        model_class=OwlVLModel
-    )
-}
+VLM_REGISTRY: dict[str, VLMConfig] = {}
 
 if _use_qwen25(TRANSFORMERS_VERSION):
     VLM_REGISTRY["Qwen25-VL-3B"] = VLMConfig(
