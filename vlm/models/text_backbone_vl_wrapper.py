@@ -21,7 +21,6 @@ class TextBackboneVLWrapper(AbstractVLWrapper):
     model_name: ClassVar[str]
     vision_placeholder_token: ClassVar[str]
     vision_token_id_attr: ClassVar[str] = "video_token_id"
-    vision_content_types: ClassVar[tuple[str, ...]] = ("video",)
     extra_forbidden_name_patterns_for_wd: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, *args, **kwargs):
@@ -75,6 +74,7 @@ class TextBackboneVLWrapper(AbstractVLWrapper):
             self.tokenizer.padding_side = original_padding_side
 
     def _content_to_text(self, content) -> str:
+        """Render neutral message content using the model-specific vision placeholder."""
         if isinstance(content, str):
             return content
 
@@ -83,7 +83,7 @@ class TextBackboneVLWrapper(AbstractVLWrapper):
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "text":
                     parts.append(item.get("text", ""))
-                elif isinstance(item, dict) and item.get("type") in self.vision_content_types:
+                elif isinstance(item, dict) and item.get("type") == "vision":
                     parts.append(self.vision_placeholder_token)
                 else:
                     raise ValueError(f"Unsupported {self.model_name} message content item: {item}")

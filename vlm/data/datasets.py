@@ -23,7 +23,6 @@ from vlm.utils.regex_patterns import (
     VQA_OPTION_LETTERS_IN_TEXT_PATTERN,
 )
 from vlm.utils.vision_input_type import VisionInputType
-from vlm.models.phi4mini.wrapper import PHI_VISION_PLACEHOLDER_TOKEN
 from vlm.configs.run_config import RunConfig
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
@@ -58,7 +57,6 @@ class MedicalImageDataset(Dataset, ABC):
 
     Args:
         dataset_json_path (str): Path to the dataset JSON file
-        model_type (str): Name of the VLM the dataset is used for
         split (str): Split name ('train', 'val' or 'test')
         vision_input_path (str | Path): Root path to the vision input (images or embeddings)
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
@@ -83,7 +81,6 @@ class MedicalImageDataset(Dataset, ABC):
 
         self.vision_input_path = Path(cfg.data.vision_input_path)
         self.vision_input_type = cfg.data.vision_input_type
-        self.model_type = cfg.model.model_type
         self.split = split
         self.text_only = cfg.data.text_only
         self.embedding_constant = cfg.data.embedding_constant
@@ -371,33 +368,15 @@ class MedicalImageDataset(Dataset, ABC):
         # Needs to be implemented for each dataset
         return question, answer
 
-    def format_into_message(
-            self, question, answer, system_text=SYSTEM_TEXT
-    ):
-
-        if "qwen" in self.model_type.lower():
-            system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
-            user_message = {
-                "role": "user",
-                "content": ([{"type": "video"}] if not self.text_only else [])
-                + [{"type": "text", "text": question}],
-            }
-            answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
-        elif "gemma" in self.model_type.lower():
-            system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
-            user_message = {
-                "role": "user",
-                "content": ([{"type": "image"}] if not self.text_only else [])
-                + [{"type": "text", "text": question}],
-            }
-            answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
-        elif "phi" in self.model_type.lower():
-            system_message = {"role": "system", "content": system_text}
-            vision_prefix = f"{PHI_VISION_PLACEHOLDER_TOKEN}\n" if not self.text_only else ""
-            user_message = {"role": "user", "content": f"{vision_prefix}{question}"}
-            answer_message = {"role": "assistant", "content": answer}
-        else:
-            raise ValueError(f"Unsupported model name: {self.model_type}")
+    def format_into_message(self, question, answer, system_text=SYSTEM_TEXT):
+        """Build model-neutral messages; wrappers translate `vision` items for their model."""
+        system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
+        user_message = {
+            "role": "user",
+            "content": ([{"type": "vision"}] if not self.text_only else [])
+            + [{"type": "text", "text": question}],
+        }
+        answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
 
         full_conversation = [system_message, user_message, answer_message]
         prompt_only_conversation = [system_message, user_message]
@@ -870,7 +849,9 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
                     case = self.get_case_from_dataset_json(self.samples_retrieval, nearest_neighbor_id)
                     answer = case["answer"]
                     if self.add_image:
-                        d["content"].append({"type": "video", "vision_input_path": nearest_neighbor_id})
+                        d["content"].append(
+                            {"type": "vision", "vision_input_path": nearest_neighbor_id}
+                        )
                     d["content"].append({"type": "text", "text": f"Report {n_nn + 1}:\n{answer}"})
 
         return formatted_qa, formatted_qa_prompt_only
@@ -1013,13 +994,10 @@ Output a report in the following format:
 Now analyze the following:
         """
 
-        if "qwen" in self.model_type.lower():
-            user_message = {
-                "role": "user",
-                "content": [{"type": "text", "text": question_p1}] + ([{"type": "video"}] if not self.text_only else [])
-            }
-        else:
-            raise ValueError(f"Unsupported model name: {self.model_type}")
+        user_message = {
+            "role": "user",
+            "content": [{"type": "text", "text": question_p1}, {"type": "vision"}],
+        }
 
         answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
 
@@ -1050,7 +1028,9 @@ Now analyze the following:
                     answer = case["answer"]
                     d["content"].append({"type": "text", "text": f"[Case {n_nn + 1}]\n"})
                     if self.add_image:
-                        d["content"].append({"type": "video", "vision_input_path": nearest_neighbor_id})
+                        d["content"].append(
+                            {"type": "vision", "vision_input_path": nearest_neighbor_id}
+                        )
                     d["content"].append({"type": "text", "text": f"Report:\n{answer}"})
 
         return formatted_qa, formatted_qa_prompt_only

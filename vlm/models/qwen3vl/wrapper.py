@@ -40,6 +40,12 @@ class Qwen3VLWrapper(AbstractVLWrapper):
 
         return self.model
 
+    def _apply_chat_template(self, messages: list[dict], add_generation_prompt: bool) -> str:
+        return super()._apply_chat_template(
+            self._replace_vision_content_type(messages, content_type="video"),
+            add_generation_prompt=add_generation_prompt,
+        )
+
     def collate_fn(self, examples):
         """Custom collate function for Qwen model"""
         texts = [

@@ -87,6 +87,24 @@ class AbstractVLWrapper(ABC):
         """
         pass
 
+    @staticmethod
+    def _replace_vision_content_type(messages: list[dict], content_type: str) -> list[dict]:
+        """Replace dataset `vision` item types with the type expected by a processor.
+
+        For example, native Qwen processors expect `video` instead of `vision`.
+        Preserve item order and all other fields, including `vision_input_path`.
+        """
+        converted_messages = []
+        for message in messages:
+            content = message["content"]
+            if isinstance(content, list):
+                content = [
+                    {**item, "type": content_type} if item.get("type") == "vision" else item
+                    for item in content
+                ]
+            converted_messages.append({**message, "content": content})
+        return converted_messages
+
     def _apply_chat_template(self, messages: list[dict], add_generation_prompt: bool) -> str:
         """Format structured messages using the model's processor."""
         return self.processor.apply_chat_template(
