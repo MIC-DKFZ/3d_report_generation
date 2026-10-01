@@ -20,7 +20,6 @@ class EvaluationConfig(ConfigBase):
     test_dataset_json_path: str | None = Field(None, description="Path to the test dataset JSON file")
     mode: Literal["best", "final"] = Field("best", description="Which checkpoint to load for inference.")
     split: Literal["val", "test"] = Field("val", description="The split to run inference on.")
-    num_dataloader_workers: int | None = Field(4, description="Number of subprocesses per device to use for data loading during inference.")
 
     run_eval: bool = Field(True, description="Run evaluation after inference (only if 'run_inference' is 'True').")
     num_eval_processes: int | None = Field(None, description="Number of subprocesses to use for evaluation. "

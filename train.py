@@ -49,7 +49,7 @@ from vlm.utils.memory_utils import (
     log_memory_usage,
     setup_memory_efficient_training,
 )
-from vlm.utils.paths import VLM_CONFIG_DIR
+from vlm.utils.paths import VLM_CONFIG_DIR, resolve_run_dir
 
 
 INPUT_CONFIG_FILENAME = "input_config.yml"
@@ -200,7 +200,7 @@ class UnifiedVLMTrainer:
                 shuffle=False,
                 sampler=sampler,
                 collate_fn=self.vlm_model.collate_fn,
-                num_workers=self.cfg.eval.num_dataloader_workers,
+                num_workers=self.cfg.trainer.dataloader_num_workers,
                 # IMPORTANT: Keep pin_memory disabled for the callback dataloader. Tests with 1000
                 # callback samples showed that enabling pinned memory can lead to
                 # multi-minute stalls in the main training loop after the callback finishes.
@@ -341,14 +341,21 @@ def setup_config_and_logging(
         args_parser.error("--train_config or --continue_training_run_dir is required.")
 
     runtime_args = TrainRuntimeArgs(
-        continue_training_run_dir=args.continue_training_run_dir,
+        continue_training_run_dir=(
+            resolve_run_dir(args.continue_training_run_dir)
+            if args.continue_training_run_dir is not None
+            else None
+        ),
     )
 
     if runtime_args.continue_training_run_dir is not None:
-        cfg = load_run_config_from_run_dir(runtime_args.continue_training_run_dir)
+        cfg, config_warnings = load_run_config_from_run_dir(runtime_args.continue_training_run_dir)
 
         log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
         setup_logger(log_file_path)  # Setup logger on every rank
+
+        for message in config_warnings:
+            logger.warning_main(message)
 
         logger.info_main(f"Continuing training from run directory: {cfg.general.output_dir}")
 

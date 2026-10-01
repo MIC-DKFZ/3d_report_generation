@@ -12,6 +12,7 @@ from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.model.trainable_params.trainable_linear_layer import TrainableLinearConfig
 from vlm.configs.model.trainable_params.trainable_module import TrainableModuleConfig
 from vlm.configs.run_config import RunConfig
+from vlm.utils.config.compatibility import normalize_saved_config
 from vlm.utils.training.checkpointing import resolve_ckpt_dir_in_run_dir
 from vlm.utils.training.checkpoint_state import (
     initialize_checkpoint_state, load_model_checkpoint,
@@ -310,6 +311,9 @@ class AbstractVLWrapper(ABC):
         """
         ckpt_dir = Path(ckpt_dir)
         cfg_dict = load_yaml(ckpt_dir.parent / "final_config.yml")["run"]
+        cfg_dict, config_warnings = normalize_saved_config(cfg_dict)
+        for message in config_warnings:
+            logger.warning_main(message)
         cfg = RunConfig(**cfg_dict)
 
         logger.info_main(f"Loading model from {str(ckpt_dir)}")

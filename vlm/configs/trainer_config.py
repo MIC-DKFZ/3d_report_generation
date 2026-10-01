@@ -37,7 +37,13 @@ class SFTTrainerConfig(ConfigBase):
     remove_unused_columns: bool = Field(False, description="Whether to remove unused columns from the dataset before training.")
     report_to: list[str] = Field(default_factory=lambda: ["wandb"], description="List of integrations to report training logs to (e.g. 'wandb', 'tensorboard').")
 
-    dataloader_num_workers: int = Field(6, description="Number of subprocesses to use for loading data in parallel.")
+    dataloader_num_workers: int = Field(
+        6,
+        description=(
+            "Number of subprocesses per device for data loading during training, validation, "
+            "and inference."
+        ),
+    )
     dataloader_pin_memory: bool = Field(True, description="Whether to copy tensors into CUDA pinned memory for faster GPU transfers.")
     dataloader_prefetch_factor: int = Field(1, description="Reduce prefetch factor to minimize memory usage.")
     dataloader_persistent_workers: bool = Field(False, description="Disable persistent workers to prevent memory accumulation.")

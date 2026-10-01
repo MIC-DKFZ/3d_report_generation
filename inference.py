@@ -374,7 +374,7 @@ def main(
         cfg=cfg,
         output_dir=inference_output_dir,
         per_device_batch_size=cfg.eval.per_device_batch_size,
-        num_dataloader_workers=cfg.eval.num_dataloader_workers,
+        num_dataloader_workers=cfg.trainer.dataloader_num_workers,
         max_new_tokens=cfg.eval.max_new_tokens,
     )
 

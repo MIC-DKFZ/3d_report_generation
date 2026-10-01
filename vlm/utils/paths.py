@@ -34,3 +34,13 @@ def find_run_dir_in_output_dir(run_dir: str):
     elif not matches:
         raise FileNotFoundError(f"No directory named '{run_dir}' found under {VLM_OUTPUT_DIR}")
     return matches[0]
+
+
+def resolve_run_dir(run_dir: str | Path) -> Path:
+    """Resolve an existing directory path or a run name under 'VLM_OUTPUT_DIR'."""
+    path = Path(run_dir)
+    if not path.is_dir() and not path.is_absolute() and len(path.parts) == 1:
+        path = find_run_dir_in_output_dir(str(path))
+    if not path.is_dir():
+        raise FileNotFoundError(f"The specified run directory does not exist: {path}")
+    return path.resolve()

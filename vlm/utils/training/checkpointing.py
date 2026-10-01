@@ -9,9 +9,10 @@ import torch.nn as nn
 from transformers.trainer import OPTIMIZER_NAME, SCHEDULER_NAME, TRAINER_STATE_NAME
 
 from vlm.configs.run_config import RunConfig
+from vlm.utils.config.compatibility import normalize_saved_config
 from vlm.utils.training.checkpoint_state import read_manifest
 from vlm.utils import logger
-from vlm.utils.paths import find_run_dir_in_output_dir
+from vlm.utils.paths import find_run_dir_in_output_dir, resolve_run_dir
 from vlm.utils.load_and_save_files import load_json, load_yaml, save_yaml
 
 if TYPE_CHECKING:
@@ -44,9 +45,7 @@ def resolve_ckpt_dir_in_run_dir(
     mode: Literal["final", "best"],
 ) -> Path:
     """Resolve a final or best checkpoint within a training run directory."""
-    run_dir = Path(run_dir)
-    if not run_dir.exists():
-        raise FileNotFoundError(f"The specified run directory does not exist: {run_dir}")
+    run_dir = resolve_run_dir(run_dir)
     checkpoint_dirs = [path for path in run_dir.glob("checkpoint-*") if path.is_dir()]
     if not checkpoint_dirs:
         raise FileNotFoundError(f"No HF trainer checkpoint directories found in {run_dir}")
@@ -67,15 +66,17 @@ def resolve_ckpt_dir_in_run_dir(
     raise ValueError(f"Unknown checkpoint type to load: mode={mode}")
 
 
-def load_run_config_from_run_dir(run_dir: str | Path) -> RunConfig:
-    run_dir = Path(run_dir)
+def load_run_config_from_run_dir(run_dir: str | Path) -> tuple[RunConfig, list[str]]:
+    """Load a saved run config and return compatibility warnings for deferred logging."""
+    run_dir = resolve_run_dir(run_dir)
     final_config_path = run_dir / FINAL_CONFIG_FILENAME
     cfg_dict = load_yaml(final_config_path)["run"]
+    cfg_dict, messages = normalize_saved_config(cfg_dict)
     cfg = RunConfig.model_validate(cfg_dict)
 
     # The CLI resume directory remains authoritative if the run was moved.
     cfg.general.output_dir = str(run_dir)
-    return cfg
+    return cfg, messages
 
 
 def save_final_config(cfg: RunConfig) -> None:
