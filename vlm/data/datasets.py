@@ -85,7 +85,7 @@ class MedicalImageDataset(Dataset, ABC):
         self.text_only = cfg.data.text_only
         self.embedding_constant = cfg.data.embedding_constant
         self.do_resize = cfg.data.do_resize
-        self.do_transforms = cfg.data.do_transforms
+        self.do_transforms = cfg.data.do_transforms and self.split == "train"
         self.vision_encoder_patch_size = vision_encoder_patch_size
         self.is_stacked_2d_embedding = cfg.data.is_stacked_2d_embedding
         self.reduce_to_n_slices = cfg.data.reduce_to_n_slices
@@ -93,19 +93,16 @@ class MedicalImageDataset(Dataset, ABC):
 
         if self.split == "train":
             self.dataset_json_path = Path(cfg.data.train_dataset_json_path)
-            self.do_sentence_shuffle = cfg.data.do_sentence_shuffle
         elif self.split == "val":
             self.dataset_json_path = Path(cfg.data.val_dataset_json_path)
-            self.do_sentence_shuffle = False
         elif self.split == "test":
-            self.dataset_json_path = Path(cfg.eval.test_dataset_json_path)
-            self.do_sentence_shuffle = False
+            self.dataset_json_path = Path(cfg.data.test_dataset_json_path)
 
         logger.info_main(
             f"Using vision_input_path for {self.__class__.__name__} ({self.split}): {self.vision_input_path}"
         )
 
-        self.sentence_shuffle_p = cfg.data.sentence_shuffle_p
+        self.sentence_shuffle_p = cfg.data.sentence_shuffle_p if self.split == "train" else 0.0
         self.image_id_suffix = cfg.data.image_id_suffix
 
         answer_types = cfg.data.answer_types
@@ -289,12 +286,10 @@ class MedicalImageDataset(Dataset, ABC):
         # Alter question
         # result = self.modify_sample(result)
 
-        if self.do_sentence_shuffle:
+        if self.sentence_shuffle_p > 0:
             result["question"], result["full_answer"] = self.shuffle_sentences(
                 result["question"], result["full_answer"]
             )
-        else:
-            result["full_answer"] = result["full_answer"]
 
         formatted_qa, formatted_qa_prompt_only = self.format_into_message(
             result["question"],
@@ -405,6 +400,9 @@ class AMOSMMDataset(MedicalImageDataset):
         return Path(self.vision_input_path / image_name)
 
     def shuffle_sentences(self, question, answer) -> tuple[str, str]:
+        if random.uniform(0, 1) >= self.sentence_shuffle_p:
+            return question, answer
+
         # Extract options with their content
         lines = question.split("\n")
 
@@ -547,9 +545,6 @@ class CTRATEDataset(MedicalImageDataset):
             return question, ""
 
         answer_str = str(answer).strip()
-        if not self.shuffle_sentences:
-            return question, answer_str
-
         # Split by headers, keeping them in the result
         sections = re.split(r"(Findings:|Impression:)", answer_str)
 

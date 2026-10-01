@@ -28,6 +28,9 @@ class DataConfig(ConfigBase):
     val_dataset_json_path: str | None = Field(
         None, description="Path to the validation dataset JSON file."
     )
+    test_dataset_json_path: str | None = Field(
+        None, description="Path to the test dataset JSON file."
+    )
     vision_input_path: str | None = Field(
         None, description="Path to the vision input (either embeddings or images)."
     )
@@ -67,18 +70,16 @@ class DataConfig(ConfigBase):
         default_factory=list,
         description="Embedding-space augmentations to apply to precomputed embeddings during training.",
     )
-    do_sentence_shuffle: bool = Field(
-        True,
-        description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.",
+    sentence_shuffle_p: float = Field(
+        0.0, ge=0, le=1,
+        description="Probability of shuffling report sentences or VQA options during training. "
+        "'0' disables shuffling. Findings and Impression sections remain in order.",
     )
-    sentence_shuffle_p: float = Field(0.5, description="Probability of randomly shuffling the order of sentences.")
 
-    do_truncation: bool = Field(False, description="Whether to truncate tokenized text inputs.")
-    truncate_after: str | None = Field(
-        None, description="Text marker after which tokenized inputs may be truncated."
-    )
-    truncate_at: int | None = Field(
-        None, description="Number of tokens to keep after the truncation marker."
+    max_response_tokens: int | None = Field(
+        None,
+        gt=0,
+        description="Maximum number of response tokens, excluding the prompt. 'None' disables truncation.",
     )
 
 
@@ -123,12 +124,6 @@ class DataConfig(ConfigBase):
         if self.vision_input_type == VisionInputType.EMBEDDING and (self.embed_dim is None or self.embed_size is None):
             raise ValueError("Missing parameters for embedding mode: "
                              "please specify both 'embed_dim' and 'embed_size' when 'vision_input_type' is 'embedding'.")
-        return self
-
-    @model_validator(mode="after")
-    def validate_sentence_shuffle(self):
-        if not self.do_sentence_shuffle:
-            self.sentence_shuffle_p = 0.0
         return self
 
     @model_validator(mode="after")

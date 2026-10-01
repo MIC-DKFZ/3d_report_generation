@@ -301,8 +301,6 @@ def main(
     vision_encoder_patch_size = cfg.model.vision_encoder.patch_size if cfg.model.vision_encoder else None
 
     logger.info_main(f"Using {cfg.eval.split} split for inference.")
-    cfg.data.do_sentence_shuffle = False
-    cfg.data.do_transforms = False
     if cfg.data.dataset_name == "amosmm":
         test_dataset = AMOSMMDataset(
             cfg=cfg,

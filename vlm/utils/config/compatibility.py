@@ -7,10 +7,15 @@ from typing import Any
 # Dotted paths of obsolete fields that are accepted but ignored in saved configs.
 DEPRECATED_FIELDS: set[str] = {
     "eval.num_dataloader_workers",
+    "data.do_sentence_shuffle",
+    "data.do_truncation",
+    "data.truncate_after",
 }
 
 # Old dotted path -> current dotted path.
 REPLACED_FIELDS: dict[str, str] = {
+    "eval.test_dataset_json_path": "data.test_dataset_json_path",
+    "data.truncate_at": "data.max_response_tokens",
 }
 
 

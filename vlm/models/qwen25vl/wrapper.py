@@ -84,17 +84,6 @@ class Qwen25VLWrapper(AbstractVLWrapper):
                 adapter_args,
             ) = self._prepare_vision_inputs(vision_inputs)
 
-        batch = self.processor(
-            text=texts,
-            num_vision_tokens=num_vision_tokens,
-            do_truncation=self.do_truncation,
-            truncate_after=self.truncate_after,
-            truncate_at=self.truncate_at,
-            return_tensors="pt",
-            padding=True,
-            padding_side="right",
-        )
-
         batch_prompt_only = self.processor(
             text=texts_prompt_only,
             num_vision_tokens=num_vision_tokens,
@@ -102,30 +91,20 @@ class Qwen25VLWrapper(AbstractVLWrapper):
             padding=True,
             padding_side="left",
         )
+        prompt_lengths = batch_prompt_only["attention_mask"].sum(dim=1).tolist()
+        batch = self.processor(
+            text=texts,
+            num_vision_tokens=num_vision_tokens,
+            padding=False,
+        )
+        batch = self._truncate_and_pad(batch, prompt_lengths)
 
         labels = batch["input_ids"].clone()
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        labels[batch["attention_mask"] == 0] = -100
 
-        if vision_inputs is not None:
-            if isinstance(self.processor, QwenVLProcessor3D):
-                image_tokens = [151652, 151653, 151655]
-            else:
-                image_tokens = [self.processor.tokenizer.convert_tokens_to_ids(self.processor.image_token)]
-
-            for image_token_id in image_tokens:
-                labels[labels == image_token_id] = -100
-
-        # Only keep the model's final assistant response as the prediction target.
-        # Everything before and including the last "<|im_start|>assistant\n"
-        # as well as after the last "<|im_end|> (e.g. pad tokens) is ignored (-100).
-        im_start_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
-        im_end_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_end|>")
-
-        for i in range(labels.shape[0]):
-            last_im_start_pos = (labels[i] == im_start_token_id).nonzero(as_tuple=True)[0][-1]
-            last_im_end_pos = (labels[i] == im_end_token_id).nonzero(as_tuple=True)[0][-1]
-            labels[i, :last_im_start_pos + 3] = -100
-            labels[i, last_im_end_pos + 1:] = -100
+        # Only the response contributes to the loss; ignore the complete prompt.
+        for i, prompt_length in enumerate(prompt_lengths):
+            labels[i, :prompt_length] = -100
 
         raw_samples = extract_raw_samples_from_batch(examples)
         batch_out = {

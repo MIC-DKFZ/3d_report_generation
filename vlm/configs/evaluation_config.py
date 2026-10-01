@@ -12,12 +12,11 @@ class EvaluationConfig(ConfigBase):
     eval_every_n_epochs: float = Field(1, description="Run our own callback evaluation on the validation set every n epochs.")
 
     # 'Callback' and 'After Training' parameters
-    max_new_tokens: int = Field(640, description="Maximum number of new tokens to generate.")
+    max_new_tokens: int = Field(1024, description="Maximum number of new tokens to generate.")
     per_device_batch_size: int = Field(32, description="Inference batch size per device.")
 
     # 'After Training' parameters
     run_inference: bool = Field(True, description="Run inference after training completes.")
-    test_dataset_json_path: str | None = Field(None, description="Path to the test dataset JSON file")
     mode: Literal["best", "final"] = Field("best", description="Which checkpoint to load for inference.")
     split: Literal["val", "test"] = Field("val", description="The split to run inference on.")
 

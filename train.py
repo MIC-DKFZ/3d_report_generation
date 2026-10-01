@@ -628,9 +628,7 @@ def main():
         vision_embed_dim=cfg.get_vision_embed_dim(),
         vision_embed_size=cfg.get_vision_embed_size(),
         text_only=cfg.data.text_only,
-        do_truncation=cfg.data.do_truncation,
-        truncate_after=cfg.data.truncate_after,
-        truncate_at=cfg.data.truncate_at,
+        max_response_tokens=cfg.data.max_response_tokens,
         local_files_only=cfg.general.local_files_only
     )
 

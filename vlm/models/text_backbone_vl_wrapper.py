@@ -6,7 +6,6 @@ from transformers import AutoTokenizer, PreTrainedModel
 
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.utils.data.filter_batch import extract_raw_samples_from_batch
-from vlm.utils.sequences import find_sublist
 from vlm.utils.paths import get_hf_hub_cache_dir
 
 
@@ -27,7 +26,6 @@ class TextBackboneVLWrapper(AbstractVLWrapper):
         super().__init__(*args, **kwargs)
         self._model_str = self.model_name
         self.batch_count = 0
-        self._max_length = None
         self.forbidden_name_patterns_for_wd.extend(self.extra_forbidden_name_patterns_for_wd)
 
     def setup_model(self):
@@ -136,30 +134,12 @@ class TextBackboneVLWrapper(AbstractVLWrapper):
         return expanded
 
     def _tokenize(self, texts: list[str], padding_side: str):
-        if self.do_truncation:
-            if self._max_length is None:
-                if self.truncate_after is None or self.truncate_at is None:
-                    raise ValueError(
-                        f"{self.model_name} truncation requires both "
-                        "'truncate_after' and 'truncate_at'"
-                    )
-                tokenized_marker = self.tokenizer(
-                    self.truncate_after, add_special_tokens=False
-                )["input_ids"]
-                tokenized_sample = self.tokenizer(texts[0], add_special_tokens=False)["input_ids"]
-                marker_start_idx = find_sublist(tokenized_sample, tokenized_marker)
-                assert marker_start_idx >= 0, "'truncate_after' not found in sample"
-                self._max_length = marker_start_idx + len(tokenized_marker) + self.truncate_at
-            truncation_kwargs = {"truncation": True, "max_length": self._max_length}
-        else:
-            truncation_kwargs = {"truncation": False}
-
         with self._padding_side(padding_side=padding_side):
             return self.tokenizer(
                 texts,
                 return_tensors="pt",
                 padding=True,
-                **truncation_kwargs,
+                truncation=False,
             )
 
     def _build_vision_inputs(self, examples):
@@ -197,13 +177,14 @@ class TextBackboneVLWrapper(AbstractVLWrapper):
             texts = self._expand_vision_tokens(texts, num_vision_tokens)
             texts_prompt_only = self._expand_vision_tokens(texts_prompt_only, num_vision_tokens)
 
-        batch = self._tokenize(texts, padding_side="right")
         batch_prompt_only = self._tokenize(texts_prompt_only, padding_side="left")
+        prompt_lengths = batch_prompt_only["attention_mask"].sum(dim=1).tolist()
+        batch = self.tokenizer(texts, padding=False, truncation=False)
+        batch = self._truncate_and_pad(batch, prompt_lengths)
 
         labels = batch["input_ids"].clone()
         labels[batch["attention_mask"] == 0] = -100
-        prompt_lengths = batch_prompt_only["attention_mask"].sum(dim=1)
-        for i, prompt_length in enumerate(prompt_lengths.tolist()):
+        for i, prompt_length in enumerate(prompt_lengths):
             labels[i, :prompt_length] = -100
 
         batch_out = {

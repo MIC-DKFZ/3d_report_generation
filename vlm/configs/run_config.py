@@ -47,10 +47,10 @@ class RunConfig(ConfigBase):
     @model_validator(mode="after")
     def check_eval_dataset_json(self):
         if self.eval.run_eval:
-            if self.eval.test_dataset_json_path is None:
+            if self.data.test_dataset_json_path is None:
                 raise ValueError("The 'dataset_json' has to be specified if 'run_eval=True'")
-            if not Path(self.eval.test_dataset_json_path).is_file():
-                raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.eval.test_dataset_json_path}")
+            if not Path(self.data.test_dataset_json_path).is_file():
+                raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.data.test_dataset_json_path}")
         return self
 
     @model_validator(mode="after")

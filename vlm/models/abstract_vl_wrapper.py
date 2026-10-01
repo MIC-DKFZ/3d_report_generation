@@ -29,9 +29,7 @@ class AbstractVLWrapper(ABC):
                  vision_embed_dim: int,
                  vision_embed_size: tuple[int, int, int],
                  text_only: bool = False,
-                 do_truncation: bool = False,
-                 truncate_after: str | None = None,
-                 truncate_at: int | None = None,
+                 max_response_tokens: int | None = None,
                  local_files_only=True,
                  device=None):
         # init in setup_model()
@@ -46,9 +44,9 @@ class AbstractVLWrapper(ABC):
         self.vision_embed_dim = vision_embed_dim
         self.vision_embed_size = vision_embed_size
         self.text_only = text_only
-        self.do_truncation = do_truncation
-        self.truncate_after = truncate_after
-        self.truncate_at = truncate_at
+        self.max_response_tokens = max_response_tokens
+        if max_response_tokens is not None and max_response_tokens <= 0:
+            raise ValueError("'max_response_tokens' must be positive or None.")
         self.local_files_only = local_files_only
 
         self.model_cfg = model_cfg
@@ -87,6 +85,18 @@ class AbstractVLWrapper(ABC):
             A dictionary with model inputs and targets
         """
         pass
+
+    def _truncate_and_pad(self, batch, prompt_lengths: list[int]):
+        """Limit each response independently, preserving its prompt, then right-pad.
+
+        Shared here because some wrappers use a tokenizer directly rather than a processor.
+        """
+        if self.max_response_tokens is not None:
+            for i, prompt_length in enumerate(prompt_lengths):
+                max_length = prompt_length + self.max_response_tokens
+                for sequences in batch.values():
+                    sequences[i] = sequences[i][:max_length]
+        return self.tokenizer.pad(batch, padding=True, padding_side="right", return_tensors="pt")
 
     @staticmethod
     def _replace_vision_content_type(messages: list[dict], content_type: str) -> list[dict]:
@@ -326,9 +336,7 @@ class AbstractVLWrapper(ABC):
             vision_embed_dim=cfg.get_vision_embed_dim(),
             vision_embed_size=cfg.get_vision_embed_size(),
             text_only=cfg.data.text_only,
-            do_truncation=cfg.data.do_truncation,
-            truncate_after=cfg.data.truncate_after,
-            truncate_at=cfg.data.truncate_at,
+            max_response_tokens=cfg.data.max_response_tokens,
             local_files_only=cfg.general.local_files_only
         )
         vlm_model.initialize_model()
