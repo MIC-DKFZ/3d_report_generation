@@ -280,22 +280,6 @@ class MedicalImageDataset(Dataset, ABC):
 
         return vision_input
 
-    def _embedding_2_tensor(self, embedding):
-        """Convert embedding to tensor"""
-        # TODO check if we can remove this function!
-        if embedding is None:
-            logger.error_main("Embedding is None, cannot convert to tensor.")
-            return None
-
-        np_img_flat = embedding.reshape(embedding.shape[0], embedding.shape[1], -1)
-        np_img_flat = np_img_flat.transpose(0, 2, 1)
-        img_tensor = torch.tensor(np_img_flat)
-
-        return img_tensor
-
-    # def modify_sample(self, result: Dict) -> Dict:
-    #     return result
-
     def __getitem__(self, index):
         sample = self.samples[index]
 

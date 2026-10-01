@@ -95,7 +95,7 @@ class AMOSMMExtractor:
             f"{question_type.lower()}": text,
             "answer_type": "OPEN",
             "answer_subtype": question_type,
-            "user_text": f"{question_prefix} the {region.replace('_', ' ')} region of this CT scan?",  # TODO add prompt variety
+            "user_text": f"{question_prefix} the {region.replace('_', ' ')} region of this CT scan?",
             "question": f"{question_prefix} the {region.replace('_', ' ')} region of this CT scan?",
             "full_answer": text,
             "answer": text,
@@ -167,7 +167,7 @@ class AMOSMMExtractor:
 
         if "labels" in sample:
             if "report" in sample["labels"]:
-                report_dict = AMOSMMExtractor.extract_report(sample["labels"]["report"])  # TODO Throw out report here?
+                report_dict = AMOSMMExtractor.extract_report(sample["labels"]["report"])
                 extracted["report"]["raw"] = report_dict["raw"]
                 extracted["report"]["findings"] = report_dict["findings"]
                 extracted["report"]["impression"] = report_dict["impression"]
@@ -255,8 +255,7 @@ class LIDCExtractor:
         return {
             "question": qa_item["question"],
             "answer": answer,
-            "full_answer": answer,  # TODO remove duplicate
-            "full_answer": answer,  # TODO remove duplicate
+            "full_answer": answer,
             "answer_type": qa_item["answer_type"],
             "answer_subtype": answer_subtype,
             "user_text": qa_item["question"],
