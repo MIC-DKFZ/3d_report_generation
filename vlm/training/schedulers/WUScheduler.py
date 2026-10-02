@@ -6,7 +6,6 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from vlm.training.schedulers.base import SchedulerBase
 from vlm.utils import logger
-from vlm.utils.training.optimizer_and_params import get_param_groups
 
 
 class WUScheduler(SchedulerBase, ABC):
@@ -64,17 +63,7 @@ class WUScheduler(SchedulerBase, ABC):
         if not self.new_training_stage:
             return optimizer, lr_scheduler
 
-        # These parameter groups always contain the maximum learning rates for each group, which need to
-        # be known by the learning rate scheduler.
-        param_groups = get_param_groups(
-            self.lr_param_groups,
-            self.optimizer_kwargs.get("weight_decay", 0.0),
-            model,
-            self.forbidden_name_patterns_for_wd
-        )
-
-        if optimizer is None:
-            optimizer = self.optimizer_class(param_groups, **self.optimizer_kwargs)
+        optimizer, param_groups = self._configure_optimizer(model, optimizer)
 
         if self.training_stage == self._Stage.WARMUP:
             logger.info_main("[SCHEDULER] Warmup.")
@@ -150,17 +139,7 @@ class WUExtendedConstantScheduler(SchedulerBase, ABC):
         if not self.new_training_stage:
             return optimizer, lr_scheduler
 
-        # These parameter groups always contain the maximum learning rates for each group, which need to
-        # be known by the learning rate scheduler.
-        param_groups = get_param_groups(
-            self.lr_param_groups,
-            self.optimizer_kwargs.get("weight_decay", 0.0),
-            model,
-            self.forbidden_name_patterns_for_wd
-        )
-
-        if optimizer is None:
-            optimizer = self.optimizer_class(param_groups, **self.optimizer_kwargs)
+        optimizer, param_groups = self._configure_optimizer(model, optimizer)
 
         if self.training_stage == self._Stage.WARMUP:
             logger.info_main("[SCHEDULER] Warmup.")

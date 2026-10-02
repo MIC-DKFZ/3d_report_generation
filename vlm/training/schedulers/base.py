@@ -13,7 +13,7 @@ from transformers.trainer import SCHEDULER_NAME, OPTIMIZER_NAME
 from vlm.utils import logger
 from vlm.utils.training.checkpoint_state import record_trainable_checkpoint_keys
 from vlm.utils.ddp_utils import is_main_process
-from vlm.utils.training.optimizer_and_params import log_param_groups
+from vlm.utils.training.optimizer_and_params import get_param_groups, log_param_groups
 
 
 class SchedulerBase(ABC):
@@ -35,7 +35,7 @@ class SchedulerBase(ABC):
         self.forbidden_name_patterns_for_wd = forbidden_name_patterns_for_wd
         self.output_dir = output_dir
 
-        self.orig_trainable_params_state = {}
+        self.configured_trainable_params_state: dict[str, bool] = {}
         self._is_initialized = False
 
     def initialize(self, model: nn.Module, max_steps: int):
@@ -43,19 +43,55 @@ class SchedulerBase(ABC):
             logger.warning_main("Scheduler has already been initialized. Skipping repeated initialization.")
             return
 
-        for name, param in model.named_parameters():
-            self.orig_trainable_params_state[name] = param.requires_grad
+        # Capture flags set by model config and PEFT before the scheduler modifies them.
+        self.configured_trainable_params_state = {
+            name: param.requires_grad for name, param in model.named_parameters()
+        }
 
         self._initialize(max_steps=max_steps)
         self._is_initialized = True
 
-    def _restore_orig_trainable_params_state(self, model: nn.Module):
-        """
-        Restore the original `requires_grad` state of parameters recorded during `self.initialize()`.
-        """
+    def _restore_configured_trainable_params_state(self, model: nn.Module) -> bool:
+        """Restore configured flags captured before scheduler modifications; report changes."""
+        changed = False
         for name, param in model.named_parameters():
-            if name in self.orig_trainable_params_state:
-                param.requires_grad = self.orig_trainable_params_state[name]
+            if name in self.configured_trainable_params_state:
+                configured_state = self.configured_trainable_params_state[name]
+                if param.requires_grad != configured_state:
+                    param.requires_grad = configured_state
+                    changed = True
+        return changed
+
+    def _configure_optimizer(
+        self, model: nn.Module, optimizer: Optimizer | None, *, reset: bool = False
+    ) -> tuple[Optimizer, list[dict]]:
+        """Match trainable parameters, preserving per-parameter state unless reset."""
+        # Fresh groups provide the maximum learning rates to the LR scheduler.
+        param_groups = get_param_groups(
+            self.lr_param_groups,
+            self.optimizer_kwargs.get("weight_decay", 0.0),
+            model,
+            self.forbidden_name_patterns_for_wd,
+        )
+
+        def parameter_ids(groups):
+            return [tuple(id(param) for param in group["params"]) for group in groups]
+
+        if (
+            optimizer is not None
+            and not reset
+            and parameter_ids(optimizer.param_groups) == parameter_ids(param_groups)
+        ):
+            return optimizer, param_groups
+
+        new_optimizer = self.optimizer_class(param_groups, **self.optimizer_kwargs)
+        if optimizer is not None and not reset:
+            for group in new_optimizer.param_groups:
+                for param in group["params"]:
+                    if param in optimizer.state:
+                        new_optimizer.state[param] = optimizer.state[param]
+
+        return new_optimizer, param_groups
 
     def _log_param_groups(self, model: nn.Module, optimizer: Optimizer):
         # file_path = Path(self.output_dir, f"param_groups_{self.training_stage}_{os.getenv("LOCAL_RANK")}.log")
@@ -90,18 +126,18 @@ class SchedulerBase(ABC):
     def restore_checkpoint_state(
             self,
             model,
-            optimizer,
-            lr_scheduler,
             global_step: int,
             max_steps: int,
             checkpoint_dir: str | Path,
     ) -> tuple[Optimizer, _LRScheduler, bool]:
         """Restore the optimizer and scheduler state that produced a checkpoint."""
         checkpoint_stage_step = max(global_step - 1, 0)
+        # Resume always reconstructs fresh objects, even within the current stage.
+        self.new_training_stage = True
         optimizer, lr_scheduler, changed_requires_grad_status = self.prepare_training_step(
             model=model,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
+            optimizer=None,
+            lr_scheduler=None,
             global_step=checkpoint_stage_step,
             max_steps=max_steps,
         )
@@ -123,8 +159,6 @@ class SchedulerBase(ABC):
     def resume(
             self,
             model,
-            optimizer,
-            lr_scheduler,
             global_step: int,
             max_steps: int,
             checkpoint_dir: str,
@@ -145,8 +179,6 @@ class SchedulerBase(ABC):
         # Recreate the stage that produced the checkpoint before loading its state.
         optimizer, lr_scheduler, changed_for_checkpoint_stage = self.restore_checkpoint_state(
             model=model,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
             global_step=global_step,
             max_steps=max_steps,
             checkpoint_dir=checkpoint_dir,

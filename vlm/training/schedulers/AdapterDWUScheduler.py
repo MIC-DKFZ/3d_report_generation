@@ -2,7 +2,6 @@ from abc import ABC
 from enum import StrEnum
 from pathlib import Path
 
-from accelerate.optimizer import AcceleratedOptimizer
 from vlm.training.schedulers.lr_schedulers import LinearIncreasingLR, LinearIncreasingOffsetLR, \
     CosineAnnealingOffsetLR, ConstantLR
 from torch.optim import Optimizer
@@ -10,7 +9,6 @@ from torch.optim.lr_scheduler import LRScheduler
 
 from vlm.training.schedulers.base import SchedulerBase
 from vlm.utils import logger
-from vlm.utils.training.optimizer_and_params import get_param_groups
 
 
 class AdapterDWUScheduler(SchedulerBase, ABC):
@@ -70,16 +68,6 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
             self.training_stage = next_training_stage
             self.new_training_stage = True
 
-    def _restore_orig_trainable_params_state_with_change_flag(self, model) -> bool:
-        changed = False
-        for name, param in model.named_parameters():
-            if name in self.orig_trainable_params_state:
-                new_state = self.orig_trainable_params_state[name]
-                if param.requires_grad != new_state:
-                    changed = True
-                    param.requires_grad = new_state
-        return changed
-
     def set_trainable_params(self, model) -> bool:
         if not self.new_training_stage:
             return False
@@ -93,13 +81,9 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
                         param.requires_grad = False
             return changed
         elif self.training_stage in {self._Stage.WARMUP_2, self._Stage.DEFAULT}:
-            # IMPORTANT for resume: if we jump directly to WARMUP_2/DEFAULT from step 0,
-            # restore the original trainable state so optimizer param groups match checkpoints.
-            return self._restore_orig_trainable_params_state_with_change_flag(model)
+            return self._restore_configured_trainable_params_state(model)
         else:
-            pass
-
-        return False
+            raise RuntimeError(f"Unknown training stage: {self.training_stage}")
 
     def configure_optimizer_and_lr_scheduler(
             self,
@@ -110,51 +94,11 @@ class AdapterDWUScheduler(SchedulerBase, ABC):
         if not self.new_training_stage:
             return optimizer, lr_scheduler
 
-        # These parameter groups always contain the maximum learning rates for each group, which need to
-        # be known by the learning rate scheduler.
-        param_groups = get_param_groups(
-            self.lr_param_groups,
-            self.optimizer_kwargs.get("weight_decay", 0.0),
+        optimizer, param_groups = self._configure_optimizer(
             model,
-            self.forbidden_name_patterns_for_wd
+            optimizer,
+            reset=(self.training_stage == self._Stage.WARMUP_2 and self.reset_optimizer),
         )
-
-        # If we use a momentum-based optimizer (e.g. AdamW), we do not want to keep the momentum on entering
-        # 'WARMUP_2' from 'WARMUP_1'.
-        # The newly unfrozen parameters start with zero momentum, thus adapting more slowly than the
-        # decoder parameters, which could hinder overall training dynamics in the second warm-up phase.
-        should_rebuild_optimizer = optimizer is None or (self.training_stage == self._Stage.WARMUP_2 and self.reset_optimizer)
-
-        # Guard against resume mismatches: when stage transitions skip intermediate stages,
-        # the existing optimizer can carry stale param groups from an earlier stage.
-        if not should_rebuild_optimizer and (optimizer is not None and len(optimizer.param_groups) != len(param_groups)):
-            logger.warning_main(
-                "[SCHEDULER] Rebuilding optimizer due to param-group mismatch "
-                f"(current={len(optimizer.param_groups)}, expected={len(param_groups)})."
-            )
-            should_rebuild_optimizer = True
-
-        # TODO: Not sure if needed, added quick fix as optimizer is always 'AcceleratedOptimizer' for DDP
-        # Guard against wrapped optimizers (e.g. DeepSpeedOptimizerWrapper). For stage transitions
-        # we need a base torch optimizer so `accelerator.prepare(model, optimizer)` can rebuild
-        # engine/param mappings from scratch.
-        if (
-                not should_rebuild_optimizer
-                and optimizer is not None
-                and not isinstance(optimizer, self.optimizer_class)
-                and not isinstance(optimizer, AcceleratedOptimizer)
-                and self.training_stage == self._Stage.WARMUP_2
-        ):
-            logger.warning_main(
-                "[SCHEDULER] Rebuilding optimizer due to non-base optimizer type "
-                f"({type(optimizer).__name__} != {self.optimizer_class.__name__})."
-            )
-            should_rebuild_optimizer = True
-
-        if should_rebuild_optimizer:
-            if optimizer is not None:
-                del optimizer
-            optimizer = self.optimizer_class(param_groups, **self.optimizer_kwargs)
 
         if self.training_stage == self._Stage.WARMUP_1:
             logger.info_main("[SCHEDULER] Adapter-Only Training. First Warmup.")
