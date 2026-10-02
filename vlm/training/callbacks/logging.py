@@ -49,19 +49,12 @@ class PycocoevalCallback(TrainerCallback):
         self.rougel_scorer = Rouge()
         self.cider_scorer = Cider()
 
-        self.calculate_radbert_score = calculate_radbert_score
-        if self.calculate_radbert_score:
-            # Pick the report classifier matching the dataset. Both scorers share
-            # the same (preds, gts) -> metrics-dict contract, so everything below
-            # (wandb keys, error fallback) is unchanged.
-            if dataset_name == "ctrate":
-                from vlm.evaluation.report_generation import ctrate_radbert
-                self.radbert_scorer = ctrate_radbert.evaluate_reports
-            elif dataset_name == "merlin":
-                from vlm.evaluation.report_generation import merlin_modernbert
-                self.radbert_scorer = merlin_modernbert.evaluate_reports
-            else:
-                raise ValueError(f"Unknown dataset_name: {dataset_name}")
+        self.radbert_scorer = None
+        if calculate_radbert_score:
+            from vlm.registries.evaluation_registry import get_classifier_evaluator
+
+            self.radbert_scorer = get_classifier_evaluator(dataset_name)
+        self.calculate_radbert_score = self.radbert_scorer is not None
 
         self.radbert_gt_df = None
 

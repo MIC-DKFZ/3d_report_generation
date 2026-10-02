@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from vlm.evaluation.report_generation import ctrate_radbert, merlin_modernbert, lexical_metrics
+from vlm.evaluation.report_generation import lexical_metrics
+from vlm.registries.evaluation_registry import get_classifier_evaluator
 from vlm.utils import logger
 from vlm.utils.load_and_save_files import load_json, save_json
 from vlm.utils.logging import log_banner, setup_logger
@@ -20,12 +21,6 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="ctrate",
         help="Name of the dataset.",
-    )
-    parser.add_argument(
-        "--task_type",
-        type=str,
-        choices=["VQA", "RG"],
-        help="Supported task types: Report Generation (RG); Visual Question Answering (VQA).",
     )
     parser.add_argument(
         "--inference_dir",
@@ -80,17 +75,13 @@ def main(args):
     nlp_aggregate, nlp_per_case = lexical_metrics.evaluate_reports(preds, gts)
     aggregate_results.update(nlp_aggregate)
 
-    dataset_name = args.dataset_name
-    if dataset_name == "ctrate":
-        radbert_metrics, radbert_pred_df, radbert_gt_df = ctrate_radbert.evaluate_reports(
+    radbert_metrics = {}
+    radbert_pred_df = radbert_gt_df = None
+    evaluate_classifier = get_classifier_evaluator(args.dataset_name)
+    if evaluate_classifier is not None:
+        radbert_metrics, radbert_pred_df, radbert_gt_df = evaluate_classifier(
             preds, gts, image_ids
         )
-    elif dataset_name == "merlin":
-        radbert_metrics, radbert_pred_df, radbert_gt_df = merlin_modernbert.evaluate_reports(
-            preds, gts, image_ids
-        )
-    else:
-        raise ValueError(f"Unknown dataset_name: {dataset_name}")
 
     aggregate_results.update(radbert_metrics)
     logger.info_main("[METRICS] Evaluation Summary:")
