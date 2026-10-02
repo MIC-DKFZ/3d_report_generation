@@ -1,10 +1,16 @@
-from RaTEScore import RaTEScore
-from statistics import mean
-from loguru import logger
+"""Evaluate report pairs with the optional RaTEScore scorer."""
+
 import warnings
+from statistics import mean
+
+from loguru import logger
 
 
-def eval_rate_score(preds: list[str], gts: list[str], batch_size: int = 128) -> dict[str, tuple[float, tuple[float, list[float]]]]:
+def evaluate_reports(
+    preds: list[str], gts: list[str], batch_size: int = 128
+) -> dict[str, tuple[float, list[float]]]:
+    from RaTEScore import RaTEScore
+
     # only ~4GB of VRAM usage for batch_size=64, pretty fast overall, so no concerns here
     ratescore = RaTEScore(batch_size=batch_size)
 

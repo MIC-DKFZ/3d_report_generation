@@ -55,11 +55,11 @@ class PycocoevalCallback(TrainerCallback):
             # the same (preds, gts) -> metrics-dict contract, so everything below
             # (wandb keys, error fallback) is unchanged.
             if dataset_name == "ctrate":
-                from eval import eval_ctrate_radbert
-                self.radbert_scorer = eval_ctrate_radbert
+                from vlm.evaluation.report_generation import ctrate_radbert
+                self.radbert_scorer = ctrate_radbert.evaluate_reports
             elif dataset_name == "merlin":
-                from eval import eval_merlin_modernbert
-                self.radbert_scorer = eval_merlin_modernbert
+                from vlm.evaluation.report_generation import merlin_modernbert
+                self.radbert_scorer = merlin_modernbert.evaluate_reports
             else:
                 raise ValueError(f"Unknown dataset_name: {dataset_name}")
 

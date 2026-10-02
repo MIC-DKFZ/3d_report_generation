@@ -1,6 +1,11 @@
-from green_score import GREEN
+"""Evaluate report pairs with the optional GREEN scorer."""
 
-def eval_green_score(preds: list[str], gts: list[str], batch_size: int = 4) -> dict[str, tuple[float, tuple[float, list[float]]]]:
+
+def evaluate_reports(
+    preds: list[str], gts: list[str], batch_size: int = 4
+) -> dict[str, tuple[float, list[float]]]:
+    from green_score import GREEN
+
     # 'output_dir' arg is not used at all
     green_scorer = GREEN(model_name="StanfordAIMI/GREEN-radllama2-7b")
     green_scorer.batch_size = batch_size

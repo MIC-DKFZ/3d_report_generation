@@ -16,7 +16,6 @@ dependencies = [
     "numpy>=1.26.4",
     "peft==0.10.0",
     "qwen-vl-utils>=0.0.11",
-    "ratescore>=0.6.0",
     "rouge-score>=0.1.2",
     "simpleitk>=2.5.2",
     "torch>=2.6.0,<2.7.0",  # Changed this line
@@ -46,6 +45,14 @@ build-backend = "setuptools.build_meta"
 py-modules = []
 
 [project.optional-dependencies]
+
+clinical-metrics = [
+  "crimson-score",
+  "green-score",
+  "radgraph",
+  "ratescore>=0.6.0",
+]
+
 dev = [
   "pytest>=8.4.1",
   "pylint",

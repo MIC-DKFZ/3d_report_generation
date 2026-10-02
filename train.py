@@ -21,7 +21,7 @@ from vlm.data.datasets import (
         CTRATEDatasetRetrievalWithImage,
         ToothFairy4Dataset,
 )
-from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
+from vlm.data.samplers import EvalDistributedSampler
 from inference import main as inference_main
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \

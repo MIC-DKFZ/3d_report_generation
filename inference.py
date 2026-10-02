@@ -22,7 +22,7 @@ from vlm.data.datasets import (
         BonnDatasetRetrievalWithImage,
         ToothFairy4Dataset,
 )
-from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
+from vlm.data.samplers import EvalDistributedSampler
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.utils import logger
 from vlm.utils.decoding import decode_generated_answers, decode_prompts
