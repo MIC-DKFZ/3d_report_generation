@@ -6,6 +6,7 @@ from typing import Any
 
 # Dotted paths of obsolete fields that are accepted but ignored in saved configs.
 DEPRECATED_FIELDS: set[str] = {
+    "data.folder_to_search",
     "eval.num_dataloader_workers",
     "data.do_sentence_shuffle",
     "data.do_truncation",

@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import numpy as np
 import torch
 from pathlib import Path
+from typing import TYPE_CHECKING, Literal
 
 from vlm.utils.load_and_save_files import load_json
 from batchgeneratorsv2.transforms.base.basic_transform import BasicTransform
@@ -20,6 +23,26 @@ from batchgeneratorsv2.transforms.spatial.low_resolution import (
 from batchgeneratorsv2.transforms.spatial.spatial import SpatialTransform
 from batchgeneratorsv2.transforms.utils.compose import ComposeTransforms
 from batchgeneratorsv2.transforms.utils.random import RandomTransform
+
+if TYPE_CHECKING:
+    from vlm.configs.run_config import RunConfig
+    from vlm.data.datasets import MedicalImageDataset
+
+
+def create_dataset(
+    cfg: RunConfig,
+    split: Literal["train", "val", "test"],
+    n_samples: int | Literal["unique"] | None = None,
+) -> MedicalImageDataset:
+    """Construct a dataset with the configured class and vision encoder patch size."""
+    dataset_class = cfg.data.get_dataset_class()
+    patch_size = cfg.model.vision_encoder.patch_size if cfg.model.vision_encoder else None
+    return dataset_class(
+        cfg=cfg,
+        split=split,
+        n_samples=n_samples,
+        vision_encoder_patch_size=patch_size,
+    )
 
 
 def collect_image_ids_from_dataset_json(dataset_json_path: str | Path) -> set[str]:

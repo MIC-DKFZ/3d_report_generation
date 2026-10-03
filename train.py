@@ -4,22 +4,11 @@ import shutil
 from pathlib import Path
 
 import torch.distributed as dist
-from torch.utils.data import DataLoader
 from transformers import EarlyStoppingCallback, TrainerCallback
 from trl import SFTConfig
 
 from vlm.configs.run_config import RunConfig
-from vlm.data.datasets import (
-        AMOSMMDataset,
-        CTRATEDataset,
-        MerlinDataset,
-        MerlinDatasetRetrieval,
-        MerlinDatasetRetrievalWithImage,
-        CTRATEDatasetRetrieval,
-        CTRATEDatasetRetrievalWithImage,
-        ToothFairy4Dataset,
-)
-from vlm.data.samplers import EvalDistributedSampler
+from vlm.data.dataloaders import create_eval_dataloader
 from inference import main as inference_main
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
@@ -33,11 +22,14 @@ from vlm.utils.training.checkpointing import (
     save_final_config,
 )
 from vlm.training.trainers import VLMSFTTrainer
-from vlm.registries.vlm_registry import VLM_REGISTRY
+from vlm.utils.model_utils import create_model_wrapper
 from vlm.utils import logger
 from vlm.utils.ddp_utils import setup_ddp, is_main_process
 from vlm.utils.seeding import seed_everything
-from vlm.utils.data.dataset_utils import collect_image_ids_from_config_dataset_jsons
+from vlm.utils.data.dataset_utils import (
+    collect_image_ids_from_config_dataset_jsons,
+    create_dataset,
+)
 from vlm.utils.training.optimizer_and_params import count_parameters
 from vlm.utils.training.wandb_utils import finish_wandb, initialize_wandb
 from vlm.utils.data.local_staging import stage_vision_input_to_local
@@ -157,27 +149,14 @@ class UnifiedVLMTrainer:
 
         if val_dataset is not None:
             callback_eval_dataset = callback_val_dataset if callback_val_dataset is not None else val_dataset
-            if self.is_distributed:
-                sampler = EvalDistributedSampler(
-                    callback_eval_dataset,
-                    num_replicas=self.world_size,
-                    rank=self.rank,
-                    shuffle=False
-                )
-            else:
-                sampler = None
-
-            callback_eval_dataloader = DataLoader(
+            callback_eval_dataloader = create_eval_dataloader(
                 callback_eval_dataset,
                 batch_size=self.cfg.eval.per_device_batch_size,
-                shuffle=False,
-                sampler=sampler,
                 collate_fn=self.vlm_model.collate_fn,
                 num_workers=self.cfg.trainer.dataloader_num_workers,
-                # IMPORTANT: Keep pin_memory disabled for the callback dataloader. Tests with 1000
-                # callback samples showed that enabling pinned memory can lead to
-                # multi-minute stalls in the main training loop after the callback finishes.
-                pin_memory=False
+                is_distributed=self.is_distributed,
+                world_size=self.world_size,
+                rank=self.rank,
             )
 
             callbacks.append(
@@ -264,6 +243,7 @@ class UnifiedVLMTrainer:
 def setup_config_and_logging(
     is_distributed: bool, local_world_size: int
 ) -> tuple[RunConfig, TrainRuntimeArgs]:
+
     args_parser = argparse.ArgumentParser(
         description="Train a Vision Language Model", allow_abbrev=False
     )
@@ -302,7 +282,41 @@ def setup_config_and_logging(
         ),
     )
 
-    if runtime_args.continue_training_run_dir is not None:
+    if runtime_args.continue_training_run_dir is None:
+        assert args.train_config is not None
+
+        train_config_path = Path(VLM_CONFIG_DIR, args.train_config)
+        if not train_config_path.exists():
+            raise ValueError(f"The provided config file does not exist: {train_config_path}")
+
+        cfg_dict = load_config_file(train_config_path)
+
+        if args.add_base_configs:
+            # Give base configs that are passed via CLI higher prio
+            cfg_dict["base_configs"] = args.add_base_configs + (cfg_dict.get("base_configs") or [])
+
+        # Merge base configs into cfg_dict
+        cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
+
+        # Set to absolute path
+        cfg_dict["general"]["train_config"] = str(train_config_path)
+
+        # Validate the file config before registering CLI override options.
+        cfg = RunConfig.model_validate(cfg_dict)
+
+        # Setup output directory and log file
+        if is_main_process():
+            os.makedirs(cfg.general.output_dir, exist_ok=True)
+            shutil.copyfile(
+                cfg.general.train_config, os.path.join(cfg.general.output_dir, INPUT_CONFIG_FILENAME)
+            )
+
+        log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
+        setup_logger(log_file_path)  # Setup logger on every rank
+
+        logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
+
+    else:
         cfg, config_warnings = load_run_config_from_run_dir(runtime_args.continue_training_run_dir)
 
         log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
@@ -313,51 +327,9 @@ def setup_config_and_logging(
 
         logger.info_main(f"Continuing training from run directory: {cfg.general.output_dir}")
 
-        cfg.merge_subconfigs_with_cli_args(config_cli_args)
-        cfg.general.output_dir = str(runtime_args.continue_training_run_dir)
-        cfg.apply_conditional_resets()
-        cfg.resolve_dataloader_workers(is_distributed, local_world_size)
-
-        # Persist CLI overrides for future resumptions.
-        if is_main_process():
-            save_final_config(cfg)
-
-        return cfg, runtime_args
-
-    assert args.train_config is not None
-    train_config_path = Path(VLM_CONFIG_DIR, args.train_config)
-    if not train_config_path.exists():
-        raise ValueError(f"The provided config file does not exist: {train_config_path}")
-
-    cfg_dict = load_config_file(train_config_path)
-
-    if args.add_base_configs:
-        # Give base configs that are passed via CLI higher prio
-        cfg_dict["base_configs"] = args.add_base_configs + (cfg_dict.get("base_configs") or [])
-
-    # Merge base configs into cfg_dict
-    cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
-
-    # Set to absolute path
-    cfg_dict["general"]["train_config"] = str(train_config_path)
-
-    # Validate the file config before registering CLI override options.
-    cfg = RunConfig.model_validate(cfg_dict)
-
-    # Setup output directory and log file
-    if is_main_process():
-        os.makedirs(cfg.general.output_dir, exist_ok=True)
-        shutil.copyfile(
-            cfg.general.train_config, os.path.join(cfg.general.output_dir, INPUT_CONFIG_FILENAME)
-        )
-
-    log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
-    setup_logger(log_file_path)  # Setup logger on every rank
-
-    logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
-    print(f"Successfully set up output directory at {cfg.general.output_dir}")
-
     cfg.merge_subconfigs_with_cli_args(config_cli_args)
+    if runtime_args.continue_training_run_dir is not None:
+        cfg.general.output_dir = str(runtime_args.continue_training_run_dir)
     cfg.apply_conditional_resets()
     cfg.resolve_dataloader_workers(is_distributed, local_world_size)
 
@@ -368,64 +340,20 @@ def setup_config_and_logging(
 
 
 def train_val_data_from_config(cfg: RunConfig):
-    vision_encoder_patch_size = cfg.model.vision_encoder.patch_size if cfg.model.vision_encoder else None
-
-    do_validation = cfg.data.val_dataset_json_path is not None
-
-    # Create datasets
-    if cfg.data.dataset_class_name:
-        dataset_class = cfg.data.get_dataset_class()
-    elif cfg.data.dataset_name == "amosmm":
-        # Use AMOSMM dataset
-        dataset_class = AMOSMMDataset
-    elif cfg.data.dataset_name == "ctrate":
-        # Use CTRATE dataset
-        if cfg.data.retrieval_json_path is not None:
-            if cfg.data.retrieval_use_image_in_prompt:
-                dataset_class = CTRATEDatasetRetrievalWithImage
-            else:
-                dataset_class = CTRATEDatasetRetrieval
-        else:
-            dataset_class = CTRATEDataset
-    elif cfg.data.dataset_name == "merlin":
-        if cfg.data.retrieval_json_path is not None:
-            if cfg.data.retrieval_use_image_in_prompt:
-                dataset_class = MerlinDatasetRetrievalWithImage
-            else:
-                dataset_class = MerlinDatasetRetrieval
-        else:
-            dataset_class = MerlinDataset
-    elif cfg.data.dataset_name == "toothfairy4":
-        dataset_class = ToothFairy4Dataset
-    else:
-        raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
-
-    train_dataset = dataset_class(  # type: ignore
-        cfg=cfg,
-        split="train",
-        n_samples=cfg.data.n_train_samples,
-        vision_encoder_patch_size=vision_encoder_patch_size,
+    train_dataset = create_dataset(cfg, split="train", n_samples=cfg.data.n_train_samples)
+    val_dataset = (
+        create_dataset(cfg, split="val", n_samples=cfg.data.n_val_samples)
+        if cfg.data.val_dataset_json_path is not None
+        else None
     )
-
-    val_dataset = dataset_class(  # type: ignore
-        cfg=cfg,
-        split="val",
-        n_samples=cfg.data.n_val_samples,
-        vision_encoder_patch_size=vision_encoder_patch_size,
-    ) if do_validation else None
-
-    callback_val_dataset = None
-    if val_dataset:
-        callback_val_dataset = dataset_class(  # type: ignore
-            cfg=cfg,
-            split="val",
-            n_samples=cfg.eval.callback_n_samples,
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
+    callback_val_dataset = (
+        create_dataset(cfg, split="val", n_samples=cfg.eval.callback_n_samples)
+        if val_dataset
+        else None
+    )
 
     if cfg.data.embedding_constant is not None:
         logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
-        print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     logger.info_main(
         f"Loaded {len(train_dataset)} training samples and "
@@ -471,20 +399,7 @@ def main():
 
     seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
 
-    try:
-        vlm_model_class = VLM_REGISTRY[cfg.model.model_type].model_class
-    except KeyError:
-        raise ValueError(f"Unknown model type: {cfg.model.model_type}")
-
-    vlm_model = vlm_model_class(
-        model_cfg=cfg.model,
-        vision_input_type=cfg.data.vision_input_type,
-        vision_embed_dim=cfg.get_vision_embed_dim(),
-        vision_embed_size=cfg.get_vision_embed_size(),
-        text_only=cfg.data.text_only,
-        max_response_tokens=cfg.data.max_response_tokens,
-        local_files_only=cfg.general.local_files_only
-    )
+    vlm_model = create_model_wrapper(cfg)
 
     train_dataset, val_dataset, callback_val_dataset = train_val_data_from_config(cfg)
 

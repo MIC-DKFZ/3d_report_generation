@@ -19,9 +19,13 @@ class DataConfig(ConfigBase):
     Dataset configuration.
     """
 
-    dataset_name: Literal["amosmm", "ctrate", "bonn", "merlin", "toothfairy4"] | None = Field(
+    dataset_name: str | None = Field(
         None, description="Name of the dataset."
     )
+    dataset_class_name: str | None = Field(
+        None, description="Dataset class name; inferred from dataset_name and retrieval settings if omitted."
+    )
+
     train_dataset_json_path: str | None = Field(
         None, description="Path to the train dataset JSON file."
     )
@@ -140,15 +144,24 @@ class DataConfig(ConfigBase):
 
         return self
 
-    dataset_class_name: str | None = Field(
-        None, description="Name of the dataset class."
-    )
+    @model_validator(mode="after")
+    def resolve_dataset_class_name(self):
+        """Fill a missing class name from the dataset registry."""
+        if self.dataset_class_name:
+            return self
 
-    folder_to_search: str = "vlm.data"
+        from vlm.registries.dataset_registry import get_dataset_class
 
-    def get_dataset_class(self) -> Dataset:
-        return recursive_find_python_class(
-            folder=str(Path(vlm.__path__[0], *self.folder_to_search.split(".")[1:])),
+        self.dataset_class_name = get_dataset_class(self).__name__
+        return self
+
+    def get_dataset_class(self) -> type[Dataset]:
+        """Look up the configured dataset class by name."""
+        dataset_class = recursive_find_python_class(
+            folder=str(Path(vlm.__path__[0], "data")),
             class_name=self.dataset_class_name,
-            current_module=self.folder_to_search
+            current_module="vlm.data",
         )
+        if dataset_class is None:
+            raise ValueError(f"Unknown dataset class: {self.dataset_class_name}")
+        return dataset_class

@@ -12,6 +12,7 @@ from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.model.trainable_params.trainable_linear_layer import TrainableLinearConfig
 from vlm.configs.model.trainable_params.trainable_module import TrainableModuleConfig
 from vlm.configs.run_config import RunConfig
+from vlm.utils.model_utils import create_model_wrapper
 from vlm.utils.config.compatibility import normalize_saved_config
 from vlm.utils.training.checkpointing import resolve_ckpt_dir_in_run_dir
 from vlm.utils.training.checkpoint_state import (
@@ -328,17 +329,7 @@ class AbstractVLWrapper(ABC):
 
         logger.info_main(f"Loading model from {str(ckpt_dir)}")
 
-        from vlm.registries.vlm_registry import VLM_REGISTRY
-        vlm_model_class = VLM_REGISTRY[cfg.model.model_type].model_class
-        vlm_model: AbstractVLWrapper = vlm_model_class(
-            model_cfg=cfg.model,
-            vision_input_type=cfg.data.vision_input_type,
-            vision_embed_dim=cfg.get_vision_embed_dim(),
-            vision_embed_size=cfg.get_vision_embed_size(),
-            text_only=cfg.data.text_only,
-            max_response_tokens=cfg.data.max_response_tokens,
-            local_files_only=cfg.general.local_files_only
-        )
+        vlm_model = create_model_wrapper(cfg)
         vlm_model.initialize_model()
         vlm_model.load_weights_from_checkpoint_dir(ckpt_dir)
         return vlm_model, cfg

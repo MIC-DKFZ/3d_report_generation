@@ -1,5 +1,4 @@
 import os
-import sys
 import argparse
 from argparse import Namespace
 from pathlib import Path
@@ -9,20 +8,8 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from vlm.configs.run_config import RunConfig
-from vlm.data.datasets import (
-        AMOSMMDataset,
-        CTRATEDataset,
-        MerlinDataset,
-        MerlinDatasetRetrieval,
-        MerlinDatasetRetrievalWithImage,
-        CTRATEDatasetRetrieval,
-        CTRATEDatasetRetrievalWithImage,
-        BonnDataset,
-        BonnDatasetRetrieval,
-        BonnDatasetRetrievalWithImage,
-        ToothFairy4Dataset,
-)
-from vlm.data.samplers import EvalDistributedSampler
+from vlm.utils.data.dataset_utils import create_dataset
+from vlm.data.dataloaders import create_eval_dataloader
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.utils import logger
 from vlm.utils.decoding import decode_generated_answers, decode_prompts
@@ -31,9 +18,10 @@ from vlm.utils.data.filter_batch import extract_batch_prompt_only
 from vlm.utils.run_naming import add_datetime_tag
 from vlm.utils.seeding import seed_everything
 from vlm.utils.config.merging import recursive_dict_merge
-from vlm.utils.load_and_save_files import load_config_file, save_json, save_yaml
+from vlm.utils.load_and_save_files import load_config_file, save_json
+from vlm.utils.training.checkpointing import save_final_config
 from vlm.utils.logging import setup_logger, log_banner
-from vlm.utils.paths import VLM_CONFIG_DIR, find_run_dir_in_output_dir
+from vlm.utils.paths import VLM_CONFIG_DIR, resolve_run_dir
 from vlm.utils.data.local_staging import get_local_vision_input_path
 from eval import main as eval_main
 
@@ -93,24 +81,14 @@ class UnifiedVLMInference:
                 find_unused_parameters=False,
             )
 
-            sampler = EvalDistributedSampler(
-                test_dataset,
-                num_replicas=self.world_size,
-                rank=self.rank,
-                shuffle=False,  # Usually False for evaluation/testing
-            )
-        else:
-            sampler = None
-
-        # Create dataloader
-        test_loader = torch.utils.data.DataLoader(
+        test_loader = create_eval_dataloader(
             test_dataset,
             batch_size=self.per_device_batch_size,
-            shuffle=False,
             num_workers=self.num_dataloader_workers,
-            sampler=sampler,
             collate_fn=self.vlm_model.collate_fn,
-            pin_memory=False,
+            is_distributed=self.is_distributed,
+            world_size=self.world_size,
+            rank=self.rank,
         )
 
         # Freeze all parameters
@@ -259,12 +237,7 @@ def main(
     seed_everything(0)  # Set a fixed seed for reproducibility
 
     if args.run_dir:
-        run_dir = Path(args.run_dir)
-
-        # If 'run_dir' does not exist, search for it in the output directory.
-        if not run_dir.is_dir():
-            run_dir = find_run_dir_in_output_dir(str(run_dir))
-
+        run_dir = resolve_run_dir(args.run_dir)
         vlm_model, cfg, ckpt_dir = AbstractVLWrapper.load_from_run_dir(run_dir, args.mode)
     else:  # if args.checkpoint_dir
         ckpt_dir = args.checkpoint_dir
@@ -298,69 +271,10 @@ def main(
         cfg.data.vision_input_path = str(get_local_vision_input_path())
 
     cfg.data.vision_input_path = vision_input_path if vision_input_path else cfg.data.vision_input_path
-    vision_encoder_patch_size = cfg.model.vision_encoder.patch_size if cfg.model.vision_encoder else None
-
     logger.info_main(f"Using {cfg.eval.split} split for inference.")
-    if cfg.data.dataset_name == "amosmm":
-        test_dataset = AMOSMMDataset(
-            cfg=cfg,
-            split=cfg.eval.split,
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
-    elif cfg.data.dataset_name == "ctrate":
-        if cfg.data.retrieval_json_path is not None:
-            if cfg.data.retrieval_use_image_in_prompt:
-                ctrate_dataset_class = CTRATEDatasetRetrievalWithImage
-            else:
-                ctrate_dataset_class = CTRATEDatasetRetrieval
-        else:
-            ctrate_dataset_class = CTRATEDataset
+    inference_dataset = create_dataset(cfg, split=cfg.eval.split)
 
-        test_dataset = ctrate_dataset_class(  # type: ignore
-            cfg=cfg,
-            split=cfg.eval.split,
-            n_samples=None,
-            vision_encoder_patch_size=vision_encoder_patch_size
-        )
-    elif cfg.data.dataset_name == "merlin":
-        if cfg.data.retrieval_json_path is not None:
-            if cfg.data.retrieval_use_image_in_prompt:
-                merlin_dataset_class = MerlinDatasetRetrievalWithImage
-            else:
-                merlin_dataset_class = MerlinDatasetRetrieval
-        else:
-            merlin_dataset_class = MerlinDataset
-
-        test_dataset = merlin_dataset_class(  # type: ignore
-            cfg=cfg,
-            split=cfg.eval.split,
-            n_samples=None,
-            vision_encoder_patch_size=vision_encoder_patch_size
-        )
-    elif cfg.data.dataset_name == "bonn":
-        if cfg.data.retrieval_json_path is not None:
-            if cfg.data.retrieval_use_image_in_prompt:
-                bonn_dataset_class = BonnDatasetRetrievalWithImage
-            else:
-                bonn_dataset_class = BonnDatasetRetrieval
-        else:
-            bonn_dataset_class = BonnDataset
-
-        test_dataset = bonn_dataset_class(
-            cfg=cfg,
-            split=cfg.eval.split,
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
-    elif cfg.data.dataset_name == "toothfairy4":
-        test_dataset = ToothFairy4Dataset(
-            cfg=cfg,
-            split=cfg.eval.split,
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
-    else:
-        raise ValueError(f"Unsupported dataset name: {cfg.data.dataset_name}")
-
-    logger.info_main(f"Loaded {len(test_dataset)} inference samples")
+    logger.info_main(f"Loaded {len(inference_dataset)} inference samples")
 
     if cfg.data.embedding_constant is not None:
         logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
@@ -376,21 +290,13 @@ def main(
         max_new_tokens=cfg.eval.max_new_tokens,
     )
 
-    inference.inference(test_dataset)
+    inference.inference(inference_dataset)
     logger.remove()
 
     # Save configuration used for inference
     # Currently mostly dataset related configs could change - e.g. to evaluate OOD data etc
     if is_main_process():
-        final_config_path = os.path.join(inference_output_dir, "final_config.yml")
-        save_yaml(
-            {
-                "command": " ".join(sys.argv),
-                "run": cfg.model_dump()
-            },
-            final_config_path,
-            sort_keys=False
-        )
+        save_final_config(cfg, output_dir=inference_output_dir)
 
     if cfg.eval.run_eval and is_main_process():
         eval_args = argparse.Namespace(

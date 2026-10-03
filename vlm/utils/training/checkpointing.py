@@ -79,9 +79,10 @@ def load_run_config_from_run_dir(run_dir: str | Path) -> tuple[RunConfig, list[s
     return cfg, messages
 
 
-def save_final_config(cfg: RunConfig) -> None:
-    """Persist the effective configuration used by this training invocation."""
-    final_config_path = Path(cfg.general.output_dir, FINAL_CONFIG_FILENAME)
+def save_final_config(cfg: RunConfig, output_dir: str | Path | None = None) -> None:
+    """Save the effective config, defaulting to the configured run output directory."""
+    output_dir = cfg.general.output_dir if output_dir is None else output_dir
+    final_config_path = Path(output_dir, FINAL_CONFIG_FILENAME)
     save_yaml(
         {
             "command": " ".join(sys.argv),
