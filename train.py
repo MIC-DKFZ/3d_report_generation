@@ -261,15 +261,6 @@ class UnifiedVLMTrainer:
         return already_complete_on_resume
 
 
-def resolve_dataloader_workers(
-    cfg: RunConfig, is_distributed: bool, local_world_size: int
-) -> None:
-    num_cores = os.cpu_count() or 1
-    cfg.trainer.dataloader_num_workers = (
-        max(1, (num_cores // 4) // local_world_size) if is_distributed else 2
-    )
-
-
 def setup_config_and_logging(
     is_distributed: bool, local_world_size: int
 ) -> tuple[RunConfig, TrainRuntimeArgs]:
@@ -325,7 +316,7 @@ def setup_config_and_logging(
         cfg.merge_subconfigs_with_cli_args(config_cli_args)
         cfg.general.output_dir = str(runtime_args.continue_training_run_dir)
         cfg.apply_conditional_resets()
-        resolve_dataloader_workers(cfg, is_distributed, local_world_size)
+        cfg.resolve_dataloader_workers(is_distributed, local_world_size)
 
         # Persist CLI overrides for future resumptions.
         if is_main_process():
@@ -368,7 +359,7 @@ def setup_config_and_logging(
 
     cfg.merge_subconfigs_with_cli_args(config_cli_args)
     cfg.apply_conditional_resets()
-    resolve_dataloader_workers(cfg, is_distributed, local_world_size)
+    cfg.resolve_dataloader_workers(is_distributed, local_world_size)
 
     if is_main_process():
         save_final_config(cfg)

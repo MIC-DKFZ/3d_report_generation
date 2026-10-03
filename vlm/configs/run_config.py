@@ -162,6 +162,13 @@ class RunConfig(ConfigBase):
 
         return self
 
+    def resolve_dataloader_workers(self, is_distributed: bool, local_world_size: int) -> None:
+        """Set dataloader workers using the CPU count and initialized process topology."""
+        num_cores = os.cpu_count() or 1
+        self.trainer.dataloader_num_workers = (
+            max(1, (num_cores // 4) // local_world_size) if is_distributed else 2
+        )
+
     def get_vision_embed_dim(self) -> int:
         """
         Resolve the vision embedding dimension based on the input source.
