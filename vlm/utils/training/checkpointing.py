@@ -1,5 +1,7 @@
 """Run-level checkpoint resolution and training-state planning."""
 
+from __future__ import annotations
+
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -205,7 +207,7 @@ def log_checkpoint_load_result(
 
 
 def restore_model_checkpoints(
-    vlm_model: "AbstractVLWrapper",
+    vlm_model: AbstractVLWrapper,
     checkpoint_plan: CheckpointPlan,
 ) -> None:
     """Apply sparse model checkpoints in dependency order."""
