@@ -1,100 +1,39 @@
-from importlib.metadata import PackageNotFoundError, version
-
 from pydantic import BaseModel
+
 from vlm.models.gemma3.wrapper import Gemma3TextVLWrapper
 from vlm.models.phi4mini.wrapper import Phi4MiniVLWrapper
 from vlm.models.qwen3.wrapper import Qwen3TextVLWrapper
-
-
-TRANSFORMERS_QWEN3_CUTOFF = (4, 53, 3)
-
-
-def _parse_version_triplet(raw_version: str) -> tuple[int, int, int]:
-    base = raw_version.split("+", 1)[0].split("-", 1)[0]
-    parts = base.split(".")
-    parsed: list[int] = []
-
-    for part in parts[:3]:
-        digits = []
-        for ch in part:
-            if ch.isdigit():
-                digits.append(ch)
-            else:
-                break
-        parsed.append(int("".join(digits)) if digits else 0)
-
-    while len(parsed) < 3:
-        parsed.append(0)
-
-    return parsed[0], parsed[1], parsed[2]
-
-
-def _use_qwen25(version_triplet: tuple[int, int, int]) -> bool:
-    major, minor, patch = version_triplet
-    cutoff_major, cutoff_minor, cutoff_patch = TRANSFORMERS_QWEN3_CUTOFF
-
-    if major != cutoff_major:
-        return major < cutoff_major
-    if minor != cutoff_minor:
-        return minor < cutoff_minor
-    return patch <= cutoff_patch
-
-try:
-    TRANSFORMERS_VERSION = _parse_version_triplet(version("transformers"))
-except PackageNotFoundError:
-    # Default to legacy behavior when transformers is unavailable at import time.
-    TRANSFORMERS_VERSION = (0, 0, 0)
-
-if _use_qwen25(TRANSFORMERS_VERSION):
-    from vlm.models.qwen25vl.wrapper import Qwen25VLWrapper
-else:
-    from vlm.models.qwen3vl.wrapper import Qwen3VLWrapper
+from vlm.models.qwen3vl.wrapper import Qwen3VLWrapper
 
 
 class VLMConfig(BaseModel):
-    """
-    Configuration for a Vision-Language Model
-    """
     model_id: str
     model_class: type
 
 
-VLM_REGISTRY: dict[str, VLMConfig] = {}
-
-if _use_qwen25(TRANSFORMERS_VERSION):
-    VLM_REGISTRY["Qwen25-VL-3B"] = VLMConfig(
-        model_id="Qwen/Qwen2.5-VL-3B-Instruct",
-        model_class=Qwen25VLWrapper
-    )
-else:
-    VLM_REGISTRY["Qwen3-1.7B"] = VLMConfig(
+VLM_REGISTRY: dict[str, VLMConfig] = {
+    "Qwen3-1.7B": VLMConfig(
         model_id="Qwen/Qwen3-1.7B",
         model_class=Qwen3TextVLWrapper
-    )
-    VLM_REGISTRY["Qwen3-VL-2B"] = VLMConfig(
+    ),
+    "Qwen3-VL-2B": VLMConfig(
         model_id="Qwen/Qwen3-VL-2B-Instruct",
         model_class=Qwen3VLWrapper
-    )
-    VLM_REGISTRY["Qwen3-VL-4B"] = VLMConfig(
+    ),
+    "Qwen3-VL-4B": VLMConfig(
         model_id="Qwen/Qwen3-VL-4B-Instruct",
         model_class=Qwen3VLWrapper
-    )
-    VLM_REGISTRY["Qwen3-VL-8B"] = VLMConfig(
+    ),
+    "Qwen3-VL-8B": VLMConfig(
         model_id="Qwen/Qwen3-VL-8B-Instruct",
         model_class=Qwen3VLWrapper
-    )
-
-VLM_REGISTRY["Phi4Mini"] = VLMConfig(
-    model_id="microsoft/Phi-4-mini-instruct",
-    model_class=Phi4MiniVLWrapper
-)
-
-VLM_REGISTRY["Qwen3-8B"] = VLMConfig(
-    model_id="Qwen/Qwen3-8B",
-    model_class=Qwen3TextVLWrapper
-)
-
-VLM_REGISTRY["Gemma3-4B"] = VLMConfig(
-    model_id="google/gemma-3-4b-it",
-    model_class=Gemma3TextVLWrapper
-)
+    ),
+    "Phi4Mini": VLMConfig(
+        model_id="microsoft/Phi-4-mini-instruct",
+        model_class=Phi4MiniVLWrapper
+    ),
+    "Gemma3-4B": VLMConfig(
+        model_id="google/gemma-3-4b-it",
+        model_class=Gemma3TextVLWrapper
+    ),
+}
