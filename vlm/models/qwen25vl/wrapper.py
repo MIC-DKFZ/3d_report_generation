@@ -26,7 +26,9 @@ class Qwen25VLWrapper(AbstractVLWrapper):
 
         self.model = Qwen25VLForConditionalGeneration.from_pretrained(
             self.model_cfg.model_id,
-            torch_dtype=torch.bfloat16
+            cache_dir=cache_dir,
+            local_files_only=self.local_files_only,
+            torch_dtype=torch.bfloat16,
         )
 
         self._setup_vision_components()
@@ -35,7 +37,8 @@ class Qwen25VLWrapper(AbstractVLWrapper):
 
         self.processor = QwenVLProcessor3D.from_pretrained(
             self.model_cfg.model_id,
-            cache_dir=cache_dir
+            cache_dir=cache_dir,
+            local_files_only=self.local_files_only,
         )
         self.tokenizer = self.processor.tokenizer
 
