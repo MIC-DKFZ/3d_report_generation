@@ -85,6 +85,8 @@ class UnifiedVLMInference:
             test_dataset,
             batch_size=self.per_device_batch_size,
             num_workers=self.num_dataloader_workers,
+            prefetch_factor=self.cfg.trainer.dataloader_prefetch_factor,
+            persistent_workers=self.cfg.trainer.dataloader_persistent_workers,
             collate_fn=self.vlm_model.collate_fn,
             is_distributed=self.is_distributed,
             world_size=self.world_size,

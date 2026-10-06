@@ -13,6 +13,8 @@ def create_eval_dataloader(
     batch_size: int,
     collate_fn: Callable,
     num_workers: int,
+    prefetch_factor: int | None = 2,
+    persistent_workers: bool = False,
     is_distributed: bool = False,
     world_size: int = 1,
     rank: int = 0,
@@ -29,6 +31,8 @@ def create_eval_dataloader(
         sampler=sampler,
         collate_fn=collate_fn,
         num_workers=num_workers,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
+        persistent_workers=persistent_workers and num_workers > 0,
         # Pinned memory caused long stalls during training callback evaluation.
         pin_memory=False,
     )

@@ -163,10 +163,16 @@ class RunConfig(ConfigBase):
         return self
 
     def resolve_dataloader_workers(self, is_distributed: bool, local_world_size: int) -> None:
-        """Set dataloader workers using the CPU count and initialized process topology."""
-        num_cores = os.cpu_count() or 1
+        """Calculate unset dataloader workers from available CPUs, capped at four per device."""
+        if self.trainer.dataloader_num_workers is not None:
+            return
+
+        try:
+            num_cores = len(os.sched_getaffinity(0)) or 1
+        except (AttributeError, OSError):
+            num_cores = os.cpu_count() or 1
         self.trainer.dataloader_num_workers = (
-            max(1, (num_cores // 4) // local_world_size) if is_distributed else 2
+            min(8, max(1, (num_cores // 4) // local_world_size)) if is_distributed else 2
         )
 
     def get_vision_embed_dim(self) -> int:

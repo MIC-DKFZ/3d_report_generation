@@ -154,6 +154,8 @@ class UnifiedVLMTrainer:
                 batch_size=self.cfg.eval.per_device_batch_size,
                 collate_fn=self.vlm_model.collate_fn,
                 num_workers=self.cfg.trainer.dataloader_num_workers,
+                prefetch_factor=self.cfg.trainer.dataloader_prefetch_factor,
+                persistent_workers=self.cfg.trainer.dataloader_persistent_workers,
                 is_distributed=self.is_distributed,
                 world_size=self.world_size,
                 rank=self.rank,

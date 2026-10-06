@@ -37,15 +37,15 @@ class SFTTrainerConfig(ConfigBase):
     remove_unused_columns: bool = Field(False, description="Whether to remove unused columns from the dataset before training.")
     report_to: list[str] = Field(default_factory=lambda: ["wandb"], description="List of integrations to report training logs to (e.g. 'wandb', 'tensorboard').")
 
-    dataloader_num_workers: int = Field(
-        6,
+    dataloader_num_workers: int | None = Field(
+        None,
         description=(
             "Number of subprocesses per device for data loading during training, validation, "
-            "and inference."
+            "and inference. 'None' calculates the count during training setup."
         ),
     )
     dataloader_pin_memory: bool = Field(True, description="Whether to copy tensors into CUDA pinned memory for faster GPU transfers.")
-    dataloader_prefetch_factor: int = Field(1, description="Reduce prefetch factor to minimize memory usage.")
+    dataloader_prefetch_factor: int = Field(2, description="Reduce prefetch factor to minimize memory usage.")
     dataloader_persistent_workers: bool = Field(False, description="Disable persistent workers to prevent memory accumulation.")
     torch_empty_cache_steps: int = Field(10, description="Clear PyTorch CUDA cache every X steps to manage GPU memory.")
     ddp_find_unused_parameters: bool = Field(False, description="Whether to enable detection of unused parameters in DDP training.")
