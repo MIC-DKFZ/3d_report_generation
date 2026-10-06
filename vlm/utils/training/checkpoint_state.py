@@ -1,6 +1,7 @@
 """Partial weight checkpoints. The caller constructs the base model before loading."""
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -77,6 +78,34 @@ def save_model_checkpoint(model, directory, *, state_dict=None):
         stream.write("\n")
 
 
+def _convert_checkpoint_keys(weights, state, conversion_mapping):
+    """Apply model-defined legacy renames, preserving matching keys and rejecting collisions.
+
+    Return the converted weights and the number of renamed keys.
+    """
+    converted_weights = {}
+    source_names = {}
+    converted_count = 0
+    for name, value in weights.items():
+        target_name = name
+        # Current-format checkpoints already use the model's state_dict names.
+        if name not in state:
+            candidate = name
+            for pattern, replacement in conversion_mapping.items():
+                candidate = re.sub(pattern, replacement, candidate)
+            if candidate in state:
+                target_name = candidate
+                converted_count += 1
+        if target_name in converted_weights:
+            raise ValueError(
+                f"Checkpoint key conversion collision: {source_names[target_name]} and "
+                f"{name} both map to {target_name}"
+            )
+        converted_weights[target_name] = value
+        source_names[target_name] = name
+    return converted_weights, converted_count
+
+
 def load_model_checkpoint(model, directory):
     directory = Path(directory)
     weights = load_file(directory / WEIGHTS_NAME)
@@ -91,6 +120,10 @@ def load_model_checkpoint(model, directory):
         previous_run_dirs = manifest["previous_run_dirs"]
 
     state = model.state_dict()
+    weights, converted_count = _convert_checkpoint_keys(
+        weights, state, getattr(model, "_checkpoint_conversion_mapping", {})
+    )
+
     for name, value in weights.items():
         if name not in state:
             raise ValueError(f"Loaded checkpoint key does not exist in model: {name}")
@@ -98,6 +131,8 @@ def load_model_checkpoint(model, directory):
             raise ValueError(f"Checkpoint tensor shape/dtype mismatch for {name}")
 
     result = model.load_state_dict(weights, strict=False)
+    if converted_count:
+        logger.info_main(f"Converted {converted_count} legacy checkpoint keys to current names.")
     previous_run_dirs = list(previous_run_dirs)
     source_run_dir = str(directory.parent)
     if not previous_run_dirs or previous_run_dirs[-1] != source_run_dir:

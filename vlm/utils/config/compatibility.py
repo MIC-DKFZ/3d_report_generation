@@ -8,6 +8,7 @@ from typing import Any
 DEPRECATED_FIELDS: set[str] = {
     "data.folder_to_search",
     "eval.num_dataloader_workers",
+    "eval.n_samples",
     "data.do_sentence_shuffle",
     "data.do_truncation",
     "data.truncate_after",
