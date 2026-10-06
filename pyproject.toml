@@ -54,12 +54,12 @@ include = ["vlm*"]
 
 [project.optional-dependencies]
 
-clinical-metrics = [
-  "crimson-score",
-  "green-score",
-  "radgraph",
-  "ratescore>=0.6.0",
-]
+# clinical-metrics = [
+#   "crimson-score",
+#   "green-score",
+#   "radgraph",
+#   "ratescore>=0.6.0",
+# ]
 
 dev = [
   "pytest>=8.4.1",
