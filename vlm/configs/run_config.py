@@ -11,13 +11,14 @@ from vlm.configs.general_config import GeneralConfig
 from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.scheduler.scheduler_config import SchedulerClassConfig
 from vlm.configs.trainer_config import SFTTrainerConfig
-from vlm.configs.cli import add_config_cli_args, add_new_class_kwarg_cli_args
-from vlm.configs.merging import recursive_dict_merge, unflatten_dict
+from vlm.utils.config.cli import add_config_cli_args, add_new_class_kwarg_cli_args
+from vlm.utils.config.merging import recursive_dict_merge, unflatten_dict
 from vlm.utils.ddp_utils import is_main_process
-from vlm.utils.helper import add_datetime_tag, setattr_nested, get_random_uid
+from vlm.utils.run_naming import add_datetime_tag, get_random_uid
+from vlm.utils.class_utils import setattr_nested
 from vlm.utils.load_and_save_files import load_config_file
 from vlm.utils.paths import VLM_OUTPUT_DIR, VLM_CONFIG_DIR
-from vlm.utils.vision_input_type import VisionInputType
+from vlm.utils.data.vision_input_type import VisionInputType
 from vlm.utils import logger
 
 
@@ -46,10 +47,10 @@ class RunConfig(ConfigBase):
     @model_validator(mode="after")
     def check_eval_dataset_json(self):
         if self.eval.run_eval:
-            if self.eval.test_dataset_json_path is None:
+            if self.data.test_dataset_json_path is None:
                 raise ValueError("The 'dataset_json' has to be specified if 'run_eval=True'")
-            if not Path(self.eval.test_dataset_json_path).is_file():
-                raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.eval.test_dataset_json_path}")
+            if not Path(self.data.test_dataset_json_path).is_file():
+                raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.data.test_dataset_json_path}")
         return self
 
     @model_validator(mode="after")
@@ -69,8 +70,8 @@ class RunConfig(ConfigBase):
     def validate_sharded_vision_input_requires_local_staging(self):
         if self.data.vision_input_is_sharded and not self.general.stage_vision_input_to_local:
             raise ValueError(
-                "data.vision_input_is_sharded=True requires "
-                "general.stage_vision_input_to_local=True. Sharded vision input is only "
+                "'data.vision_input_is_sharded=True' requires "
+                "'general.stage_vision_input_to_local=True'. Sharded vision input is only "
                 "handled by the local staging step; the dataset loader itself expects "
                 "normal per-sample files."
             )
@@ -83,26 +84,26 @@ class RunConfig(ConfigBase):
 
         if self.data.val_dataset_json_path is None:
             raise ValueError(
-                "general.do_early_stopping=True requires data.val_dataset_json_path to be set."
+                "'general.do_early_stopping=True' requires 'data.val_dataset_json_path' to be set."
             )
         if self.trainer.early_stopping_patience is None:
             raise ValueError(
-                "general.do_early_stopping=True requires trainer.early_stopping_patience to be set."
+                "'general.do_early_stopping=True' requires 'trainer.early_stopping_patience' to be set."
             )
         if self.trainer.metric_for_best_model is None:
             raise ValueError(
-                "general.do_early_stopping=True requires trainer.metric_for_best_model to be set."
+                "'general.do_early_stopping=True' requires 'trainer.metric_for_best_model' to be set."
             )
         if self.trainer.eval_strategy == "no":
             raise ValueError(
-                "general.do_early_stopping=True requires trainer.eval_strategy to be 'steps' or 'epoch'."
+                "'general.do_early_stopping=True' requires 'trainer.eval_strategy' to be 'steps' or 'epoch'."
             )
         if (
             self.trainer.metric_for_best_model in {"eval_radbert_f1", "radbert_f1"}
             and not self.eval.calculate_radbert_score
         ):
             raise ValueError(
-                "Early stopping is configured for 'eval_radbert_f1', but eval.calculate_radbert_score is disabled."
+                "Early stopping is configured for 'eval_radbert_f1', but 'eval.calculate_radbert_score' is disabled."
             )
 
         return self
@@ -139,8 +140,8 @@ class RunConfig(ConfigBase):
 
             if run_name[0] is None:
                 raise RuntimeError(
-                    "run_name is None after distributed broadcast. "
-                    "This indicates a synchronization or initialization error in torch.distributed."
+                    "'run_name' is 'None' after distributed broadcast. "
+                    "This indicates a synchronization or initialization error in 'torch.distributed'."
                 )
         self.general.run_name = run_name[0]
 
@@ -160,6 +161,19 @@ class RunConfig(ConfigBase):
         )
 
         return self
+
+    def resolve_dataloader_workers(self, is_distributed: bool, local_world_size: int) -> None:
+        """Calculate unset dataloader workers from available CPUs, capped at four per device."""
+        if self.trainer.dataloader_num_workers is not None:
+            return
+
+        try:
+            num_cores = len(os.sched_getaffinity(0)) or 1
+        except (AttributeError, OSError):
+            num_cores = os.cpu_count() or 1
+        self.trainer.dataloader_num_workers = (
+            min(8, max(1, (num_cores // 4) // local_world_size)) if is_distributed else 2
+        )
 
     def get_vision_embed_dim(self) -> int:
         """
@@ -222,11 +236,11 @@ class RunConfig(ConfigBase):
         for _val, _modules in _dic.items():
             for _module in sorted(_modules):
                 setattr_nested(self, _module, _val)
-                logger.info_main(f"  > cfg.{_module} set to {_val}")
+                logger.info_main(f"  > 'cfg.{_module}' set to {_val}")
 
     def _maybe_reset_validation_specific_args(self):
         """
-        When doing no validation (val_dataset_json_path=None), reset validation-specific arguments.
+        When doing no validation ('val_dataset_json_path=None'), reset validation-specific arguments.
         This is especially important for SFTTrainer args, which would otherwise raise errors.
         """
         if self.data.val_dataset_json_path is None:
@@ -242,7 +256,7 @@ class RunConfig(ConfigBase):
                 for _module in _modules:
                     setattr_nested(self, _module, _val)
                     if is_main_process():
-                        logger.info(f"  > cfg.{_module} set to {_val}")
+                        logger.info(f"  > 'cfg.{_module}' set to {_val}")
 
     def _maybe_reset_early_stopping_specific_args(self):
         """
@@ -262,7 +276,7 @@ class RunConfig(ConfigBase):
             for _module in _modules:
                 setattr_nested(self, _module, _val)
                 if is_main_process():
-                    logger.info(f"  > cfg.{_module} set to {_val}")
+                    logger.info(f"  > 'cfg.{_module}' set to {_val}")
 
     def apply_conditional_resets(self) -> None:
         self._maybe_reset_vision_related_specific_args()
@@ -301,7 +315,7 @@ class RunConfig(ConfigBase):
     @staticmethod
     def apply_base_configs(cfg_dict: dict[str, Any], config_dir: str | Path, seen: list[str] | None = None) -> dict:
         """
-        Recursively applies base configurations defined in 'cfg_dict["base_configs"]'.
+        Recursively applies base configurations defined by the 'base_configs' key in 'cfg_dict'.
 
         Base configs are merged in reverse order so that earlier entries override later ones.
         Values in 'cfg_dict' itself take final precedence over all base configurations.

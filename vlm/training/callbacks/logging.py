@@ -11,7 +11,7 @@ from transformers import TrainerCallback, TrainerControl, TrainerState, Training
 import wandb
 from vlm.utils.decoding import decode_generated_answers, decode_label_answers
 from vlm.utils.ddp_utils import gather_inference_outputs
-from vlm.utils.filter_batch import extract_batch_prompt_only
+from vlm.utils.data.filter_batch import extract_batch_prompt_only
 from vlm.utils import logger
 from vlm.utils.ddp_utils import is_main_process
 from vlm.utils.load_and_save_files import save_json
@@ -49,19 +49,12 @@ class PycocoevalCallback(TrainerCallback):
         self.rougel_scorer = Rouge()
         self.cider_scorer = Cider()
 
-        self.calculate_radbert_score = calculate_radbert_score
-        if self.calculate_radbert_score:
-            # Pick the report classifier matching the dataset. Both scorers share
-            # the same (preds, gts) -> metrics-dict contract, so everything below
-            # (wandb keys, error fallback) is unchanged.
-            if dataset_name == "ctrate":
-                from eval import eval_ctrate_radbert
-                self.radbert_scorer = eval_ctrate_radbert
-            elif dataset_name == "merlin":
-                from eval import eval_merlin_modernbert
-                self.radbert_scorer = eval_merlin_modernbert
-            else:
-                raise ValueError(f"Unknown dataset_name: {dataset_name}")
+        self.radbert_scorer = None
+        if calculate_radbert_score:
+            from vlm.registries.evaluation_registry import get_classifier_evaluator
+
+            self.radbert_scorer = get_classifier_evaluator(dataset_name)
+        self.calculate_radbert_score = self.radbert_scorer is not None
 
         self.radbert_gt_df = None
 

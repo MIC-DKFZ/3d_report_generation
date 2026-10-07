@@ -16,14 +16,13 @@ from torch.utils.data import Dataset
 
 from vlm.data.embedding_transforms import EmbeddingCompose
 from vlm.utils import logger
-from vlm.utils.dataset_utils import get_training_image_transforms, preprocess_3d_image
+from vlm.utils.data.dataset_utils import get_training_image_transforms, preprocess_3d_image
 from vlm.utils.regex_patterns import (
     VQA_ANSWER_PATTERN,
     VQA_OPTION_PATTERN,
     VQA_OPTION_LETTERS_IN_TEXT_PATTERN,
 )
-from vlm.utils.vision_input_type import VisionInputType
-from vlm.models.phi4mini.phi4mini_vlm import PHI_VISION_PLACEHOLDER_TOKEN
+from vlm.utils.data.vision_input_type import VisionInputType
 from vlm.configs.run_config import RunConfig
 
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
@@ -58,7 +57,6 @@ class MedicalImageDataset(Dataset, ABC):
 
     Args:
         dataset_json_path (str): Path to the dataset JSON file
-        model_type (str): Name of the VLM the dataset is used for
         split (str): Split name ('train', 'val' or 'test')
         vision_input_path (str | Path): Root path to the vision input (images or embeddings)
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
@@ -75,7 +73,7 @@ class MedicalImageDataset(Dataset, ABC):
         cfg: RunConfig,
         split: Literal["train", "val", "test"],
         vision_encoder_patch_size: Tuple[int, ...],
-        n_samples: int | None = None,
+        n_samples: int | Literal["unique"] | None = None,
     ):
         super().__init__()
 
@@ -83,12 +81,11 @@ class MedicalImageDataset(Dataset, ABC):
 
         self.vision_input_path = Path(cfg.data.vision_input_path)
         self.vision_input_type = cfg.data.vision_input_type
-        self.model_type = cfg.model.model_type
         self.split = split
         self.text_only = cfg.data.text_only
         self.embedding_constant = cfg.data.embedding_constant
         self.do_resize = cfg.data.do_resize
-        self.do_transforms = cfg.data.do_transforms
+        self.do_transforms = cfg.data.do_transforms and self.split == "train"
         self.vision_encoder_patch_size = vision_encoder_patch_size
         self.is_stacked_2d_embedding = cfg.data.is_stacked_2d_embedding
         self.reduce_to_n_slices = cfg.data.reduce_to_n_slices
@@ -96,19 +93,16 @@ class MedicalImageDataset(Dataset, ABC):
 
         if self.split == "train":
             self.dataset_json_path = Path(cfg.data.train_dataset_json_path)
-            self.do_sentence_shuffle = cfg.data.do_sentence_shuffle
         elif self.split == "val":
             self.dataset_json_path = Path(cfg.data.val_dataset_json_path)
-            self.do_sentence_shuffle = False
         elif self.split == "test":
-            self.dataset_json_path = Path(cfg.eval.test_dataset_json_path)
-            self.do_sentence_shuffle = False
+            self.dataset_json_path = Path(cfg.data.test_dataset_json_path)
 
         logger.info_main(
             f"Using vision_input_path for {self.__class__.__name__} ({self.split}): {self.vision_input_path}"
         )
 
-        self.sentence_shuffle_p = cfg.data.sentence_shuffle_p
+        self.sentence_shuffle_p = cfg.data.sentence_shuffle_p if self.split == "train" else 0.0
         self.image_id_suffix = cfg.data.image_id_suffix
 
         answer_types = cfg.data.answer_types
@@ -283,22 +277,6 @@ class MedicalImageDataset(Dataset, ABC):
 
         return vision_input
 
-    def _embedding_2_tensor(self, embedding):
-        """Convert embedding to tensor"""
-        # TODO check if we can remove this function!
-        if embedding is None:
-            logger.error_main("Embedding is None, cannot convert to tensor.")
-            return None
-
-        np_img_flat = embedding.reshape(embedding.shape[0], embedding.shape[1], -1)
-        np_img_flat = np_img_flat.transpose(0, 2, 1)
-        img_tensor = torch.tensor(np_img_flat)
-
-        return img_tensor
-
-    # def modify_sample(self, result: Dict) -> Dict:
-    #     return result
-
     def __getitem__(self, index):
         sample = self.samples[index]
 
@@ -308,12 +286,10 @@ class MedicalImageDataset(Dataset, ABC):
         # Alter question
         # result = self.modify_sample(result)
 
-        if self.do_sentence_shuffle:
+        if self.sentence_shuffle_p > 0:
             result["question"], result["full_answer"] = self.shuffle_sentences(
                 result["question"], result["full_answer"]
             )
-        else:
-            result["full_answer"] = result["full_answer"]
 
         formatted_qa, formatted_qa_prompt_only = self.format_into_message(
             result["question"],
@@ -371,33 +347,15 @@ class MedicalImageDataset(Dataset, ABC):
         # Needs to be implemented for each dataset
         return question, answer
 
-    def format_into_message(
-            self, question, answer, system_text=SYSTEM_TEXT
-    ):
-
-        if "qwen" in self.model_type.lower():
-            system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
-            user_message = {
-                "role": "user",
-                "content": ([{"type": "video"}] if not self.text_only else [])
-                + [{"type": "text", "text": question}],
-            }
-            answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
-        elif "gemma" in self.model_type.lower():
-            system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
-            user_message = {
-                "role": "user",
-                "content": ([{"type": "image"}] if not self.text_only else [])
-                + [{"type": "text", "text": question}],
-            }
-            answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
-        elif "phi" in self.model_type.lower():
-            system_message = {"role": "system", "content": system_text}
-            vision_prefix = f"{PHI_VISION_PLACEHOLDER_TOKEN}\n" if not self.text_only else ""
-            user_message = {"role": "user", "content": f"{vision_prefix}{question}"}
-            answer_message = {"role": "assistant", "content": answer}
-        else:
-            raise ValueError(f"Unsupported model name: {self.model_type}")
+    def format_into_message(self, question, answer, system_text=SYSTEM_TEXT):
+        """Build model-neutral messages; wrappers translate `vision` items for their model."""
+        system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
+        user_message = {
+            "role": "user",
+            "content": ([{"type": "vision"}] if not self.text_only else [])
+            + [{"type": "text", "text": question}],
+        }
+        answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
 
         full_conversation = [system_message, user_message, answer_message]
         prompt_only_conversation = [system_message, user_message]
@@ -442,6 +400,9 @@ class AMOSMMDataset(MedicalImageDataset):
         return Path(self.vision_input_path / image_name)
 
     def shuffle_sentences(self, question, answer) -> tuple[str, str]:
+        if random.uniform(0, 1) >= self.sentence_shuffle_p:
+            return question, answer
+
         # Extract options with their content
         lines = question.split("\n")
 
@@ -584,9 +545,6 @@ class CTRATEDataset(MedicalImageDataset):
             return question, ""
 
         answer_str = str(answer).strip()
-        if not self.shuffle_sentences:
-            return question, answer_str
-
         # Split by headers, keeping them in the result
         sections = re.split(r"(Findings:|Impression:)", answer_str)
 
@@ -759,11 +717,13 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
         cfg: RunConfig,
         vision_encoder_patch_size: Tuple[int, ...],
         split: Literal["train", "val", "test"] = "train",
+        n_samples: int | None = None,
     ):
         super().__init__(
             cfg=cfg,
             vision_encoder_patch_size=vision_encoder_patch_size,
             split=split,
+            n_samples=n_samples,
         )
         # FIXME: not sure how to handle the case where the training samples are limited by `n_train_samples`
         # E.g. a check would be needed that the image IDs of thre retrieval json are all included in the training subset
@@ -870,7 +830,9 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
                     case = self.get_case_from_dataset_json(self.samples_retrieval, nearest_neighbor_id)
                     answer = case["answer"]
                     if self.add_image:
-                        d["content"].append({"type": "video", "vision_input_path": nearest_neighbor_id})
+                        d["content"].append(
+                            {"type": "vision", "vision_input_path": nearest_neighbor_id}
+                        )
                     d["content"].append({"type": "text", "text": f"Report {n_nn + 1}:\n{answer}"})
 
         return formatted_qa, formatted_qa_prompt_only
@@ -902,11 +864,13 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
         cfg: RunConfig,
         vision_encoder_patch_size: Tuple[int, ...],
         split: Literal["train", "val", "test"] = "train",
+        n_samples: int | None = None,
     ):
         super().__init__(
             cfg=cfg,
             vision_encoder_patch_size=vision_encoder_patch_size,
             split=split,
+            n_samples=n_samples,
         )
         # self.maybe_add_vision_tokens = "<|vision_start|><|video_pad|><|vision_end|>"
         self.maybe_add_vision_tokens = ""
@@ -971,11 +935,13 @@ class CTRATEDatasetRetrievalWithImagePrompt1(CTRATEDatasetRetrievalWithImage):
         cfg: RunConfig,
         vision_encoder_patch_size: Tuple[int, ...],
         split: Literal["train", "val", "test"] = "train",
+        n_samples: int | None = None,
     ):
         super().__init__(
             cfg=cfg,
             vision_encoder_patch_size=vision_encoder_patch_size,
             split=split,
+            n_samples=n_samples,
         )
         # self.maybe_add_vision_tokens = "<|vision_start|><|video_pad|><|vision_end|>"
         self.maybe_add_vision_tokens = ""
@@ -1013,13 +979,10 @@ Output a report in the following format:
 Now analyze the following:
         """
 
-        if "qwen" in self.model_type.lower():
-            user_message = {
-                "role": "user",
-                "content": [{"type": "text", "text": question_p1}] + ([{"type": "video"}] if not self.text_only else [])
-            }
-        else:
-            raise ValueError(f"Unsupported model name: {self.model_type}")
+        user_message = {
+            "role": "user",
+            "content": [{"type": "text", "text": question_p1}, {"type": "vision"}],
+        }
 
         answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
 
@@ -1050,7 +1013,9 @@ Now analyze the following:
                     answer = case["answer"]
                     d["content"].append({"type": "text", "text": f"[Case {n_nn + 1}]\n"})
                     if self.add_image:
-                        d["content"].append({"type": "video", "vision_input_path": nearest_neighbor_id})
+                        d["content"].append(
+                            {"type": "vision", "vision_input_path": nearest_neighbor_id}
+                        )
                     d["content"].append({"type": "text", "text": f"Report:\n{answer}"})
 
         return formatted_qa, formatted_qa_prompt_only

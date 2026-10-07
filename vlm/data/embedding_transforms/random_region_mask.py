@@ -1,5 +1,5 @@
 import random
-from vlm.data.embedding_transforms.utils import (
+from vlm.utils.data.embedding_transforms import (
     clone_embedding,
     should_apply,
     validate_embedding,

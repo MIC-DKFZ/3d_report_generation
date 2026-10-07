@@ -1,33 +1,19 @@
 import argparse
-import json
 import os
 import shutil
-from datetime import datetime
 from pathlib import Path
 
 import torch.distributed as dist
-from torch.utils.data import DataLoader
 from transformers import EarlyStoppingCallback, TrainerCallback
 from trl import SFTConfig
 
-import wandb
 from vlm.configs.run_config import RunConfig
-from vlm.data.datasets import (
-        AMOSMMDataset,
-        CTRATEDataset,
-        MerlinDataset,
-        MerlinDatasetRetrieval,
-        MerlinDatasetRetrievalWithImage,
-        CTRATEDatasetRetrieval,
-        CTRATEDatasetRetrievalWithImage,
-        ToothFairy4Dataset,
-)
-from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
+from vlm.data.dataloaders import create_eval_dataloader
 from inference import main as inference_main
-from vlm.models.abstract_vlm import AbstractVLMModel
+from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
     TerminateOnNaNLossCallback, EveryNEpochsCallback
-from vlm.training.checkpointing import (
+from vlm.utils.training.checkpointing import (
     CheckpointPlan,
     TrainRuntimeArgs,
     create_checkpoint_plan,
@@ -36,13 +22,17 @@ from vlm.training.checkpointing import (
     save_final_config,
 )
 from vlm.training.trainers import VLMSFTTrainer
-from vlm.registries.vlm_registry import VLM_REGISTRY
+from vlm.utils.model_utils import create_model_wrapper
 from vlm.utils import logger
 from vlm.utils.ddp_utils import setup_ddp, is_main_process
-from vlm.utils.helper import seed_everything
-from vlm.utils.dataset_utils import collect_image_ids_from_config_dataset_jsons
-from vlm.utils.optimizer_and_params import count_parameters
-from vlm.utils.local_staging import stage_vision_input_to_local
+from vlm.utils.seeding import seed_everything
+from vlm.utils.data.dataset_utils import (
+    collect_image_ids_from_config_dataset_jsons,
+    create_dataset,
+)
+from vlm.utils.training.optimizer_and_params import count_parameters
+from vlm.utils.training.wandb_utils import finish_wandb, initialize_wandb
+from vlm.utils.data.local_staging import stage_vision_input_to_local
 from vlm.utils.load_and_save_files import load_config_file, save_json
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.memory_utils import (
@@ -50,19 +40,18 @@ from vlm.utils.memory_utils import (
     log_memory_usage,
     setup_memory_efficient_training,
 )
-from vlm.utils.paths import VLM_CONFIG_DIR
+from vlm.utils.paths import VLM_CONFIG_DIR, resolve_run_dir
 
 
 INPUT_CONFIG_FILENAME = "input_config.yml"
 TRAIN_LOG_FILENAME = "train.log"
 ADAPTER_STATS_FILENAME = "adapter_stats.json"
-WANDB_CONFIG_BACKUP_FILENAME = "config_backup.json"
 
 
 class UnifiedVLMTrainer:
     def __init__(
         self,
-        vlm_model: AbstractVLMModel,
+        vlm_model: AbstractVLWrapper,
         cfg: RunConfig,
         checkpoint_plan: CheckpointPlan,
         ddp_setup: tuple[bool, int, int, int, int],
@@ -71,12 +60,12 @@ class UnifiedVLMTrainer:
         Initialize the unified VLM trainer.
 
         Args:
-            vlm_model: An instance of a class derived from AbstractVLMModel
+            vlm_model: An instance of a class derived from AbstractVLWrapper
             cfg: The RunConfig of the experiment
             checkpoint_plan: Ordered model and training-state checkpoint sources
             ddp_setup: Distributed topology initialized by main
         """
-        self.vlm_model: AbstractVLMModel = vlm_model
+        self.vlm_model: AbstractVLWrapper = vlm_model
         self.trainer: VLMSFTTrainer | None = None
         self.cfg: RunConfig = cfg
         self.checkpoint_plan = checkpoint_plan
@@ -91,19 +80,6 @@ class UnifiedVLMTrainer:
 
     def get_training_args(self):
         """Configure standard training arguments for distributed training"""
-        num_cores = os.cpu_count()
-
-        # Adjust number of workers based on distributed setup
-        if self.is_distributed:
-            # Reduce workers per process in distributed training
-            num_workers = max(1, (num_cores // 4) // self.local_world_size)
-        else:
-            num_workers = 2
-
-        # TODO: Do calculation before final_config.yml is logged
-        self.cfg.trainer.dataloader_num_workers = num_workers
-
-        # Add model-specific arguments
         model_args = self.vlm_model.get_model_specific_training_args()
 
         trainer_args = self.cfg.trainer.model_dump(
@@ -138,13 +114,8 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training Setup")
 
-        # Setup model, processor and tokenizer
-        model = self.vlm_model.setup_model()
-
-        # Configure component trainability and construct any configured PEFT layers.
-        self.vlm_model.configure_model_for_training()
-
-        self.vlm_model.initialize_checkpoint_tracking()
+        # Assemble the model and prepare PEFT/trainability before restoring weights.
+        model = self.vlm_model.initialize_model()
 
         # Sparse checkpoints are applied in dependency order; resume weights come last.
         restore_model_checkpoints(self.vlm_model, self.checkpoint_plan)
@@ -157,32 +128,7 @@ class UnifiedVLMTrainer:
             }
             save_json(_stats, Path(self.cfg.general.output_dir, ADAPTER_STATS_FILENAME))
 
-        # Create comprehensive config for WandB logging
-        config_dict = create_comprehensive_wandb_config(
-            self.vlm_model, self.cfg, self.world_size, self.rank
-        )
-
-        # Only initialize wandb on the main process (rank 0) for DDP
-        if is_main_process():
-            wandb.init(
-                entity="mic-rocket-vlm",
-                project=self.cfg.general.wandb_project,
-                name=self.cfg.general.run_name,
-                reinit=True,
-                group=f"{type(self.vlm_model).__name__}_run",
-                config=config_dict,
-                # id=f"{str(Path(self.cfg.data.vision_input_path).name)}--{self.cfg.general.run_name}"
-                id=self.cfg.general.run_name
-            )
-
-            # Ensure wandb properly logs hyperparameters in offline mode
-            ensure_wandb_config_logging()
-
-            # Additional explicit config update for offline mode robustness
-            if os.getenv("WANDB_MODE", "online").lower() == "offline":
-                # Re-update config one more time to ensure persistence
-                wandb.config.update(config_dict, allow_val_change=True)
-                logger.info_main("Offline mode: Config explicitly updated after init")
+        initialize_wandb(self.vlm_model, self.cfg, self.world_size, self.rank)
 
         # Configure training arguments
         training_args = self.get_training_args()
@@ -203,27 +149,16 @@ class UnifiedVLMTrainer:
 
         if val_dataset is not None:
             callback_eval_dataset = callback_val_dataset if callback_val_dataset is not None else val_dataset
-            if self.is_distributed:
-                sampler = EvalDistributedSampler(
-                    callback_eval_dataset,
-                    num_replicas=self.world_size,
-                    rank=self.rank,
-                    shuffle=False
-                )
-            else:
-                sampler = None
-
-            callback_eval_dataloader = DataLoader(
+            callback_eval_dataloader = create_eval_dataloader(
                 callback_eval_dataset,
                 batch_size=self.cfg.eval.per_device_batch_size,
-                shuffle=False,
-                sampler=sampler,
                 collate_fn=self.vlm_model.collate_fn,
-                num_workers=self.cfg.eval.num_dataloader_workers,
-                # IMPORTANT: Keep pin_memory disabled for the callback dataloader. Tests with 1000
-                # callback samples showed that enabling pinned memory can lead to
-                # multi-minute stalls in the main training loop after the callback finishes.
-                pin_memory=False
+                num_workers=self.cfg.trainer.dataloader_num_workers,
+                prefetch_factor=self.cfg.trainer.dataloader_prefetch_factor,
+                persistent_workers=self.cfg.trainer.dataloader_persistent_workers,
+                is_distributed=self.is_distributed,
+                world_size=self.world_size,
+                rank=self.rank,
             )
 
             callbacks.append(
@@ -298,17 +233,7 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("After Cleanup")
 
-        # Final config validation for offline mode
-        if os.getenv("WANDB_MODE", "online").lower() == "offline" and wandb.run is not None:
-            final_config = dict(wandb.config)
-            logger.info_main(f"Final config verification - Total keys: {len(final_config)}")
-            if len(final_config) < 5:  # Arbitrary threshold - expect at least some config
-                logger.warning_main(
-                    "Suspiciously few config keys logged - may indicate config persistence issue"
-                )
-
-        if is_main_process():
-            wandb.finish()
+        finish_wandb()
 
         if self.is_distributed:
             dist.barrier()
@@ -317,7 +242,10 @@ class UnifiedVLMTrainer:
         return already_complete_on_resume
 
 
-def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
+def setup_config_and_logging(
+    is_distributed: bool, local_world_size: int
+) -> tuple[RunConfig, TrainRuntimeArgs]:
+
     args_parser = argparse.ArgumentParser(
         description="Train a Vision Language Model", allow_abbrev=False
     )
@@ -349,62 +277,63 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
         args_parser.error("--train_config or --continue_training_run_dir is required.")
 
     runtime_args = TrainRuntimeArgs(
-        continue_training_run_dir=args.continue_training_run_dir,
+        continue_training_run_dir=(
+            resolve_run_dir(args.continue_training_run_dir)
+            if args.continue_training_run_dir is not None
+            else None
+        ),
     )
 
-    if runtime_args.continue_training_run_dir is not None:
-        cfg = load_run_config_from_run_dir(runtime_args.continue_training_run_dir)
+    if runtime_args.continue_training_run_dir is None:
+        assert args.train_config is not None
+
+        train_config_path = Path(VLM_CONFIG_DIR, args.train_config)
+        if not train_config_path.exists():
+            raise ValueError(f"The provided config file does not exist: {train_config_path}")
+
+        cfg_dict = load_config_file(train_config_path)
+
+        if args.add_base_configs:
+            # Give base configs that are passed via CLI higher prio
+            cfg_dict["base_configs"] = args.add_base_configs + (cfg_dict.get("base_configs") or [])
+
+        # Merge base configs into cfg_dict
+        cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
+
+        # Set to absolute path
+        cfg_dict["general"]["train_config"] = str(train_config_path)
+
+        # Validate the file config before registering CLI override options.
+        cfg = RunConfig.model_validate(cfg_dict)
+
+        # Setup output directory and log file
+        if is_main_process():
+            os.makedirs(cfg.general.output_dir, exist_ok=True)
+            shutil.copyfile(
+                cfg.general.train_config, os.path.join(cfg.general.output_dir, INPUT_CONFIG_FILENAME)
+            )
 
         log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
         setup_logger(log_file_path)  # Setup logger on every rank
 
+        logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
+
+    else:
+        cfg, config_warnings = load_run_config_from_run_dir(runtime_args.continue_training_run_dir)
+
+        log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
+        setup_logger(log_file_path)  # Setup logger on every rank
+
+        for message in config_warnings:
+            logger.warning_main(message)
+
         logger.info_main(f"Continuing training from run directory: {cfg.general.output_dir}")
 
-        cfg.merge_subconfigs_with_cli_args(config_cli_args)
-        cfg.general.output_dir = str(runtime_args.continue_training_run_dir)
-        cfg.apply_conditional_resets()
-
-        # Persist CLI overrides for future resumptions.
-        if is_main_process():
-            save_final_config(cfg)
-
-        return cfg, runtime_args
-
-    assert args.train_config is not None
-    train_config_path = Path(VLM_CONFIG_DIR, args.train_config)
-    if not train_config_path.exists():
-        raise ValueError(f"The provided config file does not exist: {train_config_path}")
-
-    cfg_dict = load_config_file(train_config_path)
-
-    if args.add_base_configs:
-        # Give base configs that are passed via CLI higher prio
-        cfg_dict["base_configs"] = args.add_base_configs + (cfg_dict.get("base_configs") or [])
-
-    # Merge base configs into cfg_dict
-    cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
-
-    # Set to absolute path
-    cfg_dict["general"]["train_config"] = str(train_config_path)
-
-    # Validate the file config before registering CLI override options.
-    cfg = RunConfig.model_validate(cfg_dict)
-
-    # Setup output directory and log file
-    if is_main_process():
-        os.makedirs(cfg.general.output_dir, exist_ok=True)
-        shutil.copyfile(
-            cfg.general.train_config, os.path.join(cfg.general.output_dir, INPUT_CONFIG_FILENAME)
-        )
-
-    log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
-    setup_logger(log_file_path)  # Setup logger on every rank
-
-    logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
-    print(f"Successfully set up output directory at {cfg.general.output_dir}")
-
     cfg.merge_subconfigs_with_cli_args(config_cli_args)
+    if runtime_args.continue_training_run_dir is not None:
+        cfg.general.output_dir = str(runtime_args.continue_training_run_dir)
     cfg.apply_conditional_resets()
+    cfg.resolve_dataloader_workers(is_distributed, local_world_size)
 
     if is_main_process():
         save_final_config(cfg)
@@ -412,165 +341,21 @@ def setup_config_and_logging() -> tuple[RunConfig, TrainRuntimeArgs]:
     return cfg, runtime_args
 
 
-def ensure_wandb_config_logging():
-    """
-    Ensure that wandb properly logs hyperparameters in offline mode.
-    This function updates the wandb config with environment variables and additional metadata.
-    """
-    if wandb.run is not None:
-        # Add environment variables that are relevant to the training
-        env_config = {
-            "WANDB_MODE": os.getenv("WANDB_MODE", "online"),
-            "WANDB_DIR": os.getenv("WANDB_DIR", ""),
-            "SLURM_JOB_ID": os.getenv("SLURM_JOB_ID", ""),
-            "CUDA_VISIBLE_DEVICES": os.getenv("CUDA_VISIBLE_DEVICES", ""),
-            "NODE_COUNT": os.getenv("SLURM_NNODES", "1"),
-            "GPU_COUNT": os.getenv("GPUS_PER_NODE", "1"),
-        }
-
-        # Update wandb config with environment info
-        wandb.config.update({"environment": env_config}, allow_val_change=True)
-
-        # In offline mode, explicitly save the current config to ensure persistence
-        if os.getenv("WANDB_MODE", "online").lower() == "offline":
-            try:
-                # Force config to be saved by accessing and logging all current config values
-                config_dict = dict(wandb.config)
-
-                # Log a summary of the configuration
-                logger.info_main(
-                    f"Offline mode - ensuring config persistence. Total config keys: {len(config_dict)}"
-                )
-
-                # Re-update the config to ensure it's properly saved in offline mode
-                wandb.config.update(config_dict, allow_val_change=True)
-
-                # Save config to a backup JSON file in the run directory for extra safety
-                if hasattr(wandb.run, "dir") and wandb.run.dir:
-                    config_backup_path = os.path.join(
-                        wandb.run.dir, WANDB_CONFIG_BACKUP_FILENAME
-                    )
-                    try:
-                        save_json(config_dict, config_backup_path, default=str)
-                        logger.info_main(f"Config backup saved to: {config_backup_path}")
-                    except Exception as e:
-                        logger.warning_main(f"Could not save config backup: {e}")
-
-            except Exception as e:
-                logger.warning_main(f"Error in offline config handling: {e}")
-
-        # Log the configuration to ensure it's saved
-        logger.info_main(f"Updated wandb config with environment variables: {env_config}")
-        logger.info_main(f"Total config keys logged: {len(dict(wandb.config))}")
-
-
-def create_comprehensive_wandb_config(
-    vlm_model: AbstractVLMModel, cfg: RunConfig, world_size: int = 1, rank: int = 0
-):
-    """
-    Create a comprehensive configuration dictionary for WandB logging.
-    This ensures all hyperparameters are properly captured, especially for offline mode.
-    """
-    slurm_job_id = os.getenv("SLURM_JOB_ID", "local_run")
-    username = os.getenv("USER", "unknown_user")
-
-    # Start with basic model and training info
-    config_dict = {
-        "model_name": type(vlm_model).__name__,
-        "model_id": getattr(vlm_model, "model_id", "unknown"),
-        "run_config": cfg.model_dump(),
-        "slurm_job_id": slurm_job_id,
-        "username": username,
-        "timestamp": datetime.now().isoformat(),
-        "wandb_mode": os.getenv("WANDB_MODE", "online"),
-        "distributed_training": {
-            "world_size": world_size,
-            "rank": rank,
-            "is_distributed": world_size > 1,
-        },
-    }
-
-    # Add environment information
-    env_config = {
-        "WANDB_MODE": os.getenv("WANDB_MODE", "online"),
-        "WANDB_DIR": os.getenv("WANDB_DIR", ""),
-        "SLURM_JOB_ID": os.getenv("SLURM_JOB_ID", ""),
-        "CUDA_VISIBLE_DEVICES": os.getenv("CUDA_VISIBLE_DEVICES", ""),
-        "NODE_COUNT": os.getenv("SLURM_NNODES", "1"),
-        "GPU_COUNT": os.getenv("GPUS_PER_NODE", "1"),
-        "PYTHONPATH": os.getenv("PYTHONPATH", ""),
-        "TRANSFORMERS_OFFLINE": os.getenv("TRANSFORMERS_OFFLINE", ""),
-        "HF_DATASETS_OFFLINE": os.getenv("HF_DATASETS_OFFLINE", ""),
-        "MASTER_ADDR": os.getenv("MASTER_ADDR", ""),
-        "MASTER_PORT": os.getenv("MASTER_PORT", ""),
-        "WORLD_SIZE": os.getenv("WORLD_SIZE", "1"),
-        "RANK": os.getenv("RANK", "0"),
-        "LOCAL_RANK": os.getenv("LOCAL_RANK", "0"),
-    }
-    config_dict.update({"environment": env_config})
-
-    return config_dict
-
-
 def train_val_data_from_config(cfg: RunConfig):
-    vision_encoder_patch_size = cfg.model.vision_encoder.patch_size if cfg.model.vision_encoder else None
-
-    do_validation = cfg.data.val_dataset_json_path is not None
-
-    # Create datasets
-    if cfg.data.dataset_class_name:
-        dataset_class = cfg.data.get_dataset_class()
-    elif cfg.data.dataset_name == "amosmm":
-        # Use AMOSMM dataset
-        dataset_class = AMOSMMDataset
-    elif cfg.data.dataset_name == "ctrate":
-        # Use CTRATE dataset
-        if cfg.data.retrieval_json_path is not None:
-            if cfg.data.retrieval_use_image_in_prompt:
-                dataset_class = CTRATEDatasetRetrievalWithImage
-            else:
-                dataset_class = CTRATEDatasetRetrieval
-        else:
-            dataset_class = CTRATEDataset
-    elif cfg.data.dataset_name == "merlin":
-        if cfg.data.retrieval_json_path is not None:
-            if cfg.data.retrieval_use_image_in_prompt:
-                dataset_class = MerlinDatasetRetrievalWithImage
-            else:
-                dataset_class = MerlinDatasetRetrieval
-        else:
-            dataset_class = MerlinDataset
-    elif cfg.data.dataset_name == "toothfairy4":
-        dataset_class = ToothFairy4Dataset
-    else:
-        raise ValueError(f"Unknown dataset name: {cfg.data.dataset_name}")
-
-    train_dataset = dataset_class(  # type: ignore
-        cfg=cfg,
-        split="train",
-        n_samples=cfg.data.n_train_samples,
-        vision_encoder_patch_size=vision_encoder_patch_size,
+    train_dataset = create_dataset(cfg, split="train", n_samples=cfg.data.n_train_samples)
+    val_dataset = (
+        create_dataset(cfg, split="val", n_samples=cfg.data.n_val_samples)
+        if cfg.data.val_dataset_json_path is not None
+        else None
     )
-
-    val_dataset = dataset_class(  # type: ignore
-        cfg=cfg,
-        split="val",
-        n_samples=cfg.data.n_val_samples,
-        vision_encoder_patch_size=vision_encoder_patch_size,
-    ) if do_validation else None
-
-    callback_val_dataset = None
-    if val_dataset:
-        callback_val_dataset = dataset_class(  # type: ignore
-            cfg=cfg,
-            split="val",
-            n_samples=cfg.eval.callback_n_samples,
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
+    callback_val_dataset = (
+        create_dataset(cfg, split="val", n_samples=cfg.eval.callback_n_samples)
+        if val_dataset
+        else None
+    )
 
     if cfg.data.embedding_constant is not None:
         logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
-        print(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     logger.info_main(
         f"Loaded {len(train_dataset)} training samples and "
@@ -591,7 +376,9 @@ def train_val_data_from_config(cfg: RunConfig):
 def main():
     # Set up DDP before config validation so generated run paths can be shared across ranks.
     ddp_setup = setup_ddp()
-    cfg, runtime_args = setup_config_and_logging()
+    cfg, runtime_args = setup_config_and_logging(
+        is_distributed=ddp_setup[0], local_world_size=ddp_setup[4]
+    )
     checkpoint_plan = create_checkpoint_plan(cfg, runtime_args)
 
     # Pass the actual run directory to the submission script for subsequent (test-set) inference.
@@ -614,22 +401,7 @@ def main():
 
     seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
 
-    try:
-        vlm_model_class = VLM_REGISTRY[cfg.model.model_type].model_class
-    except KeyError:
-        raise ValueError(f"Unknown model type: {cfg.model.model_type}")
-
-    vlm_model = vlm_model_class(
-        model_cfg=cfg.model,
-        vision_input_type=cfg.data.vision_input_type,
-        vision_embed_dim=cfg.get_vision_embed_dim(),
-        vision_embed_size=cfg.get_vision_embed_size(),
-        text_only=cfg.data.text_only,
-        do_truncation=cfg.data.do_truncation,
-        truncate_after=cfg.data.truncate_after,
-        truncate_at=cfg.data.truncate_at,
-        local_files_only=cfg.general.local_files_only
-    )
+    vlm_model = create_model_wrapper(cfg)
 
     train_dataset, val_dataset, callback_val_dataset = train_val_data_from_config(cfg)
 

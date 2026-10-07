@@ -1,5 +1,4 @@
 import os
-import sys
 import argparse
 from argparse import Namespace
 from pathlib import Path
@@ -9,48 +8,39 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from vlm.configs.run_config import RunConfig
-from vlm.data.datasets import (
-        AMOSMMDataset,
-        CTRATEDataset,
-        MerlinDataset,
-        MerlinDatasetRetrieval,
-        MerlinDatasetRetrievalWithImage,
-        CTRATEDatasetRetrieval,
-        CTRATEDatasetRetrievalWithImage,
-        BonnDataset,
-        BonnDatasetRetrieval,
-        BonnDatasetRetrievalWithImage,
-        ToothFairy4Dataset,
-)
-from vlm.evaluation.eval_distributed_sampler import EvalDistributedSampler
-from vlm.models.abstract_vlm import AbstractVLMModel
+from vlm.utils.data.dataset_utils import create_dataset
+from vlm.data.dataloaders import create_eval_dataloader
+from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.utils import logger
 from vlm.utils.decoding import decode_generated_answers, decode_prompts
 from vlm.utils.ddp_utils import setup_ddp, gather_inference_outputs, is_main_process
-from vlm.utils.filter_batch import extract_batch_prompt_only
-from vlm.utils.helper import add_datetime_tag, seed_everything
-from vlm.configs.merging import recursive_dict_merge
-from vlm.utils.load_and_save_files import load_config_file, save_json, save_yaml
+from vlm.utils.data.filter_batch import extract_batch_prompt_only
+from vlm.utils.run_naming import add_datetime_tag
+from vlm.utils.seeding import seed_everything
+from vlm.utils.config.merging import recursive_dict_merge
+from vlm.utils.load_and_save_files import load_config_file, save_json
+from vlm.utils.training.checkpointing import save_final_config
 from vlm.utils.logging import setup_logger, log_banner
-from vlm.utils.paths import VLM_CONFIG_DIR, find_run_dir_in_output_dir
-from vlm.utils.local_staging import get_local_vision_input_path
+from vlm.utils.paths import VLM_CONFIG_DIR, resolve_run_dir
+from vlm.utils.data.local_staging import get_local_vision_input_path
 from eval import main as eval_main
 
 
 class UnifiedVLMInference:
     def __init__(
         self,
-        vlm_model: AbstractVLMModel,
+        vlm_model: AbstractVLWrapper,
         cfg: RunConfig,
         output_dir: str | Path,
         per_device_batch_size: int,
         num_dataloader_workers: int,
         max_new_tokens: int,
+        ddp_setup: tuple[bool, int, int, int, int] | None = None,
     ):
         """
         Initialize the unified VLM inference.
         Args:
-            vlm_model: An instance of a class derived from AbstractVLMModel
+            vlm_model: An instance of a class derived from AbstractVLWrapper
             cfg: The RunConfig instance from the training run
             output_dir: Directory to save inference outputs
         """
@@ -71,7 +61,7 @@ class UnifiedVLMInference:
             self.world_size,
             self.local_rank,
             self.local_world_size,
-        ) = setup_ddp()
+        ) = ddp_setup if ddp_setup is not None else setup_ddp()
 
     def inference(self, test_dataset):
         """
@@ -92,24 +82,16 @@ class UnifiedVLMInference:
                 find_unused_parameters=False,
             )
 
-            sampler = EvalDistributedSampler(
-                test_dataset,
-                num_replicas=self.world_size,
-                rank=self.rank,
-                shuffle=False,  # Usually False for evaluation/testing
-            )
-        else:
-            sampler = None
-
-        # Create dataloader
-        test_loader = torch.utils.data.DataLoader(
+        test_loader = create_eval_dataloader(
             test_dataset,
             batch_size=self.per_device_batch_size,
-            shuffle=False,
             num_workers=self.num_dataloader_workers,
-            sampler=sampler,
+            prefetch_factor=self.cfg.trainer.dataloader_prefetch_factor,
+            persistent_workers=self.cfg.trainer.dataloader_persistent_workers,
             collate_fn=self.vlm_model.collate_fn,
-            pin_memory=False,
+            is_distributed=self.is_distributed,
+            world_size=self.world_size,
+            rank=self.rank,
         )
 
         # Freeze all parameters
@@ -213,9 +195,9 @@ def parse_args() -> tuple[Namespace, list[str]]:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["best_metric", "best", "final"],
+        choices=["best", "final"],
         default="final",
-        help="When using --run_dir, choose which checkpoint to load: 'best_metric', 'best' or 'final'.",
+        help="When using --run_dir, choose which checkpoint to load: 'best' or 'final'.",
     )
 
     parser.add_argument(
@@ -255,25 +237,25 @@ def main(
     is_main: bool = True,
     config_cli_args: list[str] | None = None,
 ):
+    ddp_setup = setup_ddp()
     seed_everything(0)  # Set a fixed seed for reproducibility
 
     if args.run_dir:
-        run_dir = Path(args.run_dir)
-
-        # If 'run_dir' does not exist, search for it in the output directory.
-        if not run_dir.is_dir():
-            run_dir = find_run_dir_in_output_dir(str(run_dir))
-
-        vlm_model, cfg, ckpt_dir = AbstractVLMModel.load_from_run_dir(run_dir, args.mode)
+        run_dir = resolve_run_dir(args.run_dir)
+        vlm_model, cfg, ckpt_dir = AbstractVLWrapper.load_from_run_dir(run_dir, args.mode)
     else:  # if args.checkpoint_dir
         ckpt_dir = args.checkpoint_dir
-        vlm_model, cfg = AbstractVLMModel.load_from_checkpoint_dir(ckpt_dir)
+        vlm_model, cfg = AbstractVLWrapper.load_from_checkpoint_dir(ckpt_dir)
 
     # Moved this bevor `is_main`
     inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "inference_dir_suffix", ""))
 
-    log_file_name = add_datetime_tag("inference") + ".log"
-    log_file_path = Path(inference_output_dir, log_file_name)
+    # All ranks use rank 0's timestamp, even when model loading finishes at different times.
+    log_file_names = [add_datetime_tag("inference") + ".log" if is_main_process() else None]
+    if dist.is_available() and dist.is_initialized():
+        dist.broadcast_object_list(log_file_names, src=0)
+    assert log_file_names[0] is not None
+    log_file_path = Path(inference_output_dir, log_file_names[0])
     setup_logger(log_file_path)
 
     if is_main:  # we don't want to merge args if this was called by train.py
@@ -297,71 +279,10 @@ def main(
         cfg.data.vision_input_path = str(get_local_vision_input_path())
 
     cfg.data.vision_input_path = vision_input_path if vision_input_path else cfg.data.vision_input_path
-    vision_encoder_patch_size = cfg.model.vision_encoder.patch_size if cfg.model.vision_encoder else None
-
     logger.info_main(f"Using {cfg.eval.split} split for inference.")
-    cfg.data.do_sentence_shuffle = False
-    cfg.data.do_transforms = False
-    if cfg.data.dataset_name == "amosmm":
-        test_dataset = AMOSMMDataset(
-            cfg=cfg,
-            split=cfg.eval.split,
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
-    elif cfg.data.dataset_name == "ctrate":
-        if cfg.data.retrieval_json_path is not None:
-            if cfg.data.retrieval_use_image_in_prompt:
-                ctrate_dataset_class = CTRATEDatasetRetrievalWithImage
-            else:
-                ctrate_dataset_class = CTRATEDatasetRetrieval
-        else:
-            ctrate_dataset_class = CTRATEDataset
+    inference_dataset = create_dataset(cfg, split=cfg.eval.split)
 
-        test_dataset = ctrate_dataset_class(  # type: ignore
-            cfg=cfg,
-            split=cfg.eval.split,
-            n_samples=None,
-            vision_encoder_patch_size=vision_encoder_patch_size
-        )
-    elif cfg.data.dataset_name == "merlin":
-        if cfg.data.retrieval_json_path is not None:
-            if cfg.data.retrieval_use_image_in_prompt:
-                merlin_dataset_class = MerlinDatasetRetrievalWithImage
-            else:
-                merlin_dataset_class = MerlinDatasetRetrieval
-        else:
-            merlin_dataset_class = MerlinDataset
-
-        test_dataset = merlin_dataset_class(  # type: ignore
-            cfg=cfg,
-            split=cfg.eval.split,
-            n_samples=None,
-            vision_encoder_patch_size=vision_encoder_patch_size
-        )
-    elif cfg.data.dataset_name == "bonn":
-        if cfg.data.retrieval_json_path is not None:
-            if cfg.data.retrieval_use_image_in_prompt:
-                bonn_dataset_class = BonnDatasetRetrievalWithImage
-            else:
-                bonn_dataset_class = BonnDatasetRetrieval
-        else:
-            bonn_dataset_class = BonnDataset
-
-        test_dataset = bonn_dataset_class(
-            cfg=cfg,
-            split=cfg.eval.split,
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
-    elif cfg.data.dataset_name == "toothfairy4":
-        test_dataset = ToothFairy4Dataset(
-            cfg=cfg,
-            split=cfg.eval.split,
-            vision_encoder_patch_size=vision_encoder_patch_size,
-        )
-    else:
-        raise ValueError(f"Unsupported dataset name: {cfg.data.dataset_name}")
-
-    logger.info_main(f"Loaded {len(test_dataset)} inference samples")
+    logger.info_main(f"Loaded {len(inference_dataset)} inference samples")
 
     if cfg.data.embedding_constant is not None:
         logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
@@ -373,30 +294,22 @@ def main(
         cfg=cfg,
         output_dir=inference_output_dir,
         per_device_batch_size=cfg.eval.per_device_batch_size,
-        num_dataloader_workers=cfg.eval.num_dataloader_workers,
+        num_dataloader_workers=cfg.trainer.dataloader_num_workers,
         max_new_tokens=cfg.eval.max_new_tokens,
+        ddp_setup=ddp_setup,
     )
 
-    inference.inference(test_dataset)
+    inference.inference(inference_dataset)
     logger.remove()
 
     # Save configuration used for inference
     # Currently mostly dataset related configs could change - e.g. to evaluate OOD data etc
     if is_main_process():
-        final_config_path = os.path.join(inference_output_dir, "final_config.yml")
-        save_yaml(
-            {
-                "command": " ".join(sys.argv),
-                "run": cfg.model_dump()
-            },
-            final_config_path,
-            sort_keys=False
-        )
+        save_final_config(cfg, output_dir=inference_output_dir)
 
     if cfg.eval.run_eval and is_main_process():
         eval_args = argparse.Namespace(
             dataset_name = cfg.data.dataset_name,
-            task_type="RG" if cfg.data.dataset_name == "ctrate" else "VQA",  # TODO: temporary hardcode
             inference_dir=inference_output_dir,
             num_processes=cfg.eval.num_eval_processes
         )

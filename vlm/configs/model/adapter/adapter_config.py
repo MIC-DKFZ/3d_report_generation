@@ -1,9 +1,9 @@
-from vlm.adapters.base import AdapterBase
+from vlm.models.adapters.base import AdapterBase
 from vlm.configs.base import RecursiveFindClassConfigBase
 from math import prod
 
 class AdapterClassConfig(RecursiveFindClassConfigBase):
-    folder_to_search = "vlm.adapters"
+    folder_to_search = "vlm.models.adapters"
 
     def to_instance(
             self,
@@ -13,7 +13,7 @@ class AdapterClassConfig(RecursiveFindClassConfigBase):
     ) -> AdapterBase:
         """
         Instantiate the resolved adapter class, evaluating any string expressions
-        in `class_kwargs` using the provided embedding parameters.
+        in 'class_kwargs' using the provided embedding parameters.
         """
 
         # These are always given by default and thus should not be provided in the config

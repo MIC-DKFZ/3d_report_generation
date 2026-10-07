@@ -6,8 +6,8 @@ import vlm
 from torch.utils.data import Dataset
 
 from vlm.configs.base import ConfigBase, RecursiveFindClassConfigBase
-from vlm.utils.vision_input_type import VisionInputType
-from vlm.utils.find_class_by_name import recursive_find_python_class
+from vlm.utils.data.vision_input_type import VisionInputType
+from vlm.utils.class_utils import recursive_find_python_class
 
 
 class EmbeddingTransformClassConfig(RecursiveFindClassConfigBase):
@@ -19,21 +19,28 @@ class DataConfig(ConfigBase):
     Dataset configuration.
     """
 
-    dataset_name: Literal["amosmm", "ctrate", "bonn", "merlin", "toothfairy4"] | None = Field(
+    dataset_name: str | None = Field(
         None, description="Name of the dataset."
     )
+    dataset_class_name: str | None = Field(
+        None, description="Dataset class name; inferred from dataset_name and retrieval settings if omitted."
+    )
+
     train_dataset_json_path: str | None = Field(
         None, description="Path to the train dataset JSON file."
     )
     val_dataset_json_path: str | None = Field(
         None, description="Path to the validation dataset JSON file."
     )
+    test_dataset_json_path: str | None = Field(
+        None, description="Path to the test dataset JSON file."
+    )
     vision_input_path: str | None = Field(
         None, description="Path to the vision input (either embeddings or images)."
     )
     vision_input_is_sharded: bool = Field(
         False,
-        description="Whether vision_input_path points to split folders containing tar shards.",
+        description="Whether 'vision_input_path' points to split folders containing tar shards.",
     )
     vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
     embed_dim: int | None = Field(
@@ -67,22 +74,20 @@ class DataConfig(ConfigBase):
         default_factory=list,
         description="Embedding-space augmentations to apply to precomputed embeddings during training.",
     )
-    do_sentence_shuffle: bool = Field(
-        True,
-        description="Shuffle the Report sentences for CTRATE or Questions for Amos VQA. The order of Impression and Findings is preserved.",
+    sentence_shuffle_p: float = Field(
+        0.0, ge=0, le=1,
+        description="Probability of shuffling report sentences or VQA options during training. "
+        "'0' disables shuffling. Findings and Impression sections remain in order.",
     )
-    sentence_shuffle_p: float = Field(0.5, description="Probability of randomly shuffling the order of sentences.")
 
-    do_truncation: bool = Field(False, description="Whether to truncate tokenized text inputs.")
-    truncate_after: str | None = Field(
-        None, description="Text marker after which tokenized inputs may be truncated."
-    )
-    truncate_at: int | None = Field(
-        None, description="Number of tokens to keep after the truncation marker."
+    max_response_tokens: int | None = Field(
+        None,
+        gt=0,
+        description="Maximum number of response tokens, excluding the prompt. 'None' disables truncation.",
     )
 
 
-    is_stacked_2d_embedding: bool = Field(False, description="Set to True for vision encoders such as 'Curia' "
+    is_stacked_2d_embedding: bool = Field(False, description="Set to 'True' for vision encoders such as 'Curia' "
                                                              "where the input embeddings are shaped "
                                                              "(n_slices, class_token + n_patch_tokens, embed_dim).")
     reduce_to_n_slices: int | None = Field(None, description="The number of slices to reduce the stacked 2D embeddings to.")
@@ -122,38 +127,41 @@ class DataConfig(ConfigBase):
     def validate_embed_dims_for_embedding_input(self):
         if self.vision_input_type == VisionInputType.EMBEDDING and (self.embed_dim is None or self.embed_size is None):
             raise ValueError("Missing parameters for embedding mode: "
-                             "please specify both 'embed_dim' and 'embed_size' when vision_input_type='embedding'.")
-        return self
-
-    @model_validator(mode="after")
-    def validate_sentence_shuffle(self):
-        if not self.do_sentence_shuffle:
-            self.sentence_shuffle_p = 0.0
+                             "please specify both 'embed_dim' and 'embed_size' when 'vision_input_type' is 'embedding'.")
         return self
 
     @model_validator(mode="after")
     def validate_if_stacked_2d_embeddings(self):
         if self.is_stacked_2d_embedding and self.reduce_to_n_slices is None:
             raise ValueError("Missing parameters for stacked 2D embeddings input: "
-                             "please specify 'reduce_to_n_slices' when is_stacked_2d_embedding=True.")
+                             "please specify 'reduce_to_n_slices' when 'is_stacked_2d_embedding=True'.")
         return self
 
     @model_validator(mode="after")
     def validate_embedding_augmentations(self):
         if self.embedding_transforms and self.vision_input_type != VisionInputType.EMBEDDING:
-            raise ValueError("embedding_transforms require vision_input_type='embedding'.")
+            raise ValueError("'embedding_transforms' require 'vision_input_type' to be 'embedding'.")
 
         return self
 
-    dataset_class_name: str | None = Field(
-        None, description="Name of the dataset class."
-    )
+    @model_validator(mode="after")
+    def resolve_dataset_class_name(self):
+        """Fill a missing class name from the dataset registry."""
+        if self.dataset_class_name:
+            return self
 
-    folder_to_search: str = "vlm.data"
+        from vlm.registries.dataset_registry import get_dataset_class
 
-    def get_dataset_class(self) -> Dataset:
-        return recursive_find_python_class(
-            folder=str(Path(vlm.__path__[0], *self.folder_to_search.split(".")[1:])),
+        self.dataset_class_name = get_dataset_class(self).__name__
+        return self
+
+    def get_dataset_class(self) -> type[Dataset]:
+        """Look up the configured dataset class by name."""
+        dataset_class = recursive_find_python_class(
+            folder=str(Path(vlm.__path__[0], "data")),
             class_name=self.dataset_class_name,
-            current_module=self.folder_to_search
+            current_module="vlm.data",
         )
+        if dataset_class is None:
+            raise ValueError(f"Unknown dataset class: {self.dataset_class_name}")
+        return dataset_class

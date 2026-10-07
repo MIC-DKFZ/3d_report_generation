@@ -3,17 +3,15 @@ from pathlib import Path
 from types import UnionType
 from typing import Any, ClassVar, Callable, Type, OrderedDict, List, Tuple, Union, get_type_hints, get_origin
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
-from vlm.utils.find_class_by_name import recursive_find_python_class
+from vlm.utils.class_utils import get_class_from_registry, recursive_find_python_class
 import vlm
 import inspect
 from inspect import Parameter
 
-from vlm.utils.helper import get_class_from_registry
-
 
 def _get_signatures(cls: Type) -> OrderedDict[str, Any]:
     """
-    Collects and merges the *type hints* of all __init__ arguments
+    Collects and merges the type hints of all '__init__' arguments
     from a class and its ancestors in the MRO.
     Returns: OrderedDict[str, Any] where Any is the type hint (e.g., int, list[str]).
     """
@@ -23,7 +21,7 @@ def _get_signatures(cls: Type) -> OrderedDict[str, Any]:
     all_hints: OrderedDict[str, Any] = OrderedDict()
 
     for current_cls in classes_to_check:
-        if '__init__' not in current_cls.__dict__:
+        if "__init__" not in current_cls.__dict__:
             continue
 
         init_method: Callable = current_cls.__init__
@@ -41,7 +39,7 @@ def _get_signatures(cls: Type) -> OrderedDict[str, Any]:
             continue
 
         for name in sig.parameters:
-            if name in ('self', 'args', 'kwargs'):
+            if name in ("self", "args", "kwargs"):
                 continue
 
             # 2. Merge: child class hints take precedence
@@ -132,7 +130,7 @@ class DynamicClassConfigBase(ConfigBase, ABC):
 
     def _sanitize_class_kwargs(self, signatures: OrderedDict[str, Any]):
         """
-        Checks and converts argument values in self.class_kwargs based on
+        Checks and converts argument values in 'self.class_kwargs' based on
         the type hints provided in the signatures.
         """
         for key, value in self.class_kwargs.items():
@@ -150,7 +148,7 @@ class RecursiveFindClassConfigBase(DynamicClassConfigBase):
     """
     folder_to_search: ClassVar[str]  # Overwrite in subclass;
                                      # Should point to the module where to start the recursive search
-                                     # for the target class. Example: 'vlm.adapters'
+                                     # for the target class. Example: 'vlm.models.adapters'
 
     def resolve_target(self):
         """Resolve and store the Python object after validation."""

@@ -28,7 +28,7 @@ from trl import SFTTrainer
 
 from vlm.training.schedulers.base import SchedulerBase
 from vlm.utils import logger
-from vlm.training.checkpoint_state import load_model_checkpoint, save_model_checkpoint
+from vlm.utils.training.checkpoint_state import load_model_checkpoint, save_model_checkpoint
 
 
 class VLMSFTTrainer(SFTTrainer):
@@ -501,8 +501,6 @@ class VLMSFTTrainer(SFTTrainer):
                             check_torch_load_is_safe()
                             self.optimizer, self.lr_scheduler, changed_requires_grad_state = self.scheduler.resume(
                                 model=self.model,
-                                optimizer=self.optimizer,
-                                lr_scheduler=self.lr_scheduler,
                                 global_step=self.state.global_step,
                                 max_steps=self.state.max_steps,
                                 checkpoint_dir=optimizer_scheduler_ckpt_dir,
