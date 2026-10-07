@@ -792,6 +792,13 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
             f"Image id: {image_id} can not be found in provided dataset_json make sure it exists"
         )
 
+    def __getitem__(self, index):
+        result = super().__getitem__(index)
+        result["formatted_qa"], result["formatted_qa_prompt_only"] = self.modify_input(
+            result["formatted_qa"], result["formatted_qa_prompt_only"], result
+        )
+        return result
+
     def modify_input(self, formatted_qa, formatted_qa_prompt_only, result):
         if self.n_retrieval_samples == 0:
             return formatted_qa, formatted_qa_prompt_only

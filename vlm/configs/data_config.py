@@ -145,6 +145,20 @@ class DataConfig(ConfigBase):
         self.dataset_class_name = get_dataset_class(self).__name__
         return self
 
+    @model_validator(mode="after")
+    def validate_text_only_retrieval(self):
+        if self.text_only:
+            from vlm.data.datasets import CTRATEDatasetRetrievalWithImage
+
+            if self.retrieval_use_image_in_prompt or issubclass(
+                self.get_dataset_class(), CTRATEDatasetRetrievalWithImage
+            ):
+                raise ValueError(
+                    "'text_only=True' cannot be used with image retrieval. "
+                    "Disable 'retrieval_use_image_in_prompt' and use a report-only dataset class."
+                )
+        return self
+
     def get_dataset_class(self) -> type[Dataset]:
         """Look up the configured dataset class by name."""
         dataset_class = recursive_find_python_class(
