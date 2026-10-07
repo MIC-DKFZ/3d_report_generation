@@ -1,5 +1,8 @@
 # Dataset structure
 
+Image preprocessing and training augmentation live in `vlm.data.image_transforms`.
+Dataset implementations use its `preprocess_3d_image` and `get_training_image_transforms` functions.
+
 ## Datasets
 
 New datasets should be implemented in `dataset.py`.  

@@ -11,7 +11,7 @@ import numpy as np
 import SimpleITK as sitk
 from einops import rearrange
 
-from vlm.utils.data.dataset_utils import preprocess_3d_image
+from vlm.data.image_transforms import preprocess_3d_image
 from vlm.utils.data.vision_input_type import VisionInputType
 
 
