@@ -35,6 +35,7 @@ class UnifiedVLMInference:
         per_device_batch_size: int,
         num_dataloader_workers: int,
         max_new_tokens: int,
+        ddp_setup: tuple[bool, int, int, int, int] | None = None,
     ):
         """
         Initialize the unified VLM inference.
@@ -60,7 +61,7 @@ class UnifiedVLMInference:
             self.world_size,
             self.local_rank,
             self.local_world_size,
-        ) = setup_ddp()
+        ) = ddp_setup if ddp_setup is not None else setup_ddp()
 
     def inference(self, test_dataset):
         """
@@ -236,6 +237,7 @@ def main(
     is_main: bool = True,
     config_cli_args: list[str] | None = None,
 ):
+    ddp_setup = setup_ddp()
     seed_everything(0)  # Set a fixed seed for reproducibility
 
     if args.run_dir:
@@ -248,8 +250,12 @@ def main(
     # Moved this bevor `is_main`
     inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "inference_dir_suffix", ""))
 
-    log_file_name = add_datetime_tag("inference") + ".log"
-    log_file_path = Path(inference_output_dir, log_file_name)
+    # All ranks use rank 0's timestamp, even when model loading finishes at different times.
+    log_file_names = [add_datetime_tag("inference") + ".log" if is_main_process() else None]
+    if dist.is_available() and dist.is_initialized():
+        dist.broadcast_object_list(log_file_names, src=0)
+    assert log_file_names[0] is not None
+    log_file_path = Path(inference_output_dir, log_file_names[0])
     setup_logger(log_file_path)
 
     if is_main:  # we don't want to merge args if this was called by train.py
@@ -290,6 +296,7 @@ def main(
         per_device_batch_size=cfg.eval.per_device_batch_size,
         num_dataloader_workers=cfg.trainer.dataloader_num_workers,
         max_new_tokens=cfg.eval.max_new_tokens,
+        ddp_setup=ddp_setup,
     )
 
     inference.inference(inference_dataset)
