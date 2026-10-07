@@ -11,8 +11,8 @@ from vlm.configs.general_config import GeneralConfig
 from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.scheduler.scheduler_config import SchedulerClassConfig
 from vlm.configs.trainer_config import SFTTrainerConfig
-from vlm.utils.config.cli import add_config_cli_args, add_new_class_kwarg_cli_args
-from vlm.utils.config.merging import recursive_dict_merge, unflatten_dict
+from vlm.configs.cli import add_config_cli_args, add_new_class_kwarg_cli_args
+from vlm.configs.merging import recursive_dict_merge, unflatten_dict
 from vlm.utils.ddp_utils import is_main_process
 from vlm.utils.run_naming import add_datetime_tag, get_random_uid
 from vlm.utils.class_utils import setattr_nested

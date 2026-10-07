@@ -11,7 +11,7 @@ import torch.nn as nn
 from transformers.trainer import OPTIMIZER_NAME, SCHEDULER_NAME, TRAINER_STATE_NAME
 
 from vlm.configs.run_config import RunConfig
-from vlm.utils.config.compatibility import normalize_saved_config
+from vlm.configs.compatibility import normalize_saved_config
 from vlm.utils.training.checkpoint_state import read_manifest
 from vlm.utils import logger
 from vlm.utils.paths import find_run_dir_in_output_dir, resolve_run_dir

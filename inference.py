@@ -17,7 +17,7 @@ from vlm.utils.ddp_utils import setup_ddp, gather_inference_outputs, is_main_pro
 from vlm.utils.data.filter_batch import extract_batch_prompt_only
 from vlm.utils.run_naming import add_datetime_tag
 from vlm.utils.seeding import seed_everything
-from vlm.utils.config.merging import recursive_dict_merge
+from vlm.configs.merging import recursive_dict_merge
 from vlm.utils.load_and_save_files import load_config_file, save_json
 from vlm.utils.training.checkpointing import save_final_config
 from vlm.utils.logging import setup_logger, log_banner

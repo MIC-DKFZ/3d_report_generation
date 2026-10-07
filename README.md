@@ -79,6 +79,10 @@ Files within these directories define parameters specific to their respective se
 
 If you would like to understand how configuration files are processed internally, what default values exist, or which arguments are supported, take a look at `vlm/configs/run_config.py`
 
+Shared configuration helpers live alongside the schemas in `vlm/configs`: `cli.py` handles
+dotted CLI overrides, `merging.py` merges configuration dictionaries, and `compatibility.py`
+migrates known legacy fields in saved run configurations.
+
 ### The Evaluation Configuration
 The `EvaluationConfig` manages both the validation callback during training and the **automatic inference and evaluation after training**.
 To enable both during training, set `eval.run_inference` and `eval.run_eval` to `True`.
