@@ -1,1 +1,1 @@
-"""Reusable dataset preprocessing implementations."""
+"""Reusable dataset preparation, mask cropping, and image resampling."""
