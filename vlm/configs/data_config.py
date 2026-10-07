@@ -1,4 +1,3 @@
-from typing import Literal
 from pydantic import Field, model_validator
 from pathlib import Path
 import vlm
@@ -59,9 +58,6 @@ class DataConfig(ConfigBase):
         False,
         description="Whether to only input text and omit any vision tokens."
     )
-    embedding_constant: float | Literal["random"] | None = Field(
-        None, description="Constant value for language-only baseline. Either a float or 'random'."
-    )
 
     n_train_samples: int | None = Field(None, description="Number of training samples to use.")
     n_val_samples: int | None = Field(1, description="Number of validation samples to use.")
@@ -115,12 +111,6 @@ class DataConfig(ConfigBase):
             normalized_path = self.val_dataset_json_path.strip().lower()
             if normalized_path in {"none", "null"}:
                 self.val_dataset_json_path = None
-        return self
-
-    @model_validator(mode="after")
-    def validate_vision_input_modifiers(self):
-        if self.text_only and self.embedding_constant is not None:
-            raise ValueError(f"'text_only' and 'embedding_constant' cannot be used together.")
         return self
 
     @model_validator(mode="after")

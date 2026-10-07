@@ -10,6 +10,7 @@ DEPRECATED_FIELDS: set[str] = {
     "eval.num_dataloader_workers",
     "eval.n_samples",
     "data.do_sentence_shuffle",
+    "data.embedding_constant",
     "data.do_truncation",
     "data.truncate_after",
 }

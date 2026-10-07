@@ -62,7 +62,6 @@ class MedicalImageDataset(Dataset, ABC):
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of qa pairs to include
-        embedding_constant (float or str, optional): If set, use a constant or random embedding
         do_resize (bool, optional): If True, resize images to a fixed size
         do_transforms (bool, optional): If True, apply data augmentations to images
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
@@ -83,7 +82,6 @@ class MedicalImageDataset(Dataset, ABC):
         self.vision_input_type = cfg.data.vision_input_type
         self.split = split
         self.text_only = cfg.data.text_only
-        self.embedding_constant = cfg.data.embedding_constant
         self.do_resize = cfg.data.do_resize
         self.do_transforms = cfg.data.do_transforms and self.split == "train"
         self.vision_encoder_patch_size = vision_encoder_patch_size
@@ -310,21 +308,9 @@ class MedicalImageDataset(Dataset, ABC):
         vision_input_path = self._get_vision_input_path(sample["image_id"])
         vision_input = self._load_vision_input(vision_input_path)
 
-        if self.embedding_constant is not None:
-            if type(self.embedding_constant) is float:
-                result["vision_input"] = np.full(
-                    vision_input.shape, self.embedding_constant, dtype=np.float32
-                )
-            elif type(self.embedding_constant) is str and self.embedding_constant == "random":
-                result["vision_input"] = np.random.rand(*vision_input.shape).astype(np.float32)
-            else:
-                raise ValueError(
-                    f"Unsupported embedding constant type: {type(self.embedding_constant)}"
-                )
-        else:
-            if self.embedding_transforms is not None:
-                vision_input = self.embedding_transforms(vision_input)
-            result["vision_input"] = vision_input
+        if self.embedding_transforms is not None:
+            vision_input = self.embedding_transforms(vision_input)
+        result["vision_input"] = vision_input
 
         return result
 
@@ -374,7 +360,6 @@ class AMOSMMDataset(MedicalImageDataset):
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of qa pairs to include
-        embedding_constant (float or str, optional): If set, use a constant or random embedding
         do_resize (bool, optional): If True, resize images to a fixed size
         do_transforms (bool, optional): If True, apply data augmentations to images
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
@@ -485,7 +470,6 @@ class CTRATEDataset(MedicalImageDataset):
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of qa pairs to include
-        embedding_constant (float or str, optional): If set, use a constant or random embedding
         do_resize (bool, optional): If True, resize images to a fixed size
         do_transforms (bool, optional): If True, apply data augmentations to images
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
@@ -903,28 +887,13 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
         # res = [image_in_case for same_case in res for image_in_case in same_case]
         return res
 
-    # TODO is this the same as in the parent class?
     def _load_embeddings(self, sample, result: Dict) -> Dict:
         vision_input_path = self._get_vision_input_path(sample["image_id"])
         vision_input = self._load_vision_input(vision_input_path)
 
-        if self.embedding_constant is not None:
-            if type(self.embedding_constant) is float:
-                result["vision_input"] = np.full(
-                    vision_input.shape, self.embedding_constant, dtype=np.float32
-                )
-            elif type(self.embedding_constant) is str and self.embedding_constant == "random":
-                result["vision_input"] = np.random.rand(*vision_input.shape).astype(np.float32)
-            else:
-                raise ValueError(
-                    f"Unsupported embedding constant type: {type(self.embedding_constant)}"
-                )
-        else:
-            if self.embedding_transforms is not None:
-                vision_input = [
-                    self.embedding_transforms(embedding) for embedding in vision_input
-                ]
-            result["vision_input"] = vision_input
+        if self.embedding_transforms is not None:
+            vision_input = [self.embedding_transforms(embedding) for embedding in vision_input]
+        result["vision_input"] = vision_input
 
         return result
 

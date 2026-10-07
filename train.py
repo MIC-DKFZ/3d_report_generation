@@ -354,9 +354,6 @@ def train_val_data_from_config(cfg: RunConfig):
         else None
     )
 
-    if cfg.data.embedding_constant is not None:
-        logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
-
     logger.info_main(
         f"Loaded {len(train_dataset)} training samples and "
         f"{len(val_dataset) if val_dataset is not None else 'no'} validation samples"

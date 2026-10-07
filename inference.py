@@ -284,9 +284,6 @@ def main(
 
     logger.info_main(f"Loaded {len(inference_dataset)} inference samples")
 
-    if cfg.data.embedding_constant is not None:
-        logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
-
     # Create inference object and run inference
     logger.info_main(f"Config:\n{cfg}")
     inference = UnifiedVLMInference(
