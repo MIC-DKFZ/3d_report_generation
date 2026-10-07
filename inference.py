@@ -8,8 +8,8 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from vlm.configs.run_config import RunConfig
-from vlm.utils.data.dataset_utils import create_dataset
 from vlm.data.dataloaders import create_eval_dataloader
+from vlm.data.factory import create_dataset
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.utils import logger
 from vlm.utils.decoding import decode_generated_answers, decode_prompts

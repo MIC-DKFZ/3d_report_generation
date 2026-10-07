@@ -9,6 +9,7 @@ from trl import SFTConfig
 
 from vlm.configs.run_config import RunConfig
 from vlm.data.dataloaders import create_eval_dataloader
+from vlm.data.factory import create_dataset
 from inference import main as inference_main
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
@@ -26,10 +27,7 @@ from vlm.utils.model_utils import create_model_wrapper
 from vlm.utils import logger
 from vlm.utils.ddp_utils import setup_ddp, is_main_process
 from vlm.utils.seeding import seed_everything
-from vlm.utils.data.dataset_utils import (
-    collect_image_ids_from_config_dataset_jsons,
-    create_dataset,
-)
+from vlm.utils.data.dataset_utils import collect_image_ids_from_config_dataset_jsons
 from vlm.utils.training.optimizer_and_params import count_parameters
 from vlm.utils.training.wandb_utils import finish_wandb, initialize_wandb
 from vlm.utils.data.local_staging import stage_vision_input_to_local

@@ -161,6 +161,12 @@ class DataConfig(ConfigBase):
 
     def get_dataset_class(self) -> type[Dataset]:
         """Look up the configured dataset class by name."""
+        from vlm.data import datasets
+
+        dataset_class = getattr(datasets, self.dataset_class_name, None)
+        if dataset_class is not None:
+            return dataset_class
+
         dataset_class = recursive_find_python_class(
             folder=str(Path(vlm.__path__[0], "data")),
             class_name=self.dataset_class_name,
