@@ -1,7 +1,7 @@
-import random
-import re
 from typing import Any, Dict, List, Type, TypedDict, TypeVar
 import pandas as pd
+
+from vlm.data.preprocessing.ctrate import clean_text, format_report
 
 ExtractorType = TypeVar("ExtractorType", bound="AMOSMMExtractor")
 
@@ -359,31 +359,12 @@ class CTRATEExtractor:
             report_text = sample["tasks"]["report_gen"]
             diagnosis_text = sample["tasks"]["diagnosis"]
 
-            # CT-RATE has many occurences of multiple spaces or a space right before a dot or semicolon,
-            # e.g. '   .   ', ".  " or " ; "
-            def clean_text(text):
-                # 1. remove whitespaces
-                text = text.strip()
-
-                # 2. collapse multiple spaces
-                text = re.sub(r" {2,}", " ", text)
-
-                # 3. remove space before . or ;
-                text = re.sub(r" +([.;])", r"\1", text)
-
-                return text
-
             report_text = clean_text(report_text)
-            findings_sec =f"Findings: {report_text}"
-
-            if pd.isna(diagnosis_text) or diagnosis_text == "Not given.":
-                impression_sec = ""
-            else:
+            if not pd.isna(diagnosis_text) and diagnosis_text != "Not given.":
                 diagnosis_text = clean_text(diagnosis_text)
-                impression_sec = f"\nImpression: {diagnosis_text}"
-
-            full_answer = f"{findings_sec}{impression_sec}"
-            # full_answer = f"Findings: {report_text}\nImpression: {diagnosis_text}"
+            full_answer = format_report(
+                report_text, None if pd.isna(diagnosis_text) else diagnosis_text
+            )
 
             extracted_sample = {
                 "image_id": sample["image_id"],

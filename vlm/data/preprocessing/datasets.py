@@ -121,6 +121,7 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
         overwrite (bool): Whether to overwrite existing preprocess dataset json file
         vqa_path (str, optional): Path to the VQA data directory
         error_path_txt (str, optional): Path to txt file with error cases, i.e. brain images
+        keep_missing_findings (bool): Retain impression-only historical reports.
     """
     def __init__(
         self,
@@ -130,10 +131,12 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
         max_workers=None,
         overwrite=False,
         vqa_path=None,
-        error_path_txt=None
+        error_path_txt=None,
+        keep_missing_findings=False,
     ):
         self.vqa_path = vqa_path
         self.error_path_txt = error_path_txt
+        self.keep_missing_findings = keep_missing_findings
         self.exclude_image_ids = ["train_1815_a_4", "train_2597_a_2"]
         super().__init__(
             dataset_path=dataset_path,
@@ -144,7 +147,7 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
         )
     
     @staticmethod
-    def _load_csv_row(row_data):
+    def _load_csv_row(row_data, keep_missing_findings=False):
         """Helper function to load a single CSV row for CTRATEDataset"""
         row, split, vqa_path = row_data
         
@@ -160,7 +163,9 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
 
         # Exclude cases with missing 'Findings' sections
         if pd.isna(findings):
-            return None
+            if not keep_missing_findings:
+                return None
+            findings = ""
 
         sample = {
             "image_id": image_id,
@@ -232,8 +237,12 @@ class CTRATEDatasetPreprocessor(MedicalImageDatasetPreprocessor):
         # Use ThreadPoolExecutor for parallel processing
         samples = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_row = {executor.submit(self._load_csv_row, row_data): idx 
-                        for idx, row_data in enumerate(row_data_list)}
+            future_to_row = {
+                executor.submit(
+                    self._load_csv_row, row_data, self.keep_missing_findings
+                ): idx
+                for idx, row_data in enumerate(row_data_list)
+            }
             
             for future in tqdm(as_completed(future_to_row), total=len(row_data_list), desc="Loading CSV rows"):
                 result = future.result()
