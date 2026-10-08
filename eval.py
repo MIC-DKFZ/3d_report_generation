@@ -8,7 +8,7 @@ import pandas as pd
 from vlm.evaluation.report_generation import lexical_metrics
 from vlm.registries.evaluation_registry import get_classifier_evaluator
 from vlm.utils import logger
-from vlm.utils.load_and_save_files import load_json, save_json
+from vlm.utils.serialization import load_json, save_json
 from vlm.utils.logging import log_banner, setup_logger
 from vlm.utils.run_naming import add_datetime_tag
 

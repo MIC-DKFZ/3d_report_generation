@@ -12,6 +12,7 @@ from vlm.data.dataloaders import create_eval_dataloader
 from vlm.data.factory import create_dataset
 from inference import main as inference_main
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
+from vlm.models.factory import create_model_wrapper
 from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
     TerminateOnNaNLossCallback, EveryNEpochsCallback
 from vlm.utils.training.checkpointing import (
@@ -23,17 +24,16 @@ from vlm.utils.training.checkpointing import (
     save_final_config,
 )
 from vlm.training.trainers import VLMSFTTrainer
-from vlm.utils.model_utils import create_model_wrapper
 from vlm.utils import logger
-from vlm.utils.ddp_utils import setup_ddp, is_main_process
+from vlm.utils.ddp import setup_ddp, is_main_process
 from vlm.utils.seeding import seed_everything
-from vlm.utils.data.dataset_utils import collect_image_ids_from_config_dataset_jsons
-from vlm.utils.training.optimizer_and_params import count_parameters
-from vlm.utils.training.wandb_utils import finish_wandb, initialize_wandb
-from vlm.utils.data.local_staging import stage_vision_input_to_local
-from vlm.utils.load_and_save_files import load_config_file, save_json
+from vlm.data.image_ids import collect_image_ids_from_config_dataset_jsons
+from vlm.training.parameters import count_parameters
+from vlm.training.wandb import finish_wandb, initialize_wandb
+from vlm.data.staging import stage_vision_input_to_local
+from vlm.utils.serialization import load_config_file, save_json
 from vlm.utils.logging import setup_logger, log_banner
-from vlm.utils.memory_utils import (
+from vlm.utils.memory import (
     aggressive_cleanup,
     log_memory_usage,
     setup_memory_efficient_training,

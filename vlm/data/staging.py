@@ -9,7 +9,7 @@ from typing import Iterable
 import torch.distributed as dist
 
 from vlm.utils import logger
-from vlm.utils.load_and_save_files import load_json
+from vlm.utils.serialization import load_json
 
 
 def format_bytes(num_bytes: int) -> str:

@@ -12,7 +12,7 @@ from vlm.configs.run_config import RunConfig
 from vlm.data.embedding_transforms import EmbeddingCompose
 from vlm.data.image_transforms import get_training_image_transforms
 from vlm.utils import logger
-from vlm.utils.data.vision_input_type import VisionInputType
+from vlm.data.types import VisionInputType
 
 from .vision import load_vision_input
 

@@ -4,7 +4,7 @@ import random
 import re
 from pathlib import Path
 
-from vlm.utils.data.vision_input_type import VisionInputType
+from vlm.data.types import VisionInputType
 from vlm.utils.regex_patterns import VQA_OPTION_LETTERS_IN_TEXT_PATTERN, VQA_OPTION_PATTERN
 
 from .base import MedicalImageDataset

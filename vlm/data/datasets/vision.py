@@ -12,7 +12,7 @@ import SimpleITK as sitk
 from einops import rearrange
 
 from vlm.data.image_transforms import preprocess_3d_image
-from vlm.utils.data.vision_input_type import VisionInputType
+from vlm.data.types import VisionInputType
 
 
 def convert_dtype(image: np.ndarray, target_dtype: Type[Number]) -> np.ndarray:

@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 import wandb
 
 from vlm.utils import logger
-from vlm.utils.ddp_utils import is_main_process
-from vlm.utils.load_and_save_files import save_json
+from vlm.utils.ddp import is_main_process
+from vlm.utils.serialization import save_json
 
 if TYPE_CHECKING:
     from vlm.configs.run_config import RunConfig

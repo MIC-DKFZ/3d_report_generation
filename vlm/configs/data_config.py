@@ -5,8 +5,8 @@ import vlm
 from torch.utils.data import Dataset
 
 from vlm.configs.base import ConfigBase, RecursiveFindClassConfigBase
-from vlm.utils.data.vision_input_type import VisionInputType
-from vlm.utils.class_utils import recursive_find_python_class
+from vlm.data.types import VisionInputType
+from vlm.utils.classes import recursive_find_python_class
 
 
 class EmbeddingTransformClassConfig(RecursiveFindClassConfigBase):

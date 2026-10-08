@@ -4,7 +4,7 @@ import random
 import re
 from pathlib import Path
 
-from vlm.utils.data.vision_input_type import VisionInputType
+from vlm.data.types import VisionInputType
 
 from .ctrate import CTRATEDataset
 

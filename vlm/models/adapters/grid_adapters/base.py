@@ -1,7 +1,7 @@
 from abc import ABC
 import torch
 from vlm.models.adapters.base import AdapterBase
-from vlm.utils.data.vision_input_type import VisionInputType
+from vlm.data.types import VisionInputType
 import numpy as np
 
 

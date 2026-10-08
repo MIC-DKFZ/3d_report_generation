@@ -4,8 +4,8 @@ import numpy as np
 from abc import ABC, abstractmethod
 
 from vlm.registries.norm_layer_registry import NORM_LAYER_REGISTRY
-from vlm.utils.class_utils import get_class_from_registry
-from vlm.utils.data.vision_input_type import VisionInputType
+from vlm.utils.classes import get_class_from_registry
+from vlm.data.types import VisionInputType
 
 
 class AdapterBase(nn.Module, ABC):

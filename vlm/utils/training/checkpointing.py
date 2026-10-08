@@ -15,7 +15,7 @@ from vlm.configs.compatibility import normalize_saved_config
 from vlm.utils.training.checkpoint_state import read_manifest
 from vlm.utils import logger
 from vlm.utils.paths import find_run_dir_in_output_dir, resolve_run_dir
-from vlm.utils.load_and_save_files import load_json, load_yaml, save_yaml
+from vlm.utils.serialization import load_json, load_yaml, save_yaml
 
 if TYPE_CHECKING:
     from vlm.models.abstract_vl_wrapper import AbstractVLWrapper

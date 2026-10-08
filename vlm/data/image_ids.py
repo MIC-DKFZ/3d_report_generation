@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from vlm.utils.load_and_save_files import load_json
+from vlm.utils.serialization import load_json
 
 
 def collect_image_ids_from_dataset_json(dataset_json_path: str | Path) -> set[str]:

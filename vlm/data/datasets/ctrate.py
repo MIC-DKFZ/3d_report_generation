@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from vlm.utils import logger
-from vlm.utils.data.vision_input_type import VisionInputType
+from vlm.data.types import VisionInputType
 
 from .base import MedicalImageDataset
 

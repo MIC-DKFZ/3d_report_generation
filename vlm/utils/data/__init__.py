@@ -1,1 +1,1 @@
-"""Utilities for data preparation and embedding transforms."""
+"""Shared helpers for data preparation."""
