@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,6 +81,26 @@ def load_run_config_from_run_dir(run_dir: str | Path) -> tuple[RunConfig, list[s
     return cfg, messages
 
 
+def _get_git_state() -> dict | None:
+    """Return the commit, branch and dirty flag of the code repository, or None if unavailable."""
+    repo_dir = Path(__file__).resolve().parent
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=repo_dir, capture_output=True, text=True, check=True, timeout=10
+        ).stdout.strip()
+
+    try:
+        return {
+            "commit": git("rev-parse", "HEAD"),
+            "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
+            "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
+        }
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning_main(f"Could not determine git state for '{FINAL_CONFIG_FILENAME}': {e}")
+        return None
+
+
 def save_final_config(
     cfg: RunConfig,
     output_dir: str | Path | None = None,
@@ -88,12 +109,13 @@ def save_final_config(
 ) -> None:
     """Save the effective config, defaulting to the configured run output directory.
 
-    If 'world_size' is given, the distributed training setup and the resulting global
-    train batch size are saved alongside (not inside) the run config.
+    The git state of the code repository is saved for reproducibility. If 'world_size' is
+    given, the distributed training setup and the resulting global train batch size are
+    saved alongside (not inside) the run config.
     """
     output_dir = cfg.general.output_dir.get_resolved_path() if output_dir is None else output_dir
     final_config_path = Path(output_dir, FINAL_CONFIG_FILENAME)
-    final_config: dict = {"command": " ".join(sys.argv)}
+    final_config: dict = {"command": " ".join(sys.argv), "git": _get_git_state()}
     if world_size is not None:
         per_device_batch_size = cfg.trainer.per_device_train_batch_size
         grad_accum_steps = cfg.trainer.gradient_accumulation_steps
