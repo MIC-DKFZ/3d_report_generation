@@ -80,18 +80,32 @@ def load_run_config_from_run_dir(run_dir: str | Path) -> tuple[RunConfig, list[s
     return cfg, messages
 
 
-def save_final_config(cfg: RunConfig, output_dir: str | Path | None = None) -> None:
-    """Save the effective config, defaulting to the configured run output directory."""
+def save_final_config(
+    cfg: RunConfig,
+    output_dir: str | Path | None = None,
+    world_size: int | None = None,
+    local_world_size: int | None = None,
+) -> None:
+    """Save the effective config, defaulting to the configured run output directory.
+
+    If 'world_size' is given, the distributed training setup and the resulting global
+    train batch size are saved alongside (not inside) the run config.
+    """
     output_dir = cfg.general.output_dir.get_resolved_path() if output_dir is None else output_dir
     final_config_path = Path(output_dir, FINAL_CONFIG_FILENAME)
-    save_yaml(
-        {
-            "command": " ".join(sys.argv),
-            "run": cfg.model_dump(),
-        },
-        final_config_path,
-        sort_keys=False,
-    )
+    final_config: dict = {"command": " ".join(sys.argv)}
+    if world_size is not None:
+        per_device_batch_size = cfg.trainer.per_device_train_batch_size
+        grad_accum_steps = cfg.trainer.gradient_accumulation_steps
+        final_config["training_setup"] = {
+            "world_size": world_size,
+            "local_world_size": local_world_size,
+            "per_device_train_batch_size": per_device_batch_size,
+            "gradient_accumulation_steps": grad_accum_steps,
+            "global_train_batch_size": per_device_batch_size * grad_accum_steps * world_size,
+        }
+    final_config["run"] = cfg.model_dump()
+    save_yaml(final_config, final_config_path, sort_keys=False)
 
 
 def create_checkpoint_plan(

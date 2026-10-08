@@ -140,7 +140,7 @@ def test_training_saves_the_settings_in_the_final_config(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(sys, "argv", ["train.py", "--train_config", "run.yml"])
 
-    loaded, _ = train.setup_config_and_logging(False, 1)
+    loaded, _ = train.setup_config_and_logging(False, 1, 1)
 
     saved = load_yaml(tmp_path / "run/final_config.yml")["run"]["data"]
     assert saved["vision_input_orientation"] == "LPS"

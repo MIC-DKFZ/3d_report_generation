@@ -289,7 +289,7 @@ def test_training_setup_preserves_train_config_handling_and_portable_output(
     monkeypatch.setattr(train, "setup_logger", log_files.append)
     monkeypatch.setenv("SLURM_JOB_ID", "1234567")
 
-    loaded, _ = train.setup_config_and_logging(False, 1)
+    loaded, _ = train.setup_config_and_logging(False, 1, 1)
 
     # The CLI suffix names the run directory, which holds the log and the input config.
     assert loaded.general.run_name.startswith("run__nv_reason_ct__")

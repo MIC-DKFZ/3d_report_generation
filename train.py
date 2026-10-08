@@ -281,7 +281,7 @@ class UnifiedVLMTrainer:
 
 
 def setup_config_and_logging(
-    is_distributed: bool, local_world_size: int
+    is_distributed: bool, world_size: int, local_world_size: int
 ) -> tuple[RunConfig, TrainRuntimeArgs]:
 
     args_parser = argparse.ArgumentParser(
@@ -371,7 +371,7 @@ def setup_config_and_logging(
     apply_saved_settings(cfg.data)
 
     if is_main_process():
-        save_final_config(cfg)
+        save_final_config(cfg, world_size=world_size, local_world_size=local_world_size)
 
     return cfg, runtime_args
 
@@ -442,7 +442,7 @@ def main():
     # Set up DDP before config validation so generated run paths can be shared across ranks.
     ddp_setup = setup_ddp()
     cfg, runtime_args = setup_config_and_logging(
-        is_distributed=ddp_setup[0], local_world_size=ddp_setup[4]
+        is_distributed=ddp_setup[0], world_size=ddp_setup[2], local_world_size=ddp_setup[4]
     )
     disable_cudnn_attention_on_hopper_if_affected()
     checkpoint_plan = create_checkpoint_plan(cfg, runtime_args)
