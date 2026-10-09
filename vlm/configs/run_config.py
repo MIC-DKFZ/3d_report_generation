@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import Field, model_validator
 import torch.distributed as dist
 from vlm.configs.base import ConfigBase
+from vlm.configs.paths import ConfigPath
 from vlm.configs.data_config import DataConfig
 from vlm.configs.evaluation_config import EvaluationConfig
 from vlm.configs.general_config import GeneralConfig
@@ -17,7 +18,7 @@ from vlm.utils.ddp import is_main_process
 from vlm.utils.run_naming import add_datetime_tag, get_random_uid
 from vlm.utils.classes import setattr_nested
 from vlm.utils.serialization import load_config_file
-from vlm.utils.paths import VLM_OUTPUT_DIR, VLM_CONFIG_DIR
+from vlm.utils.paths import VLM_CONFIG_DIR
 from vlm.data.types import VisionInputType
 from vlm.utils import logger
 
@@ -49,8 +50,6 @@ class RunConfig(ConfigBase):
         if self.eval.run_eval:
             if self.data.test_dataset_json_path is None:
                 raise ValueError("The 'dataset_json' has to be specified if 'run_eval=True'")
-            if not Path(self.data.test_dataset_json_path).is_file():
-                raise FileNotFoundError(f"The specified dataset JSON file does not exist: {self.data.test_dataset_json_path}")
         return self
 
     @model_validator(mode="after")
@@ -118,7 +117,7 @@ class RunConfig(ConfigBase):
 
         if self.model.model_id is None and not self.model.model_type in VLM_REGISTRY:
             raise ValueError(f"Unknown model type: {self.model.model_type}")
-        self.model.model_id = self.model.model_id or VLM_REGISTRY[self.model.model_type].model_id
+        self.model.model_id = ConfigPath(VLM_REGISTRY[self.model.model_type].model_id)
 
         return self
 
@@ -152,12 +151,14 @@ class RunConfig(ConfigBase):
         if self.general.output_dir:
             return self
 
-        self.general.output_dir = os.path.join(  # type: ignore[arg-type]
-            VLM_OUTPUT_DIR,
-            self.data.dataset_name,
-            os.path.basename(self.data.vision_input_path),
-            os.path.dirname(os.path.relpath(self.general.train_config, VLM_CONFIG_DIR)),
-            self.general.run_name
+        self.general.output_dir = ConfigPath(
+            os.path.join(
+                "${VLM_OUTPUT_DIR}",
+                self.data.dataset_name,
+                os.path.basename(self.data.vision_input_path.get_resolved_path()),
+                os.path.dirname(os.path.relpath(self.general.train_config, VLM_CONFIG_DIR)),
+                self.general.run_name
+            )
         )
 
         return self

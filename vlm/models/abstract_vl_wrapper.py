@@ -326,6 +326,7 @@ class AbstractVLWrapper(ABC):
         for message in config_warnings:
             logger.warning_main(message)
         cfg = RunConfig(**cfg_dict)
+        cfg.general.output_dir.set_runtime_path(ckpt_dir.parent)
 
         logger.info_main(f"Loading model from {str(ckpt_dir)}")
 

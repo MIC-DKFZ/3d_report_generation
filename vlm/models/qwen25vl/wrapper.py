@@ -25,7 +25,7 @@ class Qwen25VLWrapper(AbstractVLWrapper):
         cache_dir = get_hf_hub_cache_dir()
 
         self.model = Qwen25VLForConditionalGeneration.from_pretrained(
-            self.model_cfg.model_id,
+            self.model_cfg.model_id.get_resolved_path(),
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
             torch_dtype=torch.bfloat16,
@@ -36,7 +36,7 @@ class Qwen25VLWrapper(AbstractVLWrapper):
             self.downsample_factor = self.model_cfg.vision_encoder.downsample_factor
 
         self.processor = QwenVLProcessor3D.from_pretrained(
-            self.model_cfg.model_id,
+            self.model_cfg.model_id.get_resolved_path(),
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
         )

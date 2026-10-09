@@ -5,6 +5,7 @@ import vlm
 from torch.utils.data import Dataset
 
 from vlm.configs.base import ConfigBase, RecursiveFindClassConfigBase
+from vlm.configs.paths import ConfigPath
 from vlm.data.types import VisionInputType
 from vlm.utils.classes import recursive_find_python_class
 
@@ -25,16 +26,16 @@ class DataConfig(ConfigBase):
         None, description="Dataset class name; inferred from dataset_name and retrieval settings if omitted."
     )
 
-    train_dataset_json_path: str | None = Field(
+    train_dataset_json_path: ConfigPath | None = Field(
         None, description="Path to the train dataset JSON file."
     )
-    val_dataset_json_path: str | None = Field(
+    val_dataset_json_path: ConfigPath | None = Field(
         None, description="Path to the validation dataset JSON file."
     )
-    test_dataset_json_path: str | None = Field(
+    test_dataset_json_path: ConfigPath | None = Field(
         None, description="Path to the test dataset JSON file."
     )
-    vision_input_path: str | None = Field(
+    vision_input_path: ConfigPath | None = Field(
         None, description="Path to the vision input (either embeddings or images)."
     )
     vision_input_is_sharded: bool = Field(
@@ -93,7 +94,7 @@ class DataConfig(ConfigBase):
         description="Add a suffix to the image IDs provided in the dataset JSON. "
         "WARNING: Only works for CTRATE embeddings.",
     )
-    retrieval_json_path: str | None = Field(
+    retrieval_json_path: ConfigPath | None = Field(
         None, description="Path to the retrieval JSON file mapping for the respective dataset."
     )
 
@@ -107,8 +108,8 @@ class DataConfig(ConfigBase):
 
     @model_validator(mode="after")
     def maybe_set_val_dataset_json_path_to_none(self):
-        if isinstance(self.val_dataset_json_path, str):
-            normalized_path = self.val_dataset_json_path.strip().lower()
+        if self.val_dataset_json_path is not None:
+            normalized_path = self.val_dataset_json_path.expression.strip().lower()
             if normalized_path in {"none", "null"}:
                 self.val_dataset_json_path = None
         return self

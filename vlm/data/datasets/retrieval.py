@@ -28,12 +28,14 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
         )
         # FIXME: not sure how to handle the case where the training samples are limited by `n_train_samples`
         # E.g. a check would be needed that the image IDs of thre retrieval json are all included in the training subset
-        self.retrieval_json_path = Path(cfg.data.retrieval_json_path)
+        self.retrieval_json_path = Path(cfg.data.retrieval_json_path.get_resolved_path())
         # TODO: provide this part of the cfg
         self.n_retrieval_samples = int(cfg.data.retrieval_n_samples)
         self.maybe_add_vision_tokens = ""
         if self.split in ["val", "test"]:
-            self.dataset_json_path_for_retrieval = Path(cfg.data.train_dataset_json_path)
+            self.dataset_json_path_for_retrieval = Path(
+                cfg.data.train_dataset_json_path.get_resolved_path()
+            )
             with open(self.dataset_json_path_for_retrieval, "r") as f:
                 self.samples_retrieval = json.load(f)
         elif self.split == "train":

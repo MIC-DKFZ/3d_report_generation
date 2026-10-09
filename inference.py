@@ -8,6 +8,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from vlm.configs.run_config import RunConfig
+from vlm.configs.paths import ConfigPath
 from vlm.data.dataloaders import create_eval_dataloader
 from vlm.data.factory import create_dataset
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
@@ -275,10 +276,16 @@ def main(
         # CLI values take precedence over file overrides.
         cfg.merge_subconfigs_with_cli_args(config_cli_args or [])
 
-    if getattr(args, "is_staged", False):
-        cfg.data.vision_input_path = str(get_local_vision_input_path())
+    cfg.general.output_dir.set_runtime_path(Path(ckpt_dir).parent)
 
-    cfg.data.vision_input_path = vision_input_path if vision_input_path else cfg.data.vision_input_path
+    if getattr(args, "is_staged", False):
+        vision_input_path = vision_input_path or str(get_local_vision_input_path())
+
+    if vision_input_path:
+        if cfg.data.vision_input_path is None:
+            cfg.data.vision_input_path = ConfigPath(vision_input_path)
+        else:
+            cfg.data.vision_input_path.set_runtime_path(vision_input_path)
     logger.info_main(f"Using {cfg.eval.split} split for inference.")
     inference_dataset = create_dataset(cfg, split=cfg.eval.split)
 

@@ -1,9 +1,8 @@
-from pathlib import Path
-from typing import Literal
 from pydantic import Field
 
 from vlm.models.adapters.base import AdapterBase
 from vlm.configs.base import ConfigBase
+from vlm.configs.paths import ConfigPath
 from vlm.configs.model.adapter.adapter_config import AdapterClassConfig
 from vlm.configs.model.trainable_params.trainable_params_config import TrainableParamsConfig
 from vlm.configs.model.vision_encoder_config import VisionEncoderClassConfig
@@ -11,7 +10,7 @@ from vlm.models.vision_encoders.base import VisionEncoderBase
 
 class ModelConfig(ConfigBase):
     model_type: str = Field(..., description="Type of VLM model to train.")
-    model_id: str | None = Field(None, description="Model ID or path.")
+    model_id: ConfigPath | None = Field(None, description="Model ID or path.")
 
     vision_encoder: VisionEncoderClassConfig | None = Field(
         None,

@@ -77,13 +77,13 @@ def load_run_config_from_run_dir(run_dir: str | Path) -> tuple[RunConfig, list[s
     cfg = RunConfig.model_validate(cfg_dict)
 
     # The CLI resume directory remains authoritative if the run was moved.
-    cfg.general.output_dir = str(run_dir)
+    cfg.general.output_dir.set_runtime_path(run_dir)
     return cfg, messages
 
 
 def save_final_config(cfg: RunConfig, output_dir: str | Path | None = None) -> None:
     """Save the effective config, defaulting to the configured run output directory."""
-    output_dir = cfg.general.output_dir if output_dir is None else output_dir
+    output_dir = cfg.general.output_dir.get_resolved_path() if output_dir is None else output_dir
     final_config_path = Path(output_dir, FINAL_CONFIG_FILENAME)
     save_yaml(
         {
@@ -124,7 +124,7 @@ def create_checkpoint_plan(
     """
     init_checkpoint = None
     if cfg.general.init_from_checkpoint:
-        init_source = Path(cfg.general.init_from_checkpoint)
+        init_source = Path(cfg.general.init_from_checkpoint.get_resolved_path())
         if init_source.is_absolute():
             init_checkpoint = init_source
             if not init_checkpoint.is_dir():

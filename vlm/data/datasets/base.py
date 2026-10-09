@@ -46,7 +46,9 @@ class MedicalImageDataset(Dataset, ABC):
 
         self.n_samples = n_samples
 
-        self.vision_input_path = Path(cfg.data.vision_input_path)
+        self.vision_input_path = (
+            Path(cfg.data.vision_input_path.get_resolved_path()) if not cfg.data.text_only else None
+        )
         self.vision_input_type = cfg.data.vision_input_type
         self.split = split
         self.text_only = cfg.data.text_only
@@ -58,11 +60,11 @@ class MedicalImageDataset(Dataset, ABC):
         self.embedding_transforms = self._build_embedding_transforms(cfg)
 
         if self.split == "train":
-            self.dataset_json_path = Path(cfg.data.train_dataset_json_path)
+            self.dataset_json_path = Path(cfg.data.train_dataset_json_path.get_resolved_path())
         elif self.split == "val":
-            self.dataset_json_path = Path(cfg.data.val_dataset_json_path)
+            self.dataset_json_path = Path(cfg.data.val_dataset_json_path.get_resolved_path())
         elif self.split == "test":
-            self.dataset_json_path = Path(cfg.data.test_dataset_json_path)
+            self.dataset_json_path = Path(cfg.data.test_dataset_json_path.get_resolved_path())
 
         logger.info_main(
             f"Using vision_input_path for {self.__class__.__name__} ({self.split}): {self.vision_input_path}"

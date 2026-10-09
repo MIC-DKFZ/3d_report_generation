@@ -34,7 +34,7 @@ def collect_image_ids_from_config_dataset_jsons(cfg, splits: list[str]) -> set[s
         dataset_json_path = split_to_dataset_json_path[split]
         if dataset_json_path is None:
             continue
-        path = Path(dataset_json_path)
+        path = Path(dataset_json_path.get_resolved_path())
         if path in seen_paths:
             continue
         seen_paths.add(path)
