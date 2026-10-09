@@ -30,7 +30,7 @@ def initialize_wandb(
     # Only initialize wandb on the main process (rank 0) for DDP
     if is_main_process():
         wandb.init(
-            entity="mic-rocket-vlm",
+            entity=cfg.general.wandb_entity,
             project=cfg.general.wandb_project,
             name=cfg.general.run_name,
             reinit=True,
