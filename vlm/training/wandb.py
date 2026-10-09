@@ -30,6 +30,7 @@ def initialize_wandb(
     # Only initialize wandb on the main process (rank 0) for DDP
     if is_main_process():
         wandb.init(
+            mode=os.getenv("WANDB_MODE", "disabled"),  # type: ignore
             entity=cfg.general.wandb_entity,
             project=cfg.general.wandb_project,
             name=cfg.general.run_name,
