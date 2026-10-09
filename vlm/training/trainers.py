@@ -11,19 +11,16 @@ import torch.nn as nn
 from typing import Optional
 
 import torch.distributed as dist
-from accelerate import skip_first_batches, DistributedType
+from accelerate import skip_first_batches
 from accelerate.utils import is_torch_xla_available
 from transformers import TrainerState
 from transformers.debug_utils import DebugOption
-from transformers.integrations import deepspeed_init, deepspeed_load_checkpoint
-from transformers.integrations.tpu import tpu_spmd_dataloader
-from transformers.modeling_utils import unwrap_model
-from transformers.trainer import _is_peft_model, TRAINER_STATE_NAME
+from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import ExportableState
 from transformers.trainer_pt_utils import get_model_param_count
 from transformers.trainer_utils import speed_metrics, TrainOutput, SaveStrategy
 from transformers.training_args import OptimizerNames, ParallelMode
-from transformers.utils import is_sagemaker_mp_enabled, is_accelerate_available, check_torch_load_is_safe
+from transformers.utils import check_torch_load_is_safe
 from trl import SFTTrainer
 
 from vlm.training.schedulers.base import SchedulerBase
@@ -56,26 +53,13 @@ class VLMSFTTrainer(SFTTrainer):
         self.model_accepts_loss_kwargs = False
 
     def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
-        if (
-            self.model_weights_preloaded
-            and not self.is_deepspeed_enabled
-            and not self.is_fsdp_enabled
-            and not is_sagemaker_mp_enabled()
-        ):
+        if self.model_weights_preloaded:
             logger.info_main(
                 "Skipping Trainer model-weight loading because checkpoint weights were preloaded."
             )
             return
 
-        if (
-            not self.is_deepspeed_enabled
-            and not self.is_fsdp_enabled
-            and not is_sagemaker_mp_enabled()
-        ):
-            load_model_checkpoint(model if model is not None else self.model, resume_from_checkpoint)
-            return
-
-        super()._load_from_checkpoint(resume_from_checkpoint, model)
+        load_model_checkpoint(model if model is not None else self.model, resume_from_checkpoint)
 
     def _save(self, output_dir=None, state_dict=None):
         output_dir = output_dir or self.args.output_dir
@@ -84,10 +68,8 @@ class VLMSFTTrainer(SFTTrainer):
 
     def _load_best_model(self):
         checkpoint = self.state.best_model_checkpoint
-        if checkpoint is not None and not self.is_deepspeed_enabled and not self.is_fsdp_enabled:
+        if checkpoint is not None:
             load_model_checkpoint(self.accelerator.unwrap_model(self.model), checkpoint)
-            return
-        return super()._load_best_model()
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):
         """
@@ -166,19 +148,10 @@ class VLMSFTTrainer(SFTTrainer):
                 (self.model_wrapped,) = release_memory(self.model_wrapped)
                 self.model_wrapped = self.model
 
-                # Check for DeepSpeed *after* the initial pass and modify the config
-                if self.is_deepspeed_enabled:
-                    # Temporarily unset `self.args.train_batch_size`
-                    original_bs = self.args.per_device_train_batch_size
-                    self.args.per_device_train_batch_size = self._train_batch_size // max(1, self.args.n_gpu)
-                    self.propagate_args_to_deepspeed(True)
-                    self.args.per_device_train_batch_size = original_bs
             self.state.train_batch_size = self._train_batch_size
         logger.debug_main(f"Currently training with a batch size of: {self._train_batch_size}")
         # Data loader and number of training steps
         train_dataloader = self.get_train_dataloader()
-        if self.is_fsdp_xla_v2_enabled:
-            train_dataloader = tpu_spmd_dataloader(train_dataloader)
 
         # Setting up training control variables:
         # number of training epochs: num_train_epochs
@@ -217,23 +190,10 @@ class VLMSFTTrainer(SFTTrainer):
             else:
                 DebugUnderflowOverflow(self.model)
 
-        delay_optimizer_creation = is_sagemaker_mp_enabled() or self.is_fsdp_xla_enabled or self.is_fsdp_enabled
-
-        # Can't delay optimizer creation when using FSDP2: https://github.com/huggingface/accelerate/blob/3f636d626063ffcf9a337c7d3624d61b7d187d59/src/accelerate/accelerator.py#L1404
-        is_fsdp2 = self.is_fsdp_enabled and (getattr(self.accelerator.state.fsdp_plugin, "fsdp_version", 1) == 2)
-        if is_fsdp2:
-            delay_optimizer_creation = False
-
         # We need to reset the scheduler, as its parameters may be different on subsequent calls
         if self._created_lr_scheduler:
             self.lr_scheduler = None
             self._created_lr_scheduler = False
-
-        if self.is_deepspeed_enabled:
-            self.optimizer, self.lr_scheduler = deepspeed_init(self, num_training_steps=max_steps)
-
-        if not delay_optimizer_creation:
-            self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
         self.state = TrainerState(
             stateful_callbacks=[
@@ -247,7 +207,7 @@ class VLMSFTTrainer(SFTTrainer):
         self.state.compute_steps(args, max_steps)
 
         # Ensure scheduler metadata is initialized and an optimizer exists before
-        # the first accelerator/deepspeed prepare call.
+        # the first accelerator prepare call.
         self.scheduler.initialize(
             model=self.model,
             max_steps=max_steps
@@ -267,23 +227,8 @@ class VLMSFTTrainer(SFTTrainer):
 
         model = self._wrap_model(self.model_wrapped)
 
-        # as the model is wrapped, don't use `accelerator.prepare`
-        # this is for unhandled cases such as
-        # FSDP-XLA, SageMaker MP/DP, DataParallel, IPEX
+        # Already wrapped models (e.g. DataParallel) only need optimizer preparation.
         use_accelerator_prepare = model is self.model
-
-        if use_accelerator_prepare and self.is_fsdp_enabled:
-            # In case of auto_find_batch_size=True
-            # Remove FSDP wrapping from sub-models.
-            self.model = unwrap_model(self.model, recursive=True)
-
-        if delay_optimizer_creation:
-            if use_accelerator_prepare:
-                # configure fsdp plugin for qlora if any
-                self._fsdp_qlora_plugin_updates()
-                if self.accelerator.mixed_precision != "fp8":
-                    self.model = self.accelerator.prepare(self.model)
-            self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
         # prepare using `accelerator` prepare
         if use_accelerator_prepare:
@@ -298,32 +243,16 @@ class VLMSFTTrainer(SFTTrainer):
                     else:
                         model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
             else:
-                # to handle cases wherein we pass "DummyScheduler" such as when it is specified in DeepSpeed config.
+                # Prepare schedulers that do not expose a step method together with the model.
                 model, self.optimizer, self.lr_scheduler = self.accelerator.prepare(
                     self.model, self.optimizer, self.lr_scheduler
                 )
         else:
             self.optimizer = self.accelerator.prepare(self.optimizer)
 
-        if self.is_fsdp_enabled:
-            self.model = self.model_wrapped = model
-
         # for the rest of this function `model` is the outside model, whether it was wrapped or not
         if model is not self.model:
             self.model_wrapped = model
-
-        # backward compatibility
-        if self.is_deepspeed_enabled:
-            self.deepspeed = self.model_wrapped
-
-        # ckpt loading
-        if resume_from_checkpoint is not None:
-            if self.is_deepspeed_enabled:
-                deepspeed_load_checkpoint(
-                    self.model_wrapped, resume_from_checkpoint, load_module_strict=not _is_peft_model(self.model)
-                )
-            elif is_sagemaker_mp_enabled() or self.is_fsdp_enabled:
-                self._load_from_checkpoint(resume_from_checkpoint, self.model_wrapped)
 
         # Check if saved optimizer or scheduler states exist
         # NOTE:
@@ -334,8 +263,7 @@ class VLMSFTTrainer(SFTTrainer):
 
         # important: at this point:
         # self.model         is the Transformers Model
-        # self.model_wrapped is DDP(Transformers Model), Deepspeed(Transformers Model),
-        # FSDP(Transformers Model), Dynamo Optimized Module(Transformers Model) etc.
+        # self.model_wrapped is the wrapped model (e.g. DDP).
 
         # Train!
         logger.info_main("")
@@ -517,55 +445,20 @@ class VLMSFTTrainer(SFTTrainer):
                             )
 
                         if changed_requires_grad_state:
-                            # logger.warning_main("RE-WRAPPING MODEL")
-                            old_model_wrapped = self.model_wrapped
-
-                            if self.is_deepspeed_enabled:
-                                # When switching stages mid-training, we rebuild the DeepSpeed engine.
-                                # Tear down stale engine references first, otherwise old ZeRO hooks can
-                                # remain active and trigger duplicate gradient reductions.
-                                if old_model_wrapped is not None and hasattr(old_model_wrapped, "destroy"):
-                                    try:
-                                        old_model_wrapped.destroy()
-                                    except Exception as err:
-                                        logger.warning_main(
-                                            f"[SCHEDULER] Failed to destroy old DeepSpeed engine cleanly: {err}"
-                                        )
-
-                                if getattr(self.accelerator, "deepspeed_engine_wrapped", None) is not None:
-                                    self.accelerator.deepspeed_engine_wrapped = None
-
                             del self.model_wrapped
                             gc.collect()
                             torch.cuda.empty_cache()
 
                             self.accelerator.wait_for_everyone()
-                            if self.is_deepspeed_enabled:
-                                # DeepSpeed ZeRO stage >= 2 requires a real optimizer during prepare.
-                                # Passing only the model can trigger DummyOptim creation and fail.
-                                if hasattr(self.lr_scheduler, "step"):
-                                    model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
-                                else:
-                                    model, self.optimizer, self.lr_scheduler = self.accelerator.prepare(
-                                        self.model, self.optimizer, self.lr_scheduler
-                                    )
-                            else:
-                                model = self.accelerator.prepare(self.model)
-
+                            model = self.accelerator.prepare(self.model)
                             self.model_wrapped = model
-
-                            if self.is_deepspeed_enabled:
-                                self.deepspeed = self.model_wrapped
-
-                            # Keep all ranks in lockstep after model/optimizer re-prepare,
-                            # especially for DeepSpeed engine transitions on multi-node runs.
                             self.accelerator.wait_for_everyone()
 
-                        if not self.is_deepspeed_enabled and not getattr(self.optimizer, "_is_accelerate_prepared", False):
+                        if not getattr(self.optimizer, "_is_accelerate_prepared", False):
                             # logger.warning_main("RE-WRAPPING OPTIMIZER")
                             self.optimizer = self.accelerator.prepare(self.optimizer)
 
-                        if not self.is_deepspeed_enabled and not getattr(self.lr_scheduler, "_is_accelerate_prepared", False):
+                        if not getattr(self.lr_scheduler, "_is_accelerate_prepared", False):
                             # logger.warning_main("RE-WRAPPING LR-SCHEDULER")
                             self.lr_scheduler = self.accelerator.prepare(self.lr_scheduler)
                             self.lr_scheduler.step(self.state.global_step)  # Step once to set correct LR for
@@ -580,7 +473,6 @@ class VLMSFTTrainer(SFTTrainer):
                     context = (
                         functools.partial(self.accelerator.no_sync, model=model)
                         if i != len(batch_samples) - 1
-                        and self.accelerator.distributed_type != DistributedType.DEEPSPEED
                         else contextlib.nullcontext
                     )
                     with context():
@@ -608,9 +500,7 @@ class VLMSFTTrainer(SFTTrainer):
 
                         # Gradient clipping
                         if args.max_grad_norm is not None and args.max_grad_norm > 0:
-                            if is_sagemaker_mp_enabled() and args.fp16:
-                                _grad_norm = self.optimizer.clip_master_grads(args.max_grad_norm)
-                            elif self.use_apex:
+                            if self.use_apex:
                                 from apex import amp
 
                                 # Revert to normal clipping otherwise, handling Apex or full precision
@@ -630,16 +520,7 @@ class VLMSFTTrainer(SFTTrainer):
                                         args.max_grad_norm,
                                     )
 
-                            if (
-                                is_accelerate_available()
-                                and self.accelerator.distributed_type == DistributedType.DEEPSPEED
-                            ):
-                                grad_norm = model.get_global_grad_norm()
-                                # In some cases the grad norm may not return a float
-                                if hasattr(grad_norm, "item"):
-                                    grad_norm = grad_norm.item()
-                            else:
-                                grad_norm = _grad_norm
+                            grad_norm = _grad_norm
 
                         self.control = self.callback_handler.on_pre_optimizer_step(args, self.state, self.control)
 

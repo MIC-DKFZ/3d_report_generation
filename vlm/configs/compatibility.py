@@ -6,6 +6,7 @@ from typing import Any
 
 # Dotted paths of obsolete fields that are accepted but ignored in saved configs.
 DEPRECATED_FIELDS: set[str] = {
+    "trainer.deepspeed",
     "data.folder_to_search",
     "eval.num_dataloader_workers",
     "eval.n_samples",
