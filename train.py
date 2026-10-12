@@ -300,7 +300,7 @@ def setup_config_and_logging(
         # Merge base configs into cfg_dict
         cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
 
-        cfg_dict["general"]["train_config"] = str(train_config_path)
+        cfg_dict.setdefault("general", {})["train_config"] = str(train_config_path)
 
         # Validate the file config before registering CLI override options.
         cfg = RunConfig.model_validate(cfg_dict)
