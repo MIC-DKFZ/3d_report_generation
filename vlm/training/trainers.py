@@ -48,9 +48,27 @@ class VLMSFTTrainer(SFTTrainer):
         )
         self.model_weights_preloaded = model_weights_preloaded
 
-        # This flag is typically True by default.
-        # For some reason, this can result in the training loss not being normalized by the batch size.
-        self.model_accepts_loss_kwargs = False
+    def get_batch_samples(self, epoch_iterator, num_batches: int, device: torch.device):
+        """Count causal-LM targets across the actual accumulation window."""
+        batches = []
+        for _ in range(num_batches):
+            try:
+                batches.append(next(epoch_iterator))
+            except StopIteration:
+                break
+        if not batches:
+            return batches, None
+
+        # The loss predicts labels[..., 1:]; labels[..., 0] is never a target.
+        # Count only supervised targets, excluding prompt and padding labels.
+        num_items_in_batch = sum(
+            batch["labels"][..., 1:].ne(-100).sum() for batch in batches
+        ).to(device)
+        if self.args.average_tokens_across_devices:
+            num_items_in_batch = self.accelerator.gather(num_items_in_batch).sum()
+        if num_items_in_batch.item() == 0:
+            raise ValueError("The accumulation window contains no supervised tokens.")
+        return batches, num_items_in_batch
 
     def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
         if self.model_weights_preloaded:

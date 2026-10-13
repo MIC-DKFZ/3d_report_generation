@@ -13,6 +13,10 @@ class SFTTrainerConfig(ConfigBase):
     per_device_eval_batch_size: int = Field(1, ge=1, description="Batch size per device during evaluation.")
 
     gradient_accumulation_steps: int = Field(1, ge=1, description="Number of updates steps to accumulate before performing a backward/update pass.")
+    average_tokens_across_devices: bool = Field(
+        True,
+        description="Normalize training loss by supervised tokens across all DDP processes.",
+    )
     gradient_checkpointing: bool = Field(False, description="Enable gradient checkpointing to save memory at the cost of extra compute.")
     gradient_checkpointing_kwargs: dict = Field(default_factory=lambda: {"use_reentrant": False}, description="Additional keyword arguments for gradient checkpointing.")
 

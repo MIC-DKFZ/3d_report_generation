@@ -236,11 +236,10 @@ class Qwen3VLModel(HFQwen3VLModel, Qwen3VLPreTrainedModel):
 
 
 class Qwen3VLForConditionalGeneration(HFQwen3VLForConditionalGeneration, GenerationMixin):
+    accepts_loss_kwargs = True
     _checkpoint_conversion_mapping = {}
     _tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
     config: Qwen3VLConfig
-    # Reference: fix gemma3 grad acc #37208
-    accepts_loss_kwargs = False
 
     def __init__(self, config):
         Qwen3VLPreTrainedModel.__init__(self, config)
@@ -262,6 +261,7 @@ class Qwen3VLForConditionalGeneration(HFQwen3VLForConditionalGeneration, Generat
         logits_to_keep: Union[int, torch.Tensor] = 0,
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
+        num_items_in_batch: Optional[torch.Tensor] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, Qwen3VLCausalLMOutputWithPast]:
         """
@@ -292,7 +292,12 @@ class Qwen3VLForConditionalGeneration(HFQwen3VLForConditionalGeneration, Generat
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.text_config.vocab_size)
+            loss = self.loss_function(
+                logits=logits,
+                labels=labels,
+                vocab_size=self.config.text_config.vocab_size,
+                num_items_in_batch=num_items_in_batch,
+            )
 
         return Qwen3VLCausalLMOutputWithPast(
             loss=loss,

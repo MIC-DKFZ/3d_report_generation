@@ -111,6 +111,7 @@ class Gemma3TextVLModel(nn.Module):
 
 
 class Gemma3TextVLForConditionalGeneration(Gemma3ForCausalLM, GenerationMixin):
+    accepts_loss_kwargs = True
     _checkpoint_conversion_mapping = {}
     _tied_weights_keys = ["lm_head.weight"]
 
@@ -189,6 +190,7 @@ class Gemma3TextVLForConditionalGeneration(Gemma3ForCausalLM, GenerationMixin):
         pixel_values_videos: Optional[torch.FloatTensor] = None,
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
+        num_items_in_batch: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         outputs = self.model(
@@ -226,6 +228,7 @@ class Gemma3TextVLForConditionalGeneration(Gemma3ForCausalLM, GenerationMixin):
                 logits=logits,
                 labels=labels,
                 vocab_size=self.config.vocab_size,
+                num_items_in_batch=num_items_in_batch,
             )
 
         return CausalLMOutputWithPast(

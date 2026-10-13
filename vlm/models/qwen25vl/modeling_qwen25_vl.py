@@ -297,6 +297,7 @@ class Qwen25VLModel(HFQwen25VLModel, Qwen2_5_VLPreTrainedModel):
 
 
 class Qwen25VLForConditionalGeneration(HFQwen25VLForConditionalGeneration, GenerationMixin):
+    accepts_loss_kwargs = True
     _checkpoint_conversion_mapping = {
         "^visual": "model.visual",
         r"^model(?!\.(language_model|visual|vision_adapter|vision_encoder))": "model.language_model",
@@ -331,6 +332,7 @@ class Qwen25VLForConditionalGeneration(HFQwen25VLForConditionalGeneration, Gener
 
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
+        num_items_in_batch: Optional[torch.Tensor] = None,
 
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[tuple, Qwen2_5_VLCausalLMOutputWithPast]:
@@ -374,7 +376,12 @@ class Qwen25VLForConditionalGeneration(HFQwen25VLForConditionalGeneration, Gener
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size)
+            loss = self.loss_function(
+                logits=logits,
+                labels=labels,
+                vocab_size=self.config.vocab_size,
+                num_items_in_batch=num_items_in_batch,
+            )
 
         return Qwen2_5_VLCausalLMOutputWithPast(
             loss=loss,
