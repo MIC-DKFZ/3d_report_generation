@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Training and evaluation of vision-language models for report generation from 3D medical images."
 readme = "README.md"
 requires-python = ">=3.10"
+# Distribution-level expression; file-level license scope is documented in NOTICE.md.
+license = "CC-BY-SA-4.0 AND Apache-2.0"
+license-files = ["LICENSE.md", "NOTICE.md", "licenses/Apache-2.0.txt"]
 dependencies = [
     "accelerate==1.9.0",
     "einops>=0.8.1",
@@ -33,7 +36,7 @@ vlm-inference = "inference:main_cli"
 vlm-eval = "eval:main_cli"
 
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
