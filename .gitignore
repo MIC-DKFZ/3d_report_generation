@@ -1,16 +1,22 @@
-wandb/
-nnssl/
-
-# Python cache files
+# Python bytecode
 __pycache__/
 *.py[cod]
 *$py.class
-*.log
+
+# Development caches
+.pytest_cache/
+
+# Local data and generated result files
 *.pkl
 *.json
 *.csv
 
-# Distribution / packaging
+# Logs and experiment outputs
+*.log
+output/
+wandb/
+
+# Build and packaging artifacts
 dist/
 build/
 *.egg-info/
@@ -21,17 +27,21 @@ env/
 .env/
 .venv/
 
-# IDE specific files
-.idea/
-.vscode/
-*.swp
-.DS_Store
-
+# Local environment configuration
 .env
 .python-version
 
-Scripts/
-output/
+# Editor settings and temporary files
+.idea/
+.vscode/
+*.swp
 
+# macOS metadata
+.DS_Store
+
+# Local scripts
+Scripts/
+
+# Local coding-agent instructions
 AGENTS.md
 CLAUDE.md
