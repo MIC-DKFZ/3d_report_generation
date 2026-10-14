@@ -26,13 +26,10 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLModelOutputWithPast,
     Qwen2_5_VLPreTrainedModel,
     Qwen2_5_VLTextModel,
-    KwargsForCausalLM,
     Qwen2_5_VLCausalLMOutputWithPast,
 )
 from transformers.processing_utils import Unpack
-from transformers.utils import (
-    is_torchdynamo_compiling, can_return_tuple
-)
+from transformers.utils import TransformersKwargs, can_return_tuple, is_torchdynamo_compiling
 
 
 class Qwen25VLModel(HFQwen25VLModel, Qwen2_5_VLPreTrainedModel):
@@ -203,7 +200,7 @@ class Qwen25VLModel(HFQwen25VLModel, Qwen2_5_VLPreTrainedModel):
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
 
-        **kwargs: Unpack[KwargsForCausalLM],
+        **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, Qwen2_5_VLModelOutputWithPast]:
         r"""
         image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
@@ -326,6 +323,61 @@ class Qwen25VLForConditionalGeneration(HFQwen25VLForConditionalGeneration, Gener
         self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
         self.post_init()
 
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        vision_position_ids=None,
+        **kwargs,
+    ):
+        """Use adapter-generated 3D positions instead of upstream video-grid positions.
+
+        Unlike Qwen3-VL, which defers position calculation to forward(), upstream
+        Qwen2.5-VL prepares positions here, so this method also needs an override.
+        """
+        model_inputs = GenerationMixin.prepare_inputs_for_generation(
+            self,
+            input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            position_ids=position_ids,
+            use_cache=use_cache,
+            vision_position_ids=vision_position_ids,
+            **kwargs,
+        )
+        if position_ids is None:
+            if cache_position[0] == 0 or self.model.rope_deltas is None:
+                vision_positions, self.model.rope_deltas = self.model.get_rope_index(
+                    input_ids,
+                    vision_position_ids=vision_position_ids,
+                    attention_mask=attention_mask,
+                )
+            else:
+                text_positions = model_inputs["position_ids"]
+                batch_size, seq_length = text_positions.shape
+                delta = (cache_position[0] + self.model.rope_deltas).to(text_positions.device)
+                delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
+                vision_positions = torch.arange(seq_length, device=text_positions.device)
+                vision_positions = vision_positions.view(1, 1, -1).expand(3, batch_size, -1)
+                vision_positions = vision_positions + delta.unsqueeze(0)
+            # Keep sequential text positions separate from the three RoPE axes
+            # so Transformers can construct the causal attention mask correctly.
+            model_inputs["position_ids"] = torch.cat(
+                [model_inputs["position_ids"].unsqueeze(0), vision_positions], dim=0
+            )
+
+        if use_cache and cache_position[0] != 0:
+            model_inputs["pixel_values"] = None
+            model_inputs["pixel_values_videos"] = None
+        return model_inputs
+
     @can_return_tuple
     def forward(
         self,
@@ -350,7 +402,8 @@ class Qwen25VLForConditionalGeneration(HFQwen25VLForConditionalGeneration, Gener
         adapter_args: Optional[dict] = None,
         num_items_in_batch: Optional[torch.Tensor] = None,
 
-        **kwargs: Unpack[KwargsForCausalLM],
+        logits_to_keep: Union[int, torch.Tensor] = 0,
+        **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, Qwen2_5_VLCausalLMOutputWithPast]:
         """
         Our additional forward kwargs 'vision_position_ids' and 'adapter_kwargs' are passed on via the kwargs argument,
@@ -388,14 +441,17 @@ class Qwen25VLForConditionalGeneration(HFQwen25VLForConditionalGeneration, Gener
         )
 
         hidden_states = outputs[0]
-        logits = self.lm_head(hidden_states)
+        slice_indices = (
+            slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        )
+        logits = self.lm_head(hidden_states[:, slice_indices, :])
 
         loss = None
         if labels is not None:
             loss = self.loss_function(
                 logits=logits,
                 labels=labels,
-                vocab_size=self.config.vocab_size,
+                vocab_size=self.config.text_config.vocab_size,
                 num_items_in_batch=num_items_in_batch,
             )
 
