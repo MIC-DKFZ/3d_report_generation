@@ -14,8 +14,8 @@ from vlm.configs.model.trainable_params.trainable_module import TrainableModuleC
 from vlm.configs.run_config import RunConfig
 from vlm.models.factory import create_model_wrapper
 from vlm.configs.compatibility import normalize_saved_config
-from vlm.utils.training.checkpointing import resolve_ckpt_dir_in_run_dir
-from vlm.utils.training.checkpoint_state import (
+from vlm.training.checkpointing import resolve_ckpt_dir_in_run_dir
+from vlm.training.checkpoint_state import (
     initialize_checkpoint_state, load_model_checkpoint,
 )
 from vlm.utils import logger

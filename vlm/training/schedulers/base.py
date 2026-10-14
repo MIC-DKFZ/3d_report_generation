@@ -11,7 +11,7 @@ from torch.optim.lr_scheduler import _LRScheduler
 from transformers.trainer import SCHEDULER_NAME, OPTIMIZER_NAME
 
 from vlm.utils import logger
-from vlm.utils.training.checkpoint_state import record_trainable_checkpoint_keys
+from vlm.training.checkpoint_state import record_trainable_checkpoint_keys
 from vlm.utils.ddp import is_main_process
 from vlm.training.parameters import get_param_groups, log_param_groups
 

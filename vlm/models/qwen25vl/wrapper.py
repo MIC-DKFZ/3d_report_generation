@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from vlm.models.qwen25vl.processing_3d import QwenVLProcessor3D
 from vlm.models.qwen25vl.modeling_qwen25_vl import Qwen25VLForConditionalGeneration
-from vlm.utils.data.filter_batch import extract_raw_samples_from_batch
+from vlm.data.batches import extract_raw_samples_from_batch
 from vlm.utils.paths import get_hf_hub_cache_dir
 
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper

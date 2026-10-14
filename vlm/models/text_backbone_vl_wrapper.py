@@ -5,7 +5,7 @@ import torch
 from transformers import AutoTokenizer, PreTrainedModel
 
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
-from vlm.utils.data.filter_batch import extract_raw_samples_from_batch
+from vlm.data.batches import extract_raw_samples_from_batch
 from vlm.utils.paths import get_hf_hub_cache_dir
 
 

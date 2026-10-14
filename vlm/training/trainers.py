@@ -41,7 +41,7 @@ from trl import SFTTrainer
 
 from vlm.training.schedulers.base import SchedulerBase
 from vlm.utils import logger
-from vlm.utils.training.checkpoint_state import load_model_checkpoint, save_model_checkpoint
+from vlm.training.checkpoint_state import load_model_checkpoint, save_model_checkpoint
 
 
 class VLMSFTTrainer(SFTTrainer):

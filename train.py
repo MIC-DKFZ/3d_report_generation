@@ -15,7 +15,7 @@ from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.models.factory import create_model_wrapper
 from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
     TerminateOnNaNLossCallback, EveryNEpochsCallback
-from vlm.utils.training.checkpointing import (
+from vlm.training.checkpointing import (
     CheckpointPlan,
     TrainRuntimeArgs,
     create_checkpoint_plan,
