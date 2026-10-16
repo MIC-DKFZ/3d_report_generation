@@ -29,6 +29,12 @@ def parse_args() -> argparse.Namespace:
         help="Path to a specific directory where the inference results are located.",
     )
     parser.add_argument(
+        "--gt_labels_path",
+        type=Path,
+        default=None,
+        help="Optional reference label CSV; overrides Merlin's gt_labels.csv.",
+    )
+    parser.add_argument(
         "--num_processes",
         type=int,
         default=None,
@@ -79,8 +85,11 @@ def main(args):
     radbert_pred_df = radbert_gt_df = None
     evaluate_classifier = get_classifier_evaluator(args.dataset_name)
     if evaluate_classifier is not None:
+        classifier_options = {}
+        if getattr(args, "gt_labels_path", None) is not None:
+            classifier_options["gt_labels_path"] = args.gt_labels_path
         radbert_metrics, radbert_pred_df, radbert_gt_df = evaluate_classifier(
-            preds, gts, image_ids
+            preds, gts, image_ids, **classifier_options
         )
 
     aggregate_results.update(radbert_metrics)
