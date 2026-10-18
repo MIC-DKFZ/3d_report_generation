@@ -18,6 +18,7 @@ DEPRECATED_FIELDS: set[str] = {
 
 # Old dotted path -> current dotted path.
 REPLACED_FIELDS: dict[str, str] = {
+    "eval.calculate_radbert_score": "eval.calculate_classifier_score",
     "eval.test_dataset_json_path": "data.test_dataset_json_path",
     "data.truncate_at": "data.max_response_tokens",
 }

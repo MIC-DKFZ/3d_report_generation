@@ -8,8 +8,14 @@ class EvaluationConfig(ConfigBase):
     Configuration for the evaluation and inference during the callback and after training.
     """
 
-    # 'Callback' parameters
-    eval_every_n_epochs: float = Field(1, description="Run our own callback evaluation on the validation set every n epochs.")
+    eval_every_n_epochs: int = Field(
+        1,
+        ge=1,
+        description=(
+            "Evaluate every N whole epochs when trainer.eval_strategy='epoch'. "
+            "The final epoch is always evaluated."
+        ),
+    )
 
     # 'Callback' and 'After Training' parameters
     max_new_tokens: int = Field(1024, description="Maximum number of new tokens to generate.")
@@ -31,7 +37,10 @@ class EvaluationConfig(ConfigBase):
             "one deterministic random image version per unique image."
         ),
     )
-    calculate_radbert_score: bool = Field(False, description="Additionally calculate the radbert metrics on evaluation.")
+    calculate_classifier_score: bool = Field(
+        False,
+        description="Calculate dataset-specific classifier metrics during callback evaluation.",
+    )
 
     @model_validator(mode="after")
     def check_inference_eval(self):

@@ -98,11 +98,11 @@ class RunConfig(ConfigBase):
                 "'general.do_early_stopping=True' requires 'trainer.eval_strategy' to be 'steps' or 'epoch'."
             )
         if (
-            self.trainer.metric_for_best_model in {"eval_radbert_f1", "radbert_f1"}
-            and not self.eval.calculate_radbert_score
+            self.trainer.metric_for_best_model in {"eval_classifier_f1", "classifier_f1"}
+            and not self.eval.calculate_classifier_score
         ):
             raise ValueError(
-                "Early stopping is configured for 'eval_radbert_f1', but 'eval.calculate_radbert_score' is disabled."
+                "Early stopping is configured for 'eval_classifier_f1', but 'eval.calculate_classifier_score' is disabled."
             )
 
         return self

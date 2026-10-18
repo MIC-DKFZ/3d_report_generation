@@ -13,8 +13,13 @@ from vlm.data.factory import create_dataset
 from inference import main as inference_main
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.models.factory import create_model_wrapper
-from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
-    TerminateOnNaNLossCallback, EveryNEpochsCallback
+from vlm.training.callbacks import (
+    EveryNEpochsCallback,
+    LossLoggingCallback,
+    ReportEvaluationCallback,
+    TerminateOnNaNLossCallback,
+    WandbGroupedLRCallback,
+)
 from vlm.training.checkpointing import (
     CheckpointPlan,
     TrainRuntimeArgs,
@@ -140,12 +145,7 @@ class UnifiedVLMTrainer:
         ]
 
         if self.cfg.trainer.eval_strategy == "epoch":
-            if self.cfg.trainer.eval_steps is None:
-                raise ValueError(
-                    "trainer.eval_steps must be set when trainer.eval_strategy='epoch' "
-                    "because it controls EveryNEpochsCallback.n."
-                )
-            callbacks.append(EveryNEpochsCallback(n=self.cfg.trainer.eval_steps))
+            callbacks.append(EveryNEpochsCallback(n=self.cfg.eval.eval_every_n_epochs))
 
         if val_dataset is not None:
             callback_eval_dataset = callback_val_dataset if callback_val_dataset is not None else val_dataset
@@ -162,14 +162,12 @@ class UnifiedVLMTrainer:
             )
 
             callbacks.append(
-                PycocoevalCallback(  # type: ignore[arg-type]
+                ReportEvaluationCallback(  # type: ignore[arg-type]
                     eval_dataloader=callback_eval_dataloader,
                     max_new_tokens=self.cfg.eval.max_new_tokens,
-                    eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
                     tokenizer=self.vlm_model.tokenizer,
-                    processor=self.vlm_model.processor,
                     is_distributed=self.is_distributed,
-                    calculate_radbert_score=self.cfg.eval.calculate_radbert_score,
+                    calculate_classifier_score=self.cfg.eval.calculate_classifier_score,
                     dataset_name=self.cfg.data.dataset_name
                 )
             )
