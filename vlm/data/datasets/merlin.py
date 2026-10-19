@@ -2,21 +2,13 @@
 
 import random
 import re
-from pathlib import Path
-
-from vlm.data.types import VisionInputType
+from typing import ClassVar
 
 from .ctrate import CTRATEDataset
 
 
 class MerlinDataset(CTRATEDataset):
-    def _get_vision_input_path(self, image_id, split_path=None) -> Path:
-        if self.vision_input_type == VisionInputType.EMBEDDING:
-            return Path(self.vision_input_path / f"{image_id}{self.image_id_suffix}_embedding.bl2")
-        elif self.vision_input_type == VisionInputType.IMAGE:
-            return Path(self.vision_input_path / f"{image_id}.b2nd")
-        else:
-            raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
+    dataset_name: ClassVar[str] = "merlin"
 
     def shuffle_sentences(self, question: str, answer: str) -> tuple[str, str]:
         """Organ-aware sentence shuffling for CT reports.

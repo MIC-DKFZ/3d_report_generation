@@ -3,11 +3,13 @@
 import random
 import re
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 
-from vlm.utils import logger
+from vlm.data.paths import resolve_vision_directory
 from vlm.data.types import VisionInputType
+from vlm.utils import logger
 
 from .base import MedicalImageDataset
 
@@ -28,6 +30,8 @@ class CTRATEDataset(MedicalImageDataset):
         do_transforms (bool, optional): If True, apply data augmentations to images
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
+
+    dataset_name: ClassVar[str] = "ctrate"
 
     @staticmethod
     def _base_image_id(image_id: str) -> str:
@@ -53,25 +57,15 @@ class CTRATEDataset(MedicalImageDataset):
         return [samples[i] for i in selected_indices]
 
     def _get_vision_input_path(self, image_id, split_path=None) -> Path:
-        """Load vision input path for a given image ID"""
-        if not split_path:
-            if self.split == "train":
-                split_path = "train"
-            elif self.split == "val":
-                split_path = "train"
-            elif self.split == "test":
-                split_path = "valid"
-            else:
-                raise ValueError(f"Unknown split: {self.split}")
+        """Resolve an input path, optionally overriding the split for retrieved neighbors."""
+        directory = resolve_vision_directory(
+            self.vision_input_path, self.dataset_name, split_path or self.split
+        )
 
         if self.vision_input_type == VisionInputType.EMBEDDING:
-            return Path(
-                self.vision_input_path
-                / f"{split_path}_fixed"
-                / f"{image_id}{self.image_id_suffix}_embedding.bl2"
-            )
+            return directory / f"{image_id}{self.image_id_suffix}_embedding.bl2"
         if self.vision_input_type == VisionInputType.IMAGE:
-            return Path(self.vision_input_path / f"{split_path}_fixed" / f"{image_id}.b2nd")
+            return directory / f"{image_id}.b2nd"
         else:
             raise ValueError(f"Unsupported vision input type: {self.vision_input_type}")
 

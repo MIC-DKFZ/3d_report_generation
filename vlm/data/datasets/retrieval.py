@@ -172,7 +172,7 @@ class ImageRetrievalMixin(TextRetrievalMixin):
         nearest_neighbors_ids = nearest_neighbors_ids[:self.n_retrieval_samples]
 
         paths = [self._get_vision_input_path(image_id)]
-        # Retrieved neighbors are training cases stored under train_fixed, regardless of query split.
+        # Retrieved neighbors always use the training split's storage layout.
         paths.extend(
             self._get_vision_input_path(nn_id, split_path="train")
             for nn_id in nearest_neighbors_ids
