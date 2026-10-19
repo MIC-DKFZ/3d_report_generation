@@ -2544,6 +2544,7 @@ dependencies = [
     { name = "batchgeneratorsv2" },
     { name = "blosc2" },
     { name = "einops" },
+    { name = "faiss-cpu" },
     { name = "loguru" },
     { name = "matplotlib" },
     { name = "numpy" },
@@ -2576,9 +2577,6 @@ dev = [
     { name = "pylint" },
     { name = "pytest" },
 ]
-retrieval = [
-    { name = "faiss-cpu" },
-]
 
 [package.metadata]
 requires-dist = [
@@ -2588,7 +2586,7 @@ requires-dist = [
     { name = "black", marker = "extra == 'dev'" },
     { name = "blosc2", specifier = "==3.11.0" },
     { name = "einops", specifier = ">=0.8.1" },
-    { name = "faiss-cpu", marker = "extra == 'retrieval'" },
+    { name = "faiss-cpu" },
     { name = "isort", marker = "extra == 'dev'" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.10.6" },
@@ -2616,7 +2614,7 @@ requires-dist = [
     { name = "trl", specifier = "==0.20.0" },
     { name = "wandb", specifier = ">=0.21.0" },
 ]
-provides-extras = ["retrieval", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "wandb"
