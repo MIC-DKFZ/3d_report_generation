@@ -162,39 +162,27 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
         self.additional_instruction_prompt = "\nConsider those similar report/image pairs which were retrieved based on the query image."
         self.add_image = True
 
-
-    # TODO: instead of overriding the signature of the base class refactor base class and introduce hooks where this can be used
-    def _get_vision_input_path(self, image_id: str) -> List[Path]:
-        # get image_ids of most similar
+    def _get_vision_input_paths(self, image_id: str) -> List[Path]:
+        """Return the query path followed by its retrieved training-neighbor paths."""
         nearest_neighbors_ids = self.retrieval_dict[image_id]["k_nearest_neighbor"]
-        nearest_neighbors_ids = nearest_neighbors_ids[:min(len(nearest_neighbors_ids), self.n_retrieval_samples)]
+        nearest_neighbors_ids = nearest_neighbors_ids[:self.n_retrieval_samples]
 
-        # Bind the super method to a variable outside the list comprehension as else might lead to TypeError in some python versions
-        parent_get_vision_input_path = super()._get_vision_input_path
-
+        paths = [self._get_vision_input_path(image_id)]
         # Retrieved neighbors are training cases stored under train_fixed, regardless of query split.
-        paths = [parent_get_vision_input_path(nn_id, split_path="train") for nn_id in nearest_neighbors_ids]
-
-        paths.insert(0, parent_get_vision_input_path(image_id))  # add query image at first position
+        paths.extend(
+            self._get_vision_input_path(nn_id, split_path="train")
+            for nn_id in nearest_neighbors_ids
+        )
         return paths
 
-    def _load_vision_input(self, vision_input_path: List[Path]):
-        parent_load_vision_input = super()._load_vision_input
-        res = [parent_load_vision_input(p) for p in vision_input_path]
-        # FIXME: this function assumes that each input has the same size...
-        # assert [len(r.shape) == 5 for r in res], "Each loaded vision input should be 5D (B, C, H, W, D)"
-        # return np.concatenate(res, axis=0)  # concatenate along batch dimension
-        # Flatten again
-        # res = [image_in_case for same_case in res for image_in_case in same_case]
-        return res
-
     def _load_embeddings(self, sample, result: Dict) -> Dict:
-        vision_input_path = self._get_vision_input_path(sample["image_id"])
-        vision_input = self._load_vision_input(vision_input_path)
+        vision_input_paths = self._get_vision_input_paths(sample["image_id"])
+        vision_inputs = [self._load_vision_input(path) for path in vision_input_paths]
+        # FIXME: downstream batching still requires all vision inputs to have the same shape.
 
         if self.embedding_transforms is not None:
-            vision_input = [self.embedding_transforms(embedding) for embedding in vision_input]
-        result["vision_input"] = vision_input
+            vision_inputs = [self.embedding_transforms(embedding) for embedding in vision_inputs]
+        result["vision_input"] = vision_inputs
 
         return result
 
@@ -296,16 +284,7 @@ class MerlinDatasetRetrieval(MerlinDataset, CTRATEDatasetRetrieval):
 
 
 class MerlinDatasetRetrievalWithImage(MerlinDataset, CTRATEDatasetRetrievalWithImage):
-    # Use Merlin path conventions for both query and retrieved neighbor images.
-    def _get_vision_input_path(self, image_id: str, split_path=None) -> List[Path]:
-        nearest_neighbors_ids = self.retrieval_dict[image_id]["k_nearest_neighbor"]
-        nearest_neighbors_ids = nearest_neighbors_ids[
-            : min(len(nearest_neighbors_ids), self.n_retrieval_samples)
-        ]
-
-        paths = [MerlinDataset._get_vision_input_path(self, nn_id) for nn_id in nearest_neighbors_ids]
-        paths.insert(0, MerlinDataset._get_vision_input_path(self, image_id))
-        return paths
+    pass
 
 
 class BonnDatasetRetrieval(BonnDataset, CTRATEDatasetRetrieval):
