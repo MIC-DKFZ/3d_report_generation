@@ -1,13 +1,9 @@
 from pydantic import Field, model_validator
-from pathlib import Path
-import vlm
-
 from torch.utils.data import Dataset
 
 from vlm.configs.base import ConfigBase, RecursiveFindClassConfigBase
 from vlm.configs.paths import ConfigPath
 from vlm.data.types import VisionInputType
-from vlm.utils.classes import recursive_find_python_class
 
 
 class EmbeddingTransformClassConfig(RecursiveFindClassConfigBase):
@@ -21,9 +17,6 @@ class DataConfig(ConfigBase):
 
     dataset_name: str | None = Field(
         None, description="Name of the dataset."
-    )
-    dataset_class_name: str | None = Field(
-        None, description="Dataset class name; inferred from dataset_name and retrieval settings if omitted."
     )
 
     train_dataset_json_path: ConfigPath | None = Field(
@@ -139,43 +132,22 @@ class DataConfig(ConfigBase):
         return self
 
     @model_validator(mode="after")
-    def resolve_dataset_class_name(self):
-        """Fill a missing class name from the dataset registry."""
-        if self.dataset_class_name:
-            return self
-
-        from vlm.registries.dataset_registry import get_dataset_class
-
-        self.dataset_class_name = get_dataset_class(self).__name__
+    def validate_dataset_class(self):
+        """Validate the class selected by the dataset and retrieval settings."""
+        self.get_dataset_class()
         return self
 
     @model_validator(mode="after")
     def validate_text_only_retrieval(self):
-        if self.text_only:
-            from vlm.data.datasets.retrieval import ImageRetrievalMixin
-
-            if self.retrieval_use_image_in_prompt or issubclass(
-                self.get_dataset_class(), ImageRetrievalMixin
-            ):
-                raise ValueError(
-                    "'text_only=True' cannot be used with image retrieval. "
-                    "Disable 'retrieval_use_image_in_prompt' and use a report-only dataset class."
-                )
+        if self.text_only and self.retrieval_use_image_in_prompt:
+            raise ValueError(
+                "'text_only=True' cannot be used with image retrieval. "
+                "Disable 'retrieval_use_image_in_prompt' to use report-only retrieval."
+            )
         return self
 
     def get_dataset_class(self) -> type[Dataset]:
-        """Look up the configured dataset class by name."""
-        from vlm.data import datasets
+        """Select the registered class from the current dataset and retrieval settings."""
+        from vlm.registries.dataset_registry import get_dataset_class
 
-        dataset_class = getattr(datasets, self.dataset_class_name, None)
-        if dataset_class is not None:
-            return dataset_class
-
-        dataset_class = recursive_find_python_class(
-            folder=str(Path(vlm.__path__[0], "data")),
-            class_name=self.dataset_class_name,
-            current_module="vlm.data",
-        )
-        if dataset_class is None:
-            raise ValueError(f"Unknown dataset class: {self.dataset_class_name}")
-        return dataset_class
+        return get_dataset_class(self)
