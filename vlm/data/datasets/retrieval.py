@@ -12,7 +12,9 @@ from .ctrate import CTRATEDataset
 from .merlin import MerlinDataset
 
 
-class CTRATEDatasetRetrieval(CTRATEDataset):
+class TextRetrievalMixin:
+    """Add retrieved reports; place before the dataset class in the parent list."""
+
     def __init__(
         self,
         cfg: RunConfig,
@@ -143,7 +145,9 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
         return formatted_qa, formatted_qa_prompt_only
 
 
-class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
+class ImageRetrievalMixin(TextRetrievalMixin):
+    """Add retrieved images using the dataset's single-image path and loader methods."""
+
     def __init__(
         self,
         cfg: RunConfig,
@@ -185,6 +189,14 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
         result["vision_input"] = vision_inputs
 
         return result
+
+
+class CTRATEDatasetRetrieval(TextRetrievalMixin, CTRATEDataset):
+    pass
+
+
+class CTRATEDatasetRetrievalWithImage(ImageRetrievalMixin, CTRATEDataset):
+    pass
 
 
 class CTRATEDatasetRetrievalWithImagePrompt1(CTRATEDatasetRetrievalWithImage):
@@ -279,17 +291,17 @@ Now analyze the following:
         return formatted_qa, formatted_qa_prompt_only
 
 
-class MerlinDatasetRetrieval(MerlinDataset, CTRATEDatasetRetrieval):
+class MerlinDatasetRetrieval(TextRetrievalMixin, MerlinDataset):
     pass
 
 
-class MerlinDatasetRetrievalWithImage(MerlinDataset, CTRATEDatasetRetrievalWithImage):
+class MerlinDatasetRetrievalWithImage(ImageRetrievalMixin, MerlinDataset):
     pass
 
 
-class BonnDatasetRetrieval(BonnDataset, CTRATEDatasetRetrieval):
+class BonnDatasetRetrieval(TextRetrievalMixin, BonnDataset):
     pass
 
 
-class BonnDatasetRetrievalWithImage(BonnDataset, CTRATEDatasetRetrievalWithImage):
+class BonnDatasetRetrievalWithImage(ImageRetrievalMixin, BonnDataset):
     pass

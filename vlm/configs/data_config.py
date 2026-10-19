@@ -152,10 +152,10 @@ class DataConfig(ConfigBase):
     @model_validator(mode="after")
     def validate_text_only_retrieval(self):
         if self.text_only:
-            from vlm.data.datasets import CTRATEDatasetRetrievalWithImage
+            from vlm.data.datasets.retrieval import ImageRetrievalMixin
 
             if self.retrieval_use_image_in_prompt or issubclass(
-                self.get_dataset_class(), CTRATEDatasetRetrievalWithImage
+                self.get_dataset_class(), ImageRetrievalMixin
             ):
                 raise ValueError(
                     "'text_only=True' cannot be used with image retrieval. "
