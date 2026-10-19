@@ -26,20 +26,15 @@ class CTRATEDatasetRetrieval(CTRATEDataset):
             split=split,
             n_samples=n_samples,
         )
-        # FIXME: not sure how to handle the case where the training samples are limited by `n_train_samples`
-        # E.g. a check would be needed that the image IDs of thre retrieval json are all included in the training subset
         self.retrieval_json_path = Path(cfg.data.retrieval_json_path.get_resolved_path())
-        # TODO: provide this part of the cfg
         self.n_retrieval_samples = int(cfg.data.retrieval_n_samples)
         self.maybe_add_vision_tokens = ""
-        if self.split in ["val", "test"]:
-            self.dataset_json_path_for_retrieval = Path(
-                cfg.data.train_dataset_json_path.get_resolved_path()
-            )
-            with open(self.dataset_json_path_for_retrieval, "r") as f:
-                self.samples_retrieval = json.load(f)
-        elif self.split == "train":
-            self.samples_retrieval = self.samples
+        # Sampling limits query cases only; all splits share the full training reference pool.
+        self.dataset_json_path_for_retrieval = Path(
+            cfg.data.train_dataset_json_path.get_resolved_path()
+        )
+        with open(self.dataset_json_path_for_retrieval, "r") as f:
+            self.samples_retrieval = json.load(f)
 
         self.additional_instruction_prompt = "\nConsider those reports which were retrieved based on the query image."
         self.add_image = False
@@ -177,7 +172,7 @@ class CTRATEDatasetRetrievalWithImage(CTRATEDatasetRetrieval):
         # Bind the super method to a variable outside the list comprehension as else might lead to TypeError in some python versions
         parent_get_vision_input_path = super()._get_vision_input_path
 
-        # TODO: the fix with split path is VERY hacky and not sure if it is correct overall...
+        # Retrieved neighbors are training cases stored under train_fixed, regardless of query split.
         paths = [parent_get_vision_input_path(nn_id, split_path="train") for nn_id in nearest_neighbors_ids]
 
         paths.insert(0, parent_get_vision_input_path(image_id))  # add query image at first position

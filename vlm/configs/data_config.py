@@ -60,7 +60,10 @@ class DataConfig(ConfigBase):
         description="Whether to only input text and omit any vision tokens."
     )
 
-    n_train_samples: int | None = Field(None, description="Number of training samples to use.")
+    n_train_samples: int | None = Field(
+        None,
+        description="Number of training query samples to use. Retrieval uses the full training JSON.",
+    )
     n_val_samples: int | None = Field(1, description="Number of validation samples to use.")
 
     do_resize: bool = Field(
