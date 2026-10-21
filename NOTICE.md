@@ -1,16 +1,14 @@
 # Licensing and third-party notices
 
-VLM contains material under two licenses. Original project code, documentation,
-and configurations are covered by CC BY-SA 4.0 in `LICENSE.md`, except for the
-Apache-2.0 files listed below. Those files, including their VLM modifications,
-are covered by `licenses/Apache-2.0.txt` and retain applicable upstream notices.
-The package's `CC-BY-SA-4.0 AND Apache-2.0` expression describes the combined
-distribution; it does not apply both licenses to every file or offer a choice
-between them.
+VLM project code, documentation, and configurations are licensed under Apache-2.0
+in `LICENSE.md`. Adaptations retain applicable upstream copyright and
+modification notices.
 
 ## Hugging Face Transformers adaptations (Apache-2.0)
 
 Upstream project: https://github.com/huggingface/transformers
+Copyright 2018- The Hugging Face team. All rights reserved.
+
 Upstream paths below are relative to `src/transformers/`.
 
 | VLM file | Upstream source |

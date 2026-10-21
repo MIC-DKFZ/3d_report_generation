@@ -261,13 +261,7 @@ For more details, look at the `MainRankLoggingProtocol` at `utils/logging.py`.
 
 ## License
 
-Original project code, documentation, and configurations are licensed under
-[CC BY-SA 4.0](LICENSE.md), except files carrying Apache-2.0 headers.
-The Qwen, Gemma, and Phi model and processor implementations adapt code from
-[Hugging Face Transformers](https://github.com/huggingface/transformers/tree/main/src/transformers/models)
-for 3D medical image conditioning. The trainer in `vlm/training/trainers.py`
-also adapts Transformers code for VLM logging, custom schedulers, checkpointing,
-and token counting. These files, including their VLM modifications, retain their
-upstream copyright notices and [Apache 2.0 license](licenses/Apache-2.0.txt).
-See [NOTICE.md](NOTICE.md) for the file-level license scope and upstream provenance.
-External datasets, pretrained weights, and dependencies retain their own terms.
+Project code, documentation, and configurations are licensed under
+[Apache 2.0](LICENSE.md). See [NOTICE.md](NOTICE.md) for upstream attribution.
+External publications, datasets, pretrained models, and dependencies retain their
+respective licenses.
