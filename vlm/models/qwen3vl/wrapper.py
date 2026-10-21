@@ -31,6 +31,10 @@ class Qwen3VLWrapper(AbstractVLWrapper):
         )
 
         self._setup_vision_components()
+
+        # Uncomment to exactly reproduce RMR experiments; see README reproducibility section.
+        # self.model.post_init()
+
         if self.model_cfg.vision_encoder is not None:
             self.downsample_factor = self.model.model.vision_encoder.downsample_factor
 

@@ -259,6 +259,18 @@ Although this may be desirable in some cases, logging is typically handled by th
 To only log via the main rank, use the same logging functions with a `_main` suffix, for example, `logger.info_main(...)`.
 For more details, look at the `MainRankLoggingProtocol` at `utils/logging.py`.
 
+## Reproducing nnFoundation and RMR experiments
+
+The original nnFoundation/RMR runs enabled `self.model.post_init()` after vision
+setup. This replaces adapter linear layers' PyTorch defaults with zero-mean
+normal weights (std: Qwen's `initializer_range`) and zero biases, while skipping
+already initialized pretrained weights. It consistently reduces performance by
+a few F1 points, so the call is now commented out.
+
+**For reproducibility, uncomment `# self.model.post_init()` before training** in
+the [Qwen25VL](vlm/models/qwen25vl/wrapper.py) or
+[Qwen3VL](vlm/models/qwen3vl/wrapper.py) wrapper used by your configuration.
+
 ## License
 
 Project code, documentation, and configurations are licensed under
