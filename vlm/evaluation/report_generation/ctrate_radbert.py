@@ -15,7 +15,6 @@ from vlm.evaluation.report_generation.utils import compute_label_metrics, get_re
 
 
 MODEL_ID = "IAMJB/RadBERT-CT"
-MODEL_REVISION = "5070c0d5673009a17dbfc8adad99f0df1d862241"
 MAX_LENGTH = 512
 THRESHOLD = 0.5
 
@@ -46,9 +45,7 @@ class CTDataset(Dataset):
         self.data_files = data_files
         self.class_count = class_count
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            MODEL_ID, revision=MODEL_REVISION, do_lower_case=True
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, do_lower_case=True)
         self.max_length = MAX_LENGTH
         self.label_cols = label_cols
 
@@ -76,9 +73,7 @@ class RadBertClassifier(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            MODEL_ID, revision=MODEL_REVISION
-        )
+        self.model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
         if self.model.config.num_labels != len(LABEL_COLUMNS):
             raise ValueError(
                 f"CT-RATE checkpoint has {self.model.config.num_labels} labels, "

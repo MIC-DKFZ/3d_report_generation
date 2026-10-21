@@ -14,13 +14,13 @@ from sklearn.metrics import (
 )
 
 
-def _model_reference_labels_path(model_id, revision):
+def _model_reference_labels_path(model_id):
     source = Path(model_id)
     if source.is_dir():
         path = source / "gt_labels.csv"
         return path if path.is_file() else None
     try:
-        return Path(hf_hub_download(model_id, "gt_labels.csv", revision=revision))
+        return Path(hf_hub_download(model_id, "gt_labels.csv"))
     except EntryNotFoundError:
         return None
 
@@ -33,7 +33,6 @@ def get_reference_labels(
     default_gt_df=None,
     gt_labels_path=None,
     model_id=None,
-    model_revision=None,
 ) -> pd.DataFrame:
     """Use supplied labels, a CSV from the model, or classify reference reports."""
     if len(reports) != len(image_ids):
@@ -42,7 +41,7 @@ def get_reference_labels(
         labels = default_gt_df
     else:
         if gt_labels_path is None and model_id is not None:
-            gt_labels_path = _model_reference_labels_path(model_id, model_revision)
+            gt_labels_path = _model_reference_labels_path(model_id)
         if gt_labels_path is not None:
             return load_reference_labels(Path(gt_labels_path), image_ids, label_columns)
         labels = predict_labels(reports)

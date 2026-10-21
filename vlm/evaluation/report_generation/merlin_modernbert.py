@@ -14,7 +14,6 @@ from vlm.evaluation.report_generation.utils import compute_label_metrics, get_re
 
 
 MODEL_ID = "MIC-DKFZ/ModernBERT-Merlin"
-MODEL_REVISION = "3eb3aafc902a574fa58e8a3599c5556573f7c72f"
 MAX_LENGTH = 1024
 THRESHOLD = 0.5
 
@@ -27,7 +26,7 @@ class MerlinDataset(Dataset):
         self.class_count = class_count
         self.label_cols = label_cols
         self.max_length = max_length
-        self.tokenizer = AutoTokenizer.from_pretrained(hf_model_dir, revision=MODEL_REVISION)
+        self.tokenizer = AutoTokenizer.from_pretrained(hf_model_dir)
 
     def __len__(self):
         return len(self.data_files)
@@ -50,9 +49,7 @@ class MerlinBertClassifier(torch.nn.Module):
     def __init__(self, n_classes, hf_model_dir):
         super().__init__()
 
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            hf_model_dir, revision=MODEL_REVISION
-        )
+        self.model = AutoModelForSequenceClassification.from_pretrained(hf_model_dir)
         if self.model.config.num_labels != n_classes:
             raise ValueError(
                 f"MERLIN checkpoint has {self.model.config.num_labels} labels, expected {n_classes}"
@@ -100,7 +97,7 @@ class MerlinBertInference:
 def load_label_columns(model_id: str | Path | None = None) -> list[str]:
     """Read finding names in classifier-output order from the model config."""
     model_id = MODEL_ID if model_id is None else str(model_id)
-    config = AutoConfig.from_pretrained(model_id, revision=MODEL_REVISION)
+    config = AutoConfig.from_pretrained(model_id)
     mapping = config.id2label
     if not mapping or set(mapping) != set(range(config.num_labels)):
         raise ValueError("MERLIN config.id2label must map every output index to a finding")
@@ -175,7 +172,6 @@ def evaluate_reports(
         default_gt_df=default_gt_df,
         gt_labels_path=gt_labels_path,
         model_id=model_id,
-        model_revision=MODEL_REVISION,
     )
     pred_df = predict_labels(preds, model_id)
 
