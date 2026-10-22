@@ -1,0 +1,17 @@
+trainer:
+  eval_strategy: "no"
+  dataloader_num_workers: 6
+
+data:
+  answer_types:
+    - TEXT:
+      - REPORT_DIAGNOSIS
+  sentence_shuffle_p: 0.5
+  max_response_tokens: 1024
+
+eval:
+  mode: final
+  split: test
+  run_inference: True
+  run_eval: True
+  max_new_tokens: 2048

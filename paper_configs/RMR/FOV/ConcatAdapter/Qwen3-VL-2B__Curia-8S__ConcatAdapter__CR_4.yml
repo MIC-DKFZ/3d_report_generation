@@ -1,0 +1,17 @@
+base_configs:
+- bases/models/Qwen3-VL-2B_Adapter_LM.yml
+- bases/schedulers/AdapterDWUScheduler.yml
+- bases/ProjectDefaults.yml
+model:
+  adapter:
+    class_name: ConcatAdapter
+    class_kwargs:
+      reduce_block:
+      - 1
+      - 2
+      - 2
+      depth: 3
+scheduler:
+  class_kwargs:
+    adapter_lr: 0.001
+    lm_lr: 0.0003

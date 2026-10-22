@@ -1,0 +1,10 @@
+scheduler:
+  class_name: AdapterExtendedDWUScheduler
+  class_kwargs:
+    warmup_1_1_duration: 0.0625
+    warmup_2_duration: 0.0625
+  optimizer:
+    class_name: AdamW
+    class_kwargs:
+      weight_decay: 0.0
+      fused: True

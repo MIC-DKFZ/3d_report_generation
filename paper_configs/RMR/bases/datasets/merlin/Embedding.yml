@@ -1,0 +1,15 @@
+data:
+  dataset_name: merlin
+  vision_input_type: embedding
+  train_dataset_json_path: ${MERLIN_DATASET_JSONS}/merlin_v2_train.json
+  val_dataset_json_path: ${MERLIN_DATASET_JSONS}/merlin_v2_val.json
+  test_dataset_json_path: ${MERLIN_DATASET_JSONS}/merlin_v2_test.json
+
+trainer:
+  num_train_epochs: 32
+  metric_for_best_model: eval_classifier_f1
+  greater_is_better: true
+
+eval:
+  eval_every_n_epochs: 2
+  calculate_classifier_score: true

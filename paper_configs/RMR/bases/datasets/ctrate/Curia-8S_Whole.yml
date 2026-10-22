@@ -1,0 +1,7 @@
+base_configs:
+  - bases/datasets/ctrate/Embedding.yml
+
+data:
+  vision_input_path: ${VLM_EMBEDS}/CTRATE_Curia-8S_Whole
+  embed_dim: 768
+  embed_size: [8, 32, 32]

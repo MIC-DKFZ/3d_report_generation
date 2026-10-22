@@ -1,0 +1,32 @@
+model:
+  model_type: Phi4Mini
+  model_id: microsoft/Phi-4-mini-instruct
+
+  trainable_params:
+
+    vision_encoder:
+      mode: frozen
+
+    adapter:
+      mode: full
+
+    language_model:
+      mode: peft
+      peft:
+        type: lora
+        r: 32
+        lora_alpha: 64
+        lora_dropout: 0.1
+        target_modules:
+          - o_proj
+          - qkv_proj
+          - gate_up_proj
+          - down_proj
+
+    lm_head:
+      mode: peft
+      peft:
+        type: lora
+        r: 32
+        lora_alpha: 64
+        lora_dropout: 0.1
