@@ -253,6 +253,10 @@ class AbstractVLWrapper(ABC):
                             and getattr(self.model.config.get_text_config(decoder=True), "tie_word_embeddings", True)):
                         self.model._tied_weights_keys = ["lm_head.base_layer.weight"]
                         logger.info_main("    > Updated '_tied_weights_keys' from ['lm_head.weight'] to ['lm_head.base_layer.weight']")
+                    else:
+                        # Unlike PeftModel, a standalone LoRA layer leaves its base layer trainable.
+                        # A tied base weight follows the input embeddings' configuration instead.
+                        wrapped.base_layer.requires_grad_(False)
                 else:
                     raise ValueError(f"Unknown class: {type(trainable_component_cfg).__name__}")
 

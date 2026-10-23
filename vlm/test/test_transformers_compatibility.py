@@ -193,7 +193,8 @@ def test_text_backbone_loading_keeps_pretrained_tied_weights(tmp_path, backbone)
         torch.testing.assert_close(loaded[name], value, rtol=0, atol=0)
 
 
-def test_trainable_parameters_keep_names_and_dtypes(monkeypatch, tmp_path):
+@pytest.mark.parametrize("tie_word_embeddings", [True, False])
+def test_trainable_parameters_keep_names_and_dtypes(monkeypatch, tmp_path, tie_word_embeddings):
     monkeypatch.setenv("VLM_CONFIG_DIR", str(tmp_path))
     monkeypatch.setenv("VLM_OUTPUT_DIR", str(tmp_path))
     from vlm.configs.model.trainable_params.trainable_linear_layer import (
@@ -206,10 +207,10 @@ def test_trainable_parameters_keep_names_and_dtypes(monkeypatch, tmp_path):
     )
     from vlm.models.qwen3.wrapper import Qwen3TextVLWrapper
 
-    # The backbone is loaded in bfloat16 with tied embeddings; the adapter is built afterwards
-    # in float32. The frozen embedding also freezes the tied LoRA base layer of lm_head.
+    # The backbone is loaded in bfloat16; the adapter is built afterwards in float32. The base
+    # layer of the lm_head LoRA stays frozen whether or not it is tied to the embeddings.
     config = make_config("qwen3")
-    config.tie_word_embeddings = True
+    config.tie_word_embeddings = tie_word_embeddings
     model = Qwen3TextVLForConditionalGeneration(config).to(torch.bfloat16)
     model.model.vision_adapter = torch.nn.Linear(16, 16)
     wrapper = Qwen3TextVLWrapper.__new__(Qwen3TextVLWrapper)
