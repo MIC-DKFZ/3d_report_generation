@@ -78,11 +78,6 @@ class Gemma3TextVLModel(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Cache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
         pixel_values_videos: Optional[torch.FloatTensor] = None,
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
@@ -117,11 +112,6 @@ class Gemma3TextVLModel(nn.Module):
             position_ids=position_ids,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            cache_position=cache_position,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=True,
             **kwargs,
         )
 
@@ -199,60 +189,28 @@ class Gemma3TextVLForConditionalGeneration(Gemma3ForCausalLM, GenerationMixin):
         past_key_values: Optional[Cache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
-        return_dict: Optional[bool] = None,
         pixel_values_videos: Optional[torch.FloatTensor] = None,
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
-        num_items_in_batch: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
-        outputs = self.model(
+        """
+        Run the upstream forward; the vision kwargs are consumed by the inner model. They are listed
+        here because GenerationMixin._validate_model_kwargs() inspects this signature.
+        """
+        return super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            cache_position=cache_position,
-            output_attentions=kwargs.pop("output_attentions", None),
-            output_hidden_states=kwargs.pop("output_hidden_states", None),
-            return_dict=True if return_dict is None else return_dict,
+            labels=labels,
+            logits_to_keep=logits_to_keep,
             pixel_values_videos=pixel_values_videos,
             vision_position_ids=vision_position_ids,
             adapter_args=adapter_args,
             **kwargs,
-        )
-
-        hidden_states = outputs.last_hidden_state
-        slice_indices = (
-            slice(-logits_to_keep, None)
-            if isinstance(logits_to_keep, int)
-            else logits_to_keep
-        )
-        logits = self.lm_head(hidden_states[:, slice_indices, :])
-        if self.config.final_logit_softcapping is not None:
-            logits = logits / self.config.final_logit_softcapping
-            logits = torch.tanh(logits)
-            logits = logits * self.config.final_logit_softcapping
-
-        loss = None
-        if labels is not None:
-            loss = self.loss_function(
-                logits=logits,
-                labels=labels,
-                vocab_size=self.config.vocab_size,
-                num_items_in_batch=num_items_in_batch,
-            )
-
-        return CausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
         )
 
     def prepare_inputs_for_generation(
