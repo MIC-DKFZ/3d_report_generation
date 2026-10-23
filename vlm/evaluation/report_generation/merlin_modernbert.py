@@ -49,7 +49,9 @@ class MerlinBertClassifier(torch.nn.Module):
     def __init__(self, n_classes, hf_model_dir):
         super().__init__()
 
-        self.model = AutoModelForSequenceClassification.from_pretrained(hf_model_dir)
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            hf_model_dir, dtype=torch.float32
+        )
         if self.model.config.num_labels != n_classes:
             raise ValueError(
                 f"MERLIN checkpoint has {self.model.config.num_labels} labels, expected {n_classes}"

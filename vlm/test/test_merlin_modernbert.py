@@ -91,8 +91,9 @@ def test_hf_inference_uses_config_labels_and_preserves_report_order(monkeypatch,
     pd.testing.assert_frame_equal(
         predicted, pd.DataFrame([[1, 0, 1], [0, 1, 1], [1, 1, 1]], columns=labels)
     )
-    for loader in (config_loader, tokenizer_loader, model_loader):
+    for loader in (config_loader, tokenizer_loader):
         loader.assert_called_once_with(merlin_modernbert.MODEL_ID)
+    model_loader.assert_called_once_with(merlin_modernbert.MODEL_ID, dtype=torch.float32)
     assert [call.args[0] for call in tokenizer.call_args_list] == ["1", "-1", "0"]
     assert all(call.kwargs["max_length"] == 1024 for call in tokenizer.call_args_list)
 

@@ -73,7 +73,7 @@ class RadBertClassifier(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
+        self.model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID, dtype=torch.float32)
         if self.model.config.num_labels != len(LABEL_COLUMNS):
             raise ValueError(
                 f"CT-RATE checkpoint has {self.model.config.num_labels} labels, "

@@ -54,7 +54,7 @@ def test_hf_classifier_predicts_in_order_including_singleton_last_batch(monkeypa
             columns=ctrate_radbert.LABEL_COLUMNS,
         ),
     )
-    model_loader.assert_called_once_with(ctrate_radbert.MODEL_ID)
+    model_loader.assert_called_once_with(ctrate_radbert.MODEL_ID, dtype=torch.float32)
     tokenizer_loader.assert_called_once_with(ctrate_radbert.MODEL_ID, do_lower_case=True)
     for call in tokenizer.call_args_list:
         assert call.kwargs == {
