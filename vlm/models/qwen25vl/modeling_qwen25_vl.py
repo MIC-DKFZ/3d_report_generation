@@ -32,6 +32,8 @@ from transformers.cache_utils import Cache
 from transformers.processing_utils import Unpack
 from transformers.utils import TransformersKwargs, can_return_tuple
 
+from vlm.models.rope import get_vision_rope_index
+
 
 class Qwen25VLModel(HFQwen25VLModel, Qwen2_5_VLPreTrainedModel):
     base_model_prefix = ""
@@ -54,97 +56,14 @@ class Qwen25VLModel(HFQwen25VLModel, Qwen2_5_VLPreTrainedModel):
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        From 'HFQwen25VLModel.get_rope_index' adjusted to our usage.
-
-        Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
-        """
-        video_token_id = self.config.video_token_id
-        vision_start_token_id = self.config.vision_start_token_id
-        mrope_position_deltas = []
-        if input_ids is not None:
-            total_input_ids = input_ids
-            if attention_mask is None:
-                attention_mask = torch.ones_like(total_input_ids)
-            position_ids = torch.ones(
-                3,
-                input_ids.shape[0],
-                input_ids.shape[1],
-                dtype=input_ids.dtype,
-                device=input_ids.device,
-            )
-            video_index = 0
-            attention_mask = attention_mask.to(total_input_ids.device)
-            for i, input_ids in enumerate(total_input_ids):
-                input_ids = input_ids[attention_mask[i] == 1]
-                vision_start_indices = torch.argwhere(input_ids == vision_start_token_id).squeeze(
-                    1
-                )
-                vision_tokens = input_ids[vision_start_indices + 1]
-                video_nums = (vision_tokens == video_token_id).sum()
-                input_tokens = input_ids.tolist()
-                llm_pos_ids_list: list = []
-                st = 0
-                remain_videos = video_nums
-                for _ in range(video_nums):
-                    if video_token_id in input_tokens and remain_videos > 0:
-                        ed_video = input_tokens.index(video_token_id, st)
-                    else:
-                        ed_video = len(input_tokens) + 1
-
-                    ed = ed_video
-
-                    text_len = ed - st
-                    st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-                    llm_pos_ids_list.append(
-                        torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx
-                    )
-
-                    current_vision_position_ids = vision_position_ids[video_index].to("cpu")
-                    llm_pos_ids_list.append(current_vision_position_ids + text_len + st_idx)
-                    st = ed + current_vision_position_ids.shape[1]
-
-                    video_index += 1
-                    remain_videos -= 1
-
-                if st < len(input_tokens):
-                    st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-                    text_len = len(input_tokens) - st
-                    llm_pos_ids_list.append(
-                        torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx
-                    )
-
-                llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(3, -1)
-                position_ids[..., i, attention_mask[i] == 1] = llm_positions.to(
-                    position_ids.device
-                )
-                mrope_position_deltas.append(llm_positions.max() + 1 - len(total_input_ids[i]))
-            mrope_position_deltas = torch.tensor(
-                mrope_position_deltas, device=input_ids.device
-            ).unsqueeze(1)
-            return position_ids, mrope_position_deltas
-        else:
-            if attention_mask is not None:
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                position_ids.masked_fill_(attention_mask == 0, 1)
-                position_ids = (
-                    position_ids.unsqueeze(0).expand(3, -1, -1).to(attention_mask.device)
-                )
-                max_position_ids = position_ids.max(0, keepdim=False)[0].max(-1, keepdim=True)[0]
-                mrope_position_deltas = max_position_ids + 1 - attention_mask.shape[-1]
-            else:
-                position_ids = (
-                    torch.arange(input_ids.shape[1], device=input_ids.device)
-                    .view(1, 1, -1)
-                    .expand(3, input_ids.shape[0], -1)
-                )
-                mrope_position_deltas = torch.zeros(
-                    [input_ids.shape[0], 1],
-                    device=input_ids.device,
-                    dtype=input_ids.dtype,
-                )
-
-            return position_ids, mrope_position_deltas
+        """Calculate the RoPE index from the adapter's vision positions instead of the video grid."""
+        return get_vision_rope_index(
+            input_ids,
+            vision_position_ids,
+            attention_mask,
+            video_token_id=self.config.video_token_id,
+            vision_start_token_id=self.config.vision_start_token_id,
+        )
 
     @can_return_tuple
     def forward(
