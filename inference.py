@@ -202,7 +202,7 @@ def parse_args() -> tuple[Namespace, list[str]]:
     )
 
     parser.add_argument(
-        "--inference_dir_suffix",
+        "--suffix",
         type=str,
         default="",
         help="An optional suffix to append to the 'inference' output directory."
@@ -249,7 +249,7 @@ def main(
         vlm_model, cfg = AbstractVLWrapper.load_from_checkpoint_dir(ckpt_dir)
 
     # Moved this bevor `is_main`
-    inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "inference_dir_suffix", ""))
+    inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "suffix", ""))
 
     # All ranks use rank 0's timestamp, even when model loading finishes at different times.
     log_file_names = [add_datetime_tag("inference") + ".log" if is_main_process() else None]
