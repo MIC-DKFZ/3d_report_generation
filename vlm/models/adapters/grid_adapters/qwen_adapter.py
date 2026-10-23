@@ -6,7 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers.activations import QuickGELUActivation
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2RMSNorm
+from transformers.models.qwen2.modeling_qwen2 import Qwen2RMSNorm
 from einops import rearrange
 from vlm.models.adapters.grid_adapters.base import GridAdapter
 

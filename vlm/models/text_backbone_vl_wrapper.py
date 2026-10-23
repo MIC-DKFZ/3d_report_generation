@@ -42,7 +42,7 @@ class TextBackboneVLWrapper(AbstractVLWrapper):
             self.model_cfg.model_id.get_resolved_path(),
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
         )
         token_id = self.tokenizer.convert_tokens_to_ids(self.vision_placeholder_token)
         if token_id is None:

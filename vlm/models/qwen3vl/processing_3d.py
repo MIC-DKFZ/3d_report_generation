@@ -15,7 +15,6 @@
 # Modified to support VLM's 3D medical image conditioning and custom training workflow.
 
 from typing import Union
-import numpy as np
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.models.qwen3_vl.processing_qwen3_vl import (
     Qwen3VLProcessor,
@@ -65,15 +64,10 @@ class QwenVLProcessor3D(Qwen3VLProcessor):
             text[text_index] = text[text_index].replace(placeholder, self.video_token)
 
         return_tensors = output_kwargs["text_kwargs"].pop("return_tensors", None)
-        return_mm_token_type_ids = output_kwargs["text_kwargs"].pop("return_mm_token_type_ids", None)
+        # Token type IDs mark native image/video tokens, which this processor does not use.
+        output_kwargs["text_kwargs"].pop("return_mm_token_type_ids", None)
         text_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"], truncation=False)
 
         self._check_special_mm_tokens(text, text_inputs, modalities=["image", "video"])
-
-        if return_mm_token_type_ids:
-            array_ids = np.array(text_inputs["input_ids"])
-            mm_token_type_ids = np.zeros_like(text_inputs["input_ids"])
-            mm_token_type_ids[array_ids == self.image_token_id] = 1
-            text_inputs["mm_token_type_ids"] = mm_token_type_ids.tolist()
 
         return BatchFeature(data={**text_inputs}, tensor_type=return_tensors)

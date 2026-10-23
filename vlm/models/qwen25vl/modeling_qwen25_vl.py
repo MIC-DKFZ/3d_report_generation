@@ -315,7 +315,6 @@ class Qwen25VLForConditionalGeneration(HFQwen25VLForConditionalGeneration, Gener
         "^visual": "model.visual",
         r"^model(?!\.(language_model|visual|vision_adapter|vision_encoder))": "model.language_model",
     }
-    _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
         Qwen2_5_VLPreTrainedModel.__init__(self, config)

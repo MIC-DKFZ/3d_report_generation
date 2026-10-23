@@ -254,7 +254,6 @@ class Qwen3VLModel(HFQwen3VLModel, Qwen3VLPreTrainedModel):
 class Qwen3VLForConditionalGeneration(HFQwen3VLForConditionalGeneration, GenerationMixin):
     accepts_loss_kwargs = True
     _checkpoint_conversion_mapping = {}
-    _tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
     config: Qwen3VLConfig
 
     def __init__(self, config):

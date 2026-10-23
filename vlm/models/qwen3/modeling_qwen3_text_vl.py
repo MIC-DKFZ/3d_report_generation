@@ -126,7 +126,7 @@ class Qwen3TextVLModel(nn.Module):
 class Qwen3TextVLForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
     accepts_loss_kwargs = True
     _checkpoint_conversion_mapping = {}
-    _tied_weights_keys = ["lm_head.weight"]
+    _tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
 
     @classmethod
     def from_pretrained(

@@ -28,7 +28,7 @@ class Qwen25VLWrapper(AbstractVLWrapper):
             self.model_cfg.model_id.get_resolved_path(),
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
         )
 
         self._setup_vision_components()
