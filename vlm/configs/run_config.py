@@ -11,7 +11,7 @@ from vlm.configs.evaluation_config import EvaluationConfig
 from vlm.configs.general_config import GeneralConfig
 from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.scheduler.scheduler_config import SchedulerClassConfig
-from vlm.configs.trainer_config import SFTTrainerConfig
+from vlm.configs.trainer_config import TrainerConfig
 from vlm.configs.cli import add_config_cli_args, add_new_class_kwarg_cli_args
 from vlm.configs.merging import recursive_dict_merge, unflatten_dict
 from vlm.utils.ddp import is_main_process
@@ -31,7 +31,7 @@ class RunConfig(ConfigBase):
             - general: general info and configurations
             - model: model configs, trainable parameters
             - data: dataset, images/embeddings, data augs, number of samples
-            - trainer: SFTTrainer hyperparameters
+            - trainer: Trainer hyperparameters
             - eval: evaluation parameters
     """
     base_configs: list[str] | None = Field(
@@ -41,7 +41,7 @@ class RunConfig(ConfigBase):
     general: GeneralConfig
     model: ModelConfig
     data: DataConfig
-    trainer: SFTTrainerConfig
+    trainer: TrainerConfig
     scheduler: SchedulerClassConfig
     eval: EvaluationConfig
 
@@ -242,7 +242,7 @@ class RunConfig(ConfigBase):
     def _maybe_reset_validation_specific_args(self):
         """
         When doing no validation ('val_dataset_json_path=None'), reset validation-specific arguments.
-        This is especially important for SFTTrainer args, which would otherwise raise errors.
+        This is especially important for Trainer args, which would otherwise raise errors.
         """
         if self.data.val_dataset_json_path is None:
             logger.info_main("[No Validation] Resetting validation-specific arguments "

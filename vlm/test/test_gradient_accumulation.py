@@ -12,18 +12,16 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from accelerate.state import AcceleratorState
-from datasets import Dataset
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from torch.utils.data import SequentialSampler
-from transformers import PreTrainedTokenizerFast, Qwen3Config
-from trl import SFTConfig
+from transformers import PreTrainedTokenizerFast, Qwen3Config, TrainingArguments
 
-from vlm.configs.trainer_config import SFTTrainerConfig
-from vlm.training.trainers import VLMSFTTrainer
+from vlm.configs.trainer_config import TrainerConfig
+from vlm.training.trainers import VLMTrainer
 
 
-class SequentialTrainer(VLMSFTTrainer):
+class SequentialTrainer(VLMTrainer):
     def _get_train_sampler(self, *args):
         return SequentialSampler(self.train_dataset)
 
@@ -90,17 +88,16 @@ def train_once(model, samples, batch_size, accumulation_steps, output_dir):
         processing_class=tokenizer,
         scheduler=ConstantScheduler(),
         data_collator=collate,
-        train_dataset=Dataset.from_list(samples),
-        args=SFTConfig(
+        train_dataset=samples,
+        args=TrainingArguments(
             output_dir=str(output_dir),
             use_cpu=True,
             bf16=False,
             max_steps=1,
             per_device_train_batch_size=batch_size,
             gradient_accumulation_steps=accumulation_steps,
-            average_tokens_across_devices=SFTTrainerConfig().average_tokens_across_devices,
+            average_tokens_across_devices=TrainerConfig().average_tokens_across_devices,
             max_grad_norm=0,
-            dataset_kwargs={"skip_prepare_dataset": True},
             remove_unused_columns=False,
             report_to=[],
             save_strategy="no",
@@ -145,7 +142,7 @@ def test_accumulation_matches_token_mean(tmp_path, sample_count):
 def test_token_count_excludes_first_label_prompt_and_padding():
     trainer = SimpleNamespace(args=SimpleNamespace(average_tokens_across_devices=False))
     batch = {"labels": torch.tensor([[2, -100, 3, 1], [-100, 2, 1, -100]])}
-    batches, count = VLMSFTTrainer.get_batch_samples(
+    batches, count = VLMTrainer.get_batch_samples(
         trainer, iter([batch]), 6, torch.device("cpu")
     )
     assert batches == [batch]
@@ -154,10 +151,10 @@ def test_token_count_excludes_first_label_prompt_and_padding():
 
 def test_empty_iterator_and_unsupervised_window():
     trainer = SimpleNamespace(args=SimpleNamespace(average_tokens_across_devices=False))
-    assert VLMSFTTrainer.get_batch_samples(trainer, iter([]), 6, torch.device("cpu")) == ([], None)
+    assert VLMTrainer.get_batch_samples(trainer, iter([]), 6, torch.device("cpu")) == ([], None)
     batch = {"labels": torch.tensor([[2, -100]])}
     with pytest.raises(ValueError, match="no supervised tokens"):
-        VLMSFTTrainer.get_batch_samples(trainer, iter([batch]), 6, torch.device("cpu"))
+        VLMTrainer.get_batch_samples(trainer, iter([batch]), 6, torch.device("cpu"))
 
 
 def ddp_worker(rank, world_size, rendezvous, output_dir):

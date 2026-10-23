@@ -250,7 +250,7 @@ class SchedulerBase(ABC):
         Returns:
             changed_requires_grad_state (bool): True if this method modified
             the `requires_grad` state of **any** parameter. This signals to
-            `VLMSFTTrainer` that the model must be re-wrapped in Distributed
+            `VLMTrainer` that the model must be re-wrapped in Distributed
             Data Parallel (DDP), because changing which parameters require
             gradients alters the gradient buckets.
         """

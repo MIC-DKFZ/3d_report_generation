@@ -4,25 +4,27 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from datasets import Dataset
 from pydantic import ValidationError
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
-from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
-from trl import SFTConfig
+from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast, TrainingArguments
 
 from vlm.configs.compatibility import normalize_saved_config
-from vlm.configs.trainer_config import SFTTrainerConfig
+from vlm.configs.trainer_config import TrainerConfig
 from vlm.training.checkpoint_state import save_model_checkpoint
-from vlm.training.trainers import VLMSFTTrainer
+from vlm.training.trainers import VLMTrainer
 
 
-def test_removed_trainer_field_is_rejected_but_old_saved_configs_load():
+@pytest.mark.parametrize(
+    "field, value",
+    [("deepspeed", "config.json"), ("dataset_kwargs", {"skip_prepare_dataset": True})],
+)
+def test_removed_trainer_field_is_rejected_but_old_saved_configs_load(field, value):
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        SFTTrainerConfig(deepspeed="config.json")
-    normalized, warnings = normalize_saved_config({"trainer": {"deepspeed": "config.json"}})
-    assert SFTTrainerConfig.model_validate(normalized["trainer"])
-    assert any("trainer.deepspeed" in message for message in warnings)
+        TrainerConfig(**{field: value})
+    normalized, warnings = normalize_saved_config({"trainer": {field: value}})
+    assert TrainerConfig.model_validate(normalized["trainer"])
+    assert any(f"trainer.{field}" in message for message in warnings)
 
 
 @pytest.mark.parametrize("preloaded", [False, True])
@@ -35,7 +37,7 @@ def test_checkpoint_loading_respects_preloaded_weights(tmp_path, preloaded):
     original = target.weight.detach().clone()
     trainer = SimpleNamespace(model=target, model_weights_preloaded=preloaded)
 
-    VLMSFTTrainer._load_from_checkpoint(trainer, tmp_path)
+    VLMTrainer._load_from_checkpoint(trainer, tmp_path)
 
     torch.testing.assert_close(target.weight, original if preloaded else source.weight)
 
@@ -52,9 +54,14 @@ def test_best_checkpoint_restores_weights(tmp_path):
         accelerator=SimpleNamespace(unwrap_model=lambda model: model),
     )
 
-    VLMSFTTrainer._load_best_model(trainer)
+    VLMTrainer._load_best_model(trainer)
 
     torch.testing.assert_close(target.weight, source.weight)
+
+
+def collate_causal_lm(samples):
+    input_ids = torch.tensor([sample["input_ids"] for sample in samples])
+    return {"input_ids": input_ids, "labels": input_ids.clone()}
 
 
 def test_cpu_training_with_accumulation_and_stage_transition(tmp_path):
@@ -84,25 +91,26 @@ def test_cpu_training_with_accumulation_and_stage_transition(tmp_path):
             return optimizer, lr_scheduler, changed
 
     scheduler = StageScheduler()
-    trainer = VLMSFTTrainer(
+    trainer = VLMTrainer(
         model=model,
         processing_class=tokenizer,
         scheduler=scheduler,
-        args=SFTConfig(
+        args=TrainingArguments(
             output_dir=str(tmp_path),
             use_cpu=True,
             bf16=False,
             max_steps=2,
             per_device_train_batch_size=1,
             gradient_accumulation_steps=2,
-            dataset_kwargs={"skip_prepare_dataset": True},
+            remove_unused_columns=False,
             report_to=[],
             save_strategy="no",
             logging_strategy="no",
             dataloader_pin_memory=False,
             disable_tqdm=True,
         ),
-        train_dataset=Dataset.from_dict({"input_ids": [[2, 3, 2, 1]] * 4}),
+        train_dataset=[{"input_ids": [2, 3, 2, 1]}] * 4,
+        data_collator=collate_causal_lm,
     )
 
     result = trainer.train()

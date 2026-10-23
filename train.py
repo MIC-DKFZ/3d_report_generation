@@ -4,8 +4,7 @@ import shutil
 from pathlib import Path
 
 import torch.distributed as dist
-from transformers import EarlyStoppingCallback, TrainerCallback
-from trl import SFTConfig
+from transformers import EarlyStoppingCallback, TrainerCallback, TrainingArguments
 
 from vlm.configs.run_config import RunConfig
 from vlm.data.dataloaders import create_eval_dataloader
@@ -28,7 +27,7 @@ from vlm.training.checkpointing import (
     restore_model_checkpoints,
     save_final_config,
 )
-from vlm.training.trainers import VLMSFTTrainer
+from vlm.training.trainers import VLMTrainer
 from vlm.utils import logger
 from vlm.utils.ddp import setup_ddp, is_main_process
 from vlm.utils.seeding import seed_everything
@@ -69,7 +68,7 @@ class UnifiedVLMTrainer:
             ddp_setup: Distributed topology initialized by main
         """
         self.vlm_model: AbstractVLWrapper = vlm_model
-        self.trainer: VLMSFTTrainer | None = None
+        self.trainer: VLMTrainer | None = None
         self.cfg: RunConfig = cfg
         self.checkpoint_plan = checkpoint_plan
 
@@ -89,7 +88,7 @@ class UnifiedVLMTrainer:
             exclude={"early_stopping_patience", "early_stopping_threshold"}
         )
 
-        return SFTConfig(
+        return TrainingArguments(
             **trainer_args,
             **model_args,
             run_name=self.cfg.general.run_name,
@@ -180,10 +179,10 @@ class UnifiedVLMTrainer:
                 )
             )
 
-        # Initialize SFT trainer
-        self.trainer = VLMSFTTrainer(
+        self.trainer = VLMTrainer(
             model=model,
             args=training_args,
+            processing_class=self.vlm_model.tokenizer,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=self.vlm_model.collate_fn,

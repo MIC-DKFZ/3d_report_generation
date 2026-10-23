@@ -8,11 +8,9 @@ import pytest
 import torch
 import torch.distributed as dist
 from accelerate.state import AcceleratorState
-from datasets import Dataset
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
-from transformers import PreTrainedTokenizerFast, TrainerCallback
-from trl import SFTConfig
+from transformers import PreTrainedTokenizerFast, TrainerCallback, TrainingArguments
 
 from test_gradient_accumulation import SequentialTrainer, collate, make_model, make_samples
 from vlm.training.checkpoint_state import initialize_checkpoint_state, load_model_checkpoint
@@ -55,9 +53,9 @@ def make_trainer(model, output_dir, samples, recorder, checkpoint=None):
         optimizer_scheduler_checkpoint=checkpoint,
         model_weights_preloaded=checkpoint is not None,
         data_collator=collate,
-        train_dataset=Dataset.from_list(samples),
+        train_dataset=samples,
         callbacks=[recorder],
-        args=SFTConfig(
+        args=TrainingArguments(
             output_dir=str(output_dir),
             use_cpu=True,
             bf16=False,
@@ -65,7 +63,6 @@ def make_trainer(model, output_dir, samples, recorder, checkpoint=None):
             per_device_train_batch_size=1,
             gradient_accumulation_steps=2,
             max_grad_norm=1.0,
-            dataset_kwargs={"skip_prepare_dataset": True},
             remove_unused_columns=False,
             report_to=[],
             save_strategy="steps",

@@ -29,7 +29,7 @@ from typing import Optional
 import torch.distributed as dist
 from accelerate import skip_first_batches
 from accelerate.utils import is_torch_xla_available
-from transformers import TrainerState
+from transformers import Trainer, TrainerState
 from transformers.debug_utils import DebugOption
 from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import ExportableState
@@ -37,14 +37,13 @@ from transformers.trainer_pt_utils import get_model_param_count
 from transformers.trainer_utils import speed_metrics, TrainOutput, SaveStrategy
 from transformers.training_args import OptimizerNames, ParallelMode
 from transformers.utils import check_torch_load_is_safe
-from trl import SFTTrainer
 
 from vlm.training.schedulers.base import SchedulerBase
 from vlm.utils import logger
 from vlm.training.checkpoint_state import load_model_checkpoint, save_model_checkpoint
 
 
-class VLMSFTTrainer(SFTTrainer):
+class VLMTrainer(Trainer):
 
     def __init__(
         self,

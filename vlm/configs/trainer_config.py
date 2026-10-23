@@ -3,9 +3,9 @@ from pydantic import Field
 from vlm.configs.base import ConfigBase
 
 
-class SFTTrainerConfig(ConfigBase):
+class TrainerConfig(ConfigBase):
     """
-    Configuration for all arguments that are to be passed on to the SFTTrainer class including our default values.
+    Configuration for all arguments that are to be passed on to 'TrainingArguments' including our default values.
     """
     num_train_epochs: int = Field(3, ge=1, description="Number of training epochs to run.")
     max_steps: int = Field(-1, ge=-1, description="Number of steps to take during training.")
@@ -37,7 +37,6 @@ class SFTTrainerConfig(ConfigBase):
 
     load_best_model_at_end: bool = Field(False, description="Enables saving of best checkpoint if 'True'! (And whether to load the best model found during training at the end). "
                                                             "WARNING: Enabling this may cause an NCCL desync error at the end of training.")
-    dataset_kwargs: dict = Field(default_factory=lambda: {"skip_prepare_dataset": True}, description="Extra keyword arguments passed to dataset loading/preparation.")
     remove_unused_columns: bool = Field(False, description="Whether to remove unused columns from the dataset before training.")
     report_to: list[str] = Field(default_factory=lambda: ["wandb"], description="List of integrations to report training logs to (e.g. 'wandb', 'tensorboard').")
 
