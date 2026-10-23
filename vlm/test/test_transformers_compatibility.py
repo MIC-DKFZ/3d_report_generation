@@ -1,6 +1,7 @@
 """Exercise the shared Transformers runtime without downloading model weights."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -8,13 +9,18 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import (
     AutoConfig,
+    Gemma3Config,
+    Gemma3ForConditionalGeneration,
     Gemma3TextConfig,
     Phi3Config,
+    Phi3ForCausalLM,
     Qwen2_5_VLConfig,
     Qwen2TokenizerFast,
     Qwen2VLImageProcessor,
     Qwen3Config,
+    Qwen3ForCausalLM,
     Qwen3VLConfig,
+    SiglipVisionConfig,
 )
 
 from vlm.models.gemma3.modeling_gemma3_text_vl import Gemma3TextVLForConditionalGeneration
@@ -27,7 +33,11 @@ from vlm.models.qwen3vl.processing_3d import QwenVLProcessor3D as Qwen3Processor
 from vlm.training.checkpoint_state import load_model_checkpoint
 
 
-def make_model(backbone):
+BACKBONES = ["qwen25", "qwen3vl", "qwen3", "phi4", "gemma3"]
+VISION_TOKENS = [4, 6, 7]
+
+
+def make_config(backbone):
     text = dict(
         vocab_size=32,
         hidden_size=16,
@@ -46,24 +56,29 @@ def make_model(backbone):
     )
     if backbone in ("qwen25", "qwen3vl"):
         text["rope_scaling"] = {"rope_type": "default", "mrope_section": [1, 1, 2]}
-        config_class, model_class = (
-            (Qwen2_5_VLConfig, Qwen25VLForConditionalGeneration)
-            if backbone == "qwen25"
-            else (Qwen3VLConfig, Qwen3VLForConditionalGeneration)
-        )
+        config_class = Qwen2_5_VLConfig if backbone == "qwen25" else Qwen3VLConfig
         config = config_class(text_config=text, **special)
     else:
-        config_class, model_class = {
-            "qwen3": (Qwen3Config, Qwen3TextVLForConditionalGeneration),
-            "phi4": (Phi3Config, Phi4MiniVLForConditionalGeneration),
-            "gemma3": (Gemma3TextConfig, Gemma3TextVLForConditionalGeneration),
-        }[backbone]
+        config_class = {"qwen3": Qwen3Config, "phi4": Phi3Config, "gemma3": Gemma3TextConfig}[
+            backbone
+        ]
         if backbone == "phi4":
             text["original_max_position_embeddings"] = 128
         config = config_class(**text, **special)
     config._attn_implementation = "eager"
+    return config
+
+
+def make_model(backbone):
+    model_class = {
+        "qwen25": Qwen25VLForConditionalGeneration,
+        "qwen3vl": Qwen3VLForConditionalGeneration,
+        "qwen3": Qwen3TextVLForConditionalGeneration,
+        "phi4": Phi4MiniVLForConditionalGeneration,
+        "gemma3": Gemma3TextVLForConditionalGeneration,
+    }[backbone]
     torch.manual_seed(13)
-    return model_class(config).eval()
+    return model_class(make_config(backbone)).eval()
 
 
 def vision_batch():
@@ -80,7 +95,7 @@ def vision_batch():
     )
 
 
-@pytest.mark.parametrize("backbone", ["qwen25", "qwen3vl", "qwen3", "phi4", "gemma3"])
+@pytest.mark.parametrize("backbone", BACKBONES)
 def test_backbone_training_and_cached_generation(backbone):
     model = make_model(backbone)
     batch = vision_batch()
@@ -105,6 +120,125 @@ def test_backbone_training_and_cached_generation(backbone):
     uncached = model.generate(**batch, use_cache=False, **options)
     assert cached.shape == (2, 10)
     torch.testing.assert_close(cached, uncached)
+
+
+@pytest.mark.parametrize("backbone", BACKBONES)
+def test_generation_steps_match_uncached_forward(backbone):
+    model = make_model(backbone)
+    batch = vision_batch()
+    generated = model.generate(
+        **batch,
+        max_new_tokens=3,
+        min_new_tokens=3,
+        do_sample=False,
+        pad_token_id=0,
+        suppress_tokens=VISION_TOKENS,
+        output_logits=True,
+        return_dict_in_generate=True,
+    )
+    prompt_length = batch["input_ids"].shape[1]
+    for step, logits in enumerate(generated.logits):
+        # Each decoding step must see the vision input and positions of a fresh forward pass.
+        attention_mask = torch.cat(
+            [batch["attention_mask"], torch.ones(2, step, dtype=torch.long)], dim=1
+        )
+        inputs = dict(
+            batch,
+            input_ids=generated.sequences[:, : prompt_length + step],
+            attention_mask=attention_mask,
+        )
+        if backbone not in ("qwen25", "qwen3vl"):
+            # Text backbones use 1D positions that skip left padding.
+            inputs["position_ids"] = (attention_mask.cumsum(-1) - 1).clamp(min=0)
+        expected = model(**inputs, use_cache=False).logits[:, -1]
+        torch.testing.assert_close(logits, expected, rtol=1e-4, atol=1e-5)
+
+
+@pytest.mark.parametrize("backbone", ["qwen3", "phi4", "gemma3"])
+def test_text_backbone_loading_keeps_pretrained_tied_weights(tmp_path, backbone):
+    text_config = make_config(backbone)
+    text_config.tie_word_embeddings = True
+    torch.manual_seed(5)
+    if backbone == "gemma3":
+        config = Gemma3Config(
+            text_config=text_config,
+            vision_config=SiglipVisionConfig(
+                hidden_size=8,
+                intermediate_size=16,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                image_size=8,
+                patch_size=4,
+            ),
+            mm_tokens_per_image=4,
+        )
+        pretrained = Gemma3ForConditionalGeneration(config)
+        pretrained_decoder = pretrained.model.language_model
+        model_class = Gemma3TextVLForConditionalGeneration
+    else:
+        upstream_class, model_class = {
+            "qwen3": (Qwen3ForCausalLM, Qwen3TextVLForConditionalGeneration),
+            "phi4": (Phi3ForCausalLM, Phi4MiniVLForConditionalGeneration),
+        }[backbone]
+        pretrained = upstream_class(text_config)
+        pretrained_decoder = pretrained.model
+    pretrained.save_pretrained(tmp_path)
+
+    model = model_class.from_pretrained(tmp_path, local_files_only=True)
+
+    embeddings = model.get_input_embeddings().weight
+    assert model.lm_head.weight.data_ptr() == embeddings.data_ptr()
+    loaded = model.model.language_model.state_dict()
+    for name, value in pretrained_decoder.state_dict().items():
+        torch.testing.assert_close(loaded[name], value, rtol=0, atol=0)
+
+
+def test_trainable_parameters_keep_names_and_dtypes(monkeypatch, tmp_path):
+    monkeypatch.setenv("VLM_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("VLM_OUTPUT_DIR", str(tmp_path))
+    from vlm.configs.model.trainable_params.trainable_linear_layer import (
+        PEFTLoraLinearConfig,
+        TrainableLinearConfig,
+    )
+    from vlm.configs.model.trainable_params.trainable_module import (
+        PEFTLoraConfig,
+        TrainableModuleConfig,
+    )
+    from vlm.models.qwen3.wrapper import Qwen3TextVLWrapper
+
+    # The backbone is loaded in bfloat16 with tied embeddings; the adapter is built afterwards
+    # in float32. The frozen embedding also freezes the tied LoRA base layer of lm_head.
+    config = make_config("qwen3")
+    config.tie_word_embeddings = True
+    model = Qwen3TextVLForConditionalGeneration(config).to(torch.bfloat16)
+    model.model.vision_adapter = torch.nn.Linear(16, 16)
+    wrapper = Qwen3TextVLWrapper.__new__(Qwen3TextVLWrapper)
+    wrapper.model = model
+    wrapper.text_only = False
+    wrapper.model_cfg = SimpleNamespace(
+        trainable_params=SimpleNamespace(
+            vision_encoder=None,
+            adapter=TrainableModuleConfig(mode="full"),
+            language_model=TrainableModuleConfig(
+                mode="peft", peft=PEFTLoraConfig(type="lora", r=2, target_modules=["q_proj"])
+            ),
+            lm_head=TrainableLinearConfig(mode="peft", peft=PEFTLoraLinearConfig(type="lora", r=2)),
+        )
+    )
+
+    wrapper.configure_model_for_training()
+
+    lora = "model.language_model.base_model.model.layers.0.self_attn.q_proj.lora_"
+    assert {
+        name: param.dtype for name, param in model.named_parameters() if param.requires_grad
+    } == {
+        "model.vision_adapter.weight": torch.float32,
+        "model.vision_adapter.bias": torch.float32,
+        lora + "A.default.weight": torch.bfloat16,
+        lora + "B.default.weight": torch.bfloat16,
+        "lm_head.lora_A.default.weight": torch.bfloat16,
+        "lm_head.lora_B.default.weight": torch.bfloat16,
+    }
 
 
 def test_qwen25_save_load_and_legacy_checkpoint(tmp_path):
@@ -164,6 +298,14 @@ def test_processor_roundtrip_expands_custom_vision_tokens(tmp_path, processor_cl
         return_tensors="pt",
     )
     assert (inputs["input_ids"] == 3).sum(dim=1).tolist() == [2, 4]
+
+    # Prompt-only tokenization for label masking runs without padding.
+    unpadded = reloaded(
+        text=["<|video_pad|>", "<|video_pad|><|video_pad|>"],
+        num_vision_tokens=[2, 1, 3],
+        padding=False,
+    )
+    assert [ids.count(3) for ids in unpadded["input_ids"]] == [2, 4]
 
 
 def test_shared_registry_registers_nnfoundation_backbone(monkeypatch, tmp_path):
