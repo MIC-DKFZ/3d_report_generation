@@ -71,7 +71,7 @@ class UnifiedVLMInference:
             test_dataset: Test dataset
         """
         model = self.vlm_model.model
-        model.bfloat16().cuda().eval()
+        model.cuda().eval()
 
         if self.is_distributed:
             # Wrap the model with DDP
@@ -102,13 +102,14 @@ class UnifiedVLMInference:
         logger.info_main("Running inference...")
 
         results = []
-        with torch.inference_mode():
+        # Use the mixed precision of training and its evaluation callback.
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
             # Iterate over the test dataset
             for i, inputs in tqdm(enumerate(test_loader), total=len(test_loader)):
                 raw_samples = inputs["raw_samples"]
                 del inputs["raw_samples"]
                 inputs = extract_batch_prompt_only(inputs)
-                inputs = inputs.to(device="cuda", dtype=torch.bfloat16)
+                inputs = inputs.to("cuda")
 
                 if "batch_count" in inputs:
                     del inputs["batch_count"]
