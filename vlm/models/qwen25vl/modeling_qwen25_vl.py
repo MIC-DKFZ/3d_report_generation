@@ -29,15 +29,15 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLCausalLMOutputWithPast,
 )
 from transformers.cache_utils import Cache
+from transformers.conversion_mapping import WeightRenaming, register_checkpoint_conversion_mapping
 from transformers.processing_utils import Unpack
 from transformers.utils import TransformersKwargs, can_return_tuple
 
-from vlm.models.rope import get_vision_rope_index
+from vlm.models.rope import VisionRopeGenerationMixin, get_vision_rope_index
 
 
 class Qwen25VLModel(HFQwen25VLModel, Qwen2_5_VLPreTrainedModel):
     base_model_prefix = ""
-    _checkpoint_conversion_mapping = {"^model": "language_model"}
     config: Qwen2_5_VLConfig
     _no_split_modules = ["Qwen2_5_VLDecoderLayer", "Qwen2_5_VLVisionBlock"]
 
@@ -134,72 +134,18 @@ class Qwen25VLModel(HFQwen25VLModel, Qwen2_5_VLPreTrainedModel):
         )
 
 
-class Qwen25VLForConditionalGeneration(HFQwen25VLForConditionalGeneration, GenerationMixin):
+class Qwen25VLForConditionalGeneration(
+    VisionRopeGenerationMixin, HFQwen25VLForConditionalGeneration, GenerationMixin
+):
     accepts_loss_kwargs = True
-    _checkpoint_conversion_mapping = {
-        "^visual": "model.visual",
-        r"^model(?!\.(language_model|visual|vision_adapter|vision_encoder))": "model.language_model",
-    }
+    # The adapter replaces the native vision tower stored in the hub checkpoints.
+    _keys_to_ignore_on_load_unexpected = [r"^model\.visual\."]
 
     def __init__(self, config):
         Qwen2_5_VLPreTrainedModel.__init__(self, config)
         self.model = Qwen25VLModel(config)
         self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
         self.post_init()
-
-    def prepare_inputs_for_generation(
-        self,
-        input_ids,
-        past_key_values=None,
-        attention_mask=None,
-        inputs_embeds=None,
-        cache_position=None,
-        position_ids=None,
-        use_cache=True,
-        vision_position_ids=None,
-        **kwargs,
-    ):
-        """Use adapter-generated 3D positions instead of upstream video-grid positions.
-
-        Unlike Qwen3-VL, which defers position calculation to forward(), upstream
-        Qwen2.5-VL prepares positions here, so this method also needs an override.
-        """
-        model_inputs = GenerationMixin.prepare_inputs_for_generation(
-            self,
-            input_ids,
-            past_key_values=past_key_values,
-            attention_mask=attention_mask,
-            inputs_embeds=inputs_embeds,
-            cache_position=cache_position,
-            position_ids=position_ids,
-            use_cache=use_cache,
-            vision_position_ids=vision_position_ids,
-            **kwargs,
-        )
-        if position_ids is None:
-            if cache_position[0] == 0 or self.model.rope_deltas is None:
-                vision_positions, self.model.rope_deltas = self.model.get_rope_index(
-                    input_ids,
-                    vision_position_ids=vision_position_ids,
-                    attention_mask=attention_mask,
-                )
-            else:
-                text_positions = model_inputs["position_ids"]
-                batch_size, seq_length = text_positions.shape
-                delta = (cache_position[0] + self.model.rope_deltas).to(text_positions.device)
-                delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
-                vision_positions = torch.arange(seq_length, device=text_positions.device)
-                vision_positions = vision_positions.view(1, 1, -1).expand(3, batch_size, -1)
-                vision_positions = vision_positions + delta.unsqueeze(0)
-            # Keep sequential text positions separate from the three RoPE axes
-            # so Transformers can construct the causal attention mask correctly.
-            model_inputs["position_ids"] = torch.cat(
-                [model_inputs["position_ids"].unsqueeze(0), vision_positions], dim=0
-            )
-
-        if use_cache and cache_position[0] != 0:
-            model_inputs["pixel_values_videos"] = None
-        return model_inputs
 
     @can_return_tuple
     def forward(
@@ -259,3 +205,18 @@ class Qwen25VLForConditionalGeneration(HFQwen25VLForConditionalGeneration, Gener
             attentions=outputs.attentions,
             rope_deltas=outputs.rope_deltas,
         )
+
+
+# Hub checkpoints store the decoder under 'model.*' and the native vision tower under 'visual.*'.
+# Transformers skips its own Qwen2.5-VL renaming for custom classes, so register it for ours.
+register_checkpoint_conversion_mapping(
+    "Qwen25VLForConditionalGeneration",
+    [
+        WeightRenaming(source_patterns=r"^visual", target_patterns="model.visual"),
+        WeightRenaming(
+            source_patterns=r"^model(?!\.(language_model|visual|vision_adapter|vision_encoder))",
+            target_patterns="model.language_model",
+        ),
+    ],
+    overwrite=True,
+)

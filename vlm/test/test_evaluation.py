@@ -256,7 +256,9 @@ def test_report_labelers_resolve_reference_labels_and_compute_metrics(
 
 
 def test_model_access_errors_are_not_treated_as_missing_labels(monkeypatch):
-    download = Mock(side_effect=RepositoryNotFoundError("Cannot access model"))
+    # The hub error reads only the headers and request of the HTTP response.
+    response = SimpleNamespace(headers={}, request=None)
+    download = Mock(side_effect=RepositoryNotFoundError("Cannot access model", response=response))
     monkeypatch.setattr(label_utils, "hf_hub_download", download)
     predict = Mock()
 

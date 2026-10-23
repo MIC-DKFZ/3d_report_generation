@@ -248,11 +248,13 @@ class AbstractVLWrapper(ABC):
 
                     # Some models (e.g. Qwen2.5-VL) tie 'lm_head.weight' to 'embed_tokens.weight'.
                     # After wrapping, the tied weight lives under 'lm_head.base_layer.weight', so update
-                    # '_tied_weights_keys' to keep Transformers’ save/load logic consistent.
-                    if (module_name == "lm_head"
-                            and getattr(self.model.config.get_text_config(decoder=True), "tie_word_embeddings", True)):
-                        self.model._tied_weights_keys = ["lm_head.base_layer.weight"]
-                        logger.info_main("    > Updated '_tied_weights_keys' from ['lm_head.weight'] to ['lm_head.base_layer.weight']")
+                    # the tied-weight mapping to keep Transformers’ save/load logic consistent.
+                    tied_weights = self.model.all_tied_weights_keys
+                    if module_name == "lm_head" and "lm_head.weight" in tied_weights:
+                        source = tied_weights.pop("lm_head.weight")
+                        tied_weights["lm_head.base_layer.weight"] = source
+                        self.model._tied_weights_keys = {"lm_head.base_layer.weight": source}
+                        logger.info_main("    > Tied 'lm_head.base_layer.weight' instead of 'lm_head.weight'")
                     else:
                         # Unlike PeftModel, a standalone LoRA layer leaves its base layer trainable.
                         # A tied base weight follows the input embeddings' configuration instead.

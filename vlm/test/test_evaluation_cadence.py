@@ -17,7 +17,7 @@ def test_epoch_interval_must_be_a_positive_whole_number(interval):
         EveryNEpochsCallback(n=interval)
 
 
-@pytest.mark.parametrize("strategy,expected_steps", [("epoch", [4, 8, 10]), ("steps", [3, 6, 9])])
+@pytest.mark.parametrize("strategy,expected_steps", [("epoch", [4, 8, 10]), ("steps", [3, 6, 9, 10])])
 def test_trainer_evaluates_at_requested_cadence(tmp_path, strategy, expected_steps):
     class Model(torch.nn.Module):
         def __init__(self):

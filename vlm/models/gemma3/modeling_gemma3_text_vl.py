@@ -118,7 +118,6 @@ class Gemma3TextVLModel(nn.Module):
 
 class Gemma3TextVLForConditionalGeneration(Gemma3ForCausalLM, GenerationMixin):
     accepts_loss_kwargs = True
-    _checkpoint_conversion_mapping = {}
     _tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
 
     @classmethod
@@ -212,41 +211,3 @@ class Gemma3TextVLForConditionalGeneration(Gemma3ForCausalLM, GenerationMixin):
             adapter_args=adapter_args,
             **kwargs,
         )
-
-    def prepare_inputs_for_generation(
-        self,
-        input_ids,
-        past_key_values=None,
-        attention_mask=None,
-        inputs_embeds=None,
-        cache_position=None,
-        position_ids=None,
-        use_cache=True,
-        logits_to_keep=None,
-        pixel_values_videos=None,
-        vision_position_ids=None,
-        adapter_args=None,
-        **kwargs,
-    ):
-        model_inputs = super().prepare_inputs_for_generation(
-            input_ids=input_ids,
-            past_key_values=past_key_values,
-            attention_mask=attention_mask,
-            inputs_embeds=inputs_embeds,
-            cache_position=cache_position,
-            position_ids=position_ids,
-            use_cache=use_cache,
-            logits_to_keep=logits_to_keep,
-            **kwargs,
-        )
-
-        is_prefill = past_key_values is None
-        if cache_position is not None:
-            is_prefill = bool(cache_position[0].item() == 0)
-
-        if is_prefill:
-            model_inputs["pixel_values_videos"] = pixel_values_videos
-            model_inputs["vision_position_ids"] = vision_position_ids
-            model_inputs["adapter_args"] = adapter_args
-
-        return model_inputs

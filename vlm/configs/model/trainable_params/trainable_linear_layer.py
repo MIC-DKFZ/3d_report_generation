@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Literal, Annotated, Union
 from pydantic import Field, model_validator
 from vlm.configs.base import DiscriminatedConfigBase, ConfigBase
+from peft import LoraConfig
 from peft.tuners.lora import Linear as LoraLinear
 import torch.nn as nn
 
@@ -23,7 +24,9 @@ class PEFTLoraLinearConfig(DiscriminatedLinearBase):
         return LoraLinear(
             base_layer=base_linear_layer,
             adapter_name="default",
-            **self.to_dict_no_type(),
+            config=LoraConfig(**self.to_dict_no_type()),
+            r=self.r,
+            lora_alpha=self.lora_alpha,
         )
 
 

@@ -5,7 +5,6 @@ import os
 import runpy
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -77,13 +76,13 @@ def collate(samples):
     return {"input_ids": input_ids, "labels": labels, "attention_mask": input_ids.ne(0).long()}
 
 
-def train_once(model, samples, batch_size, accumulation_steps, output_dir):
+def make_trainer(model, samples, batch_size, accumulation_steps, output_dir):
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(WordLevel({"[PAD]": 0, "[EOS]": 1, "a": 2, "b": 3})),
         pad_token="[PAD]",
         eos_token="[EOS]",
     )
-    trainer = SequentialTrainer(
+    return SequentialTrainer(
         model=model,
         processing_class=tokenizer,
         scheduler=ConstantScheduler(),
@@ -106,6 +105,10 @@ def train_once(model, samples, batch_size, accumulation_steps, output_dir):
             disable_tqdm=True,
         ),
     )
+
+
+def train_once(model, samples, batch_size, accumulation_steps, output_dir):
+    trainer = make_trainer(model, samples, batch_size, accumulation_steps, output_dir)
     assert trainer.model_accepts_loss_kwargs
     result = trainer.train()
     assert result.global_step == 1
@@ -139,22 +142,20 @@ def test_accumulation_matches_token_mean(tmp_path, sample_count):
         assert_same_weights(model, reference)
 
 
-def test_token_count_excludes_first_label_prompt_and_padding():
-    trainer = SimpleNamespace(args=SimpleNamespace(average_tokens_across_devices=False))
+def test_token_count_excludes_first_label_prompt_and_padding(tmp_path):
+    trainer = make_trainer(make_model(), make_samples(1), 1, 1, tmp_path)
     batch = {"labels": torch.tensor([[2, -100, 3, 1], [-100, 2, 1, -100]])}
-    batches, count = VLMTrainer.get_batch_samples(
-        trainer, iter([batch]), 6, torch.device("cpu")
-    )
+    batches, count = trainer.get_batch_samples(iter([batch]), 6, torch.device("cpu"))
     assert batches == [batch]
     assert count.item() == 4
 
 
-def test_empty_iterator_and_unsupervised_window():
-    trainer = SimpleNamespace(args=SimpleNamespace(average_tokens_across_devices=False))
-    assert VLMTrainer.get_batch_samples(trainer, iter([]), 6, torch.device("cpu")) == ([], None)
+def test_empty_iterator_and_unsupervised_window(tmp_path):
+    trainer = make_trainer(make_model(), make_samples(1), 1, 1, tmp_path)
+    assert trainer.get_batch_samples(iter([]), 6, torch.device("cpu")) == ([], None)
     batch = {"labels": torch.tensor([[2, -100]])}
     with pytest.raises(ValueError, match="no supervised tokens"):
-        VLMTrainer.get_batch_samples(trainer, iter([batch]), 6, torch.device("cpu"))
+        trainer.get_batch_samples(iter([batch]), 6, torch.device("cpu"))
 
 
 def ddp_worker(rank, world_size, rendezvous, output_dir):

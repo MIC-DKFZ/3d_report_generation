@@ -29,15 +29,13 @@ from transformers.models.qwen3_vl.modeling_qwen3_vl import (
 )
 from transformers.cache_utils import Cache
 from transformers.processing_utils import Unpack
-from transformers.utils.generic import check_model_inputs
 from transformers.utils import can_return_tuple, TransformersKwargs
 
-from vlm.models.rope import get_vision_rope_index
+from vlm.models.rope import VisionRopeGenerationMixin, get_vision_rope_index
 
 
 class Qwen3VLModel(HFQwen3VLModel, Qwen3VLPreTrainedModel):
     base_model_prefix = ""
-    _checkpoint_conversion_mapping = {"^model": "language_model"}
     config: Qwen3VLConfig
     _no_split_modules = ["Qwen3VLTextDecoderLayer", "Qwen3VLVisionBlock"]
 
@@ -65,7 +63,7 @@ class Qwen3VLModel(HFQwen3VLModel, Qwen3VLPreTrainedModel):
             vision_start_token_id=self.config.vision_start_token_id,
         )
 
-    @check_model_inputs()
+    @can_return_tuple
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -74,7 +72,6 @@ class Qwen3VLModel(HFQwen3VLModel, Qwen3VLPreTrainedModel):
         past_key_values: Optional[Cache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         pixel_values_videos: Optional[torch.FloatTensor] = None,
-        cache_position: Optional[torch.LongTensor] = None,
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
         **kwargs: Unpack[TransformersKwargs],
@@ -85,7 +82,6 @@ class Qwen3VLModel(HFQwen3VLModel, Qwen3VLPreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
-        visual_pos_masks = None
         if pixel_values_videos is not None:
             video_embeds = pixel_values_videos
             if self.vision_encoder is not None:
@@ -98,7 +94,6 @@ class Qwen3VLModel(HFQwen3VLModel, Qwen3VLPreTrainedModel):
                 input_ids, inputs_embeds=inputs_embeds, video_features=video_embeds
             )
             inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
-            visual_pos_masks = video_mask[..., 0]
 
         if position_ids is None:
             past_key_values_length = 0 if past_key_values is None else past_key_values.get_seq_length()
@@ -113,10 +108,9 @@ class Qwen3VLModel(HFQwen3VLModel, Qwen3VLPreTrainedModel):
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
                 delta = (past_key_values_length + self.rope_deltas).to(inputs_embeds.device)
+                delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = torch.arange(seq_length, device=inputs_embeds.device)
                 position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-                if cache_position is not None:  # otherwise `deltas` is an int `0`
-                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
 
@@ -126,23 +120,19 @@ class Qwen3VLModel(HFQwen3VLModel, Qwen3VLPreTrainedModel):
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
-            cache_position=cache_position,
-            visual_pos_masks=visual_pos_masks,
-            deepstack_visual_embeds=None,
             **kwargs,
         )
 
-        return Qwen3VLModelOutputWithPast(
-            last_hidden_state=outputs.last_hidden_state,
-            past_key_values=outputs.past_key_values,
-            rope_deltas=self.rope_deltas,
-        )
+        return Qwen3VLModelOutputWithPast(**outputs, rope_deltas=self.rope_deltas)
 
 
 
-class Qwen3VLForConditionalGeneration(HFQwen3VLForConditionalGeneration, GenerationMixin):
+class Qwen3VLForConditionalGeneration(
+    VisionRopeGenerationMixin, HFQwen3VLForConditionalGeneration, GenerationMixin
+):
     accepts_loss_kwargs = True
-    _checkpoint_conversion_mapping = {}
+    # The adapter replaces the native vision tower stored in the hub checkpoints.
+    _keys_to_ignore_on_load_unexpected = [r"^model\.visual\."]
     config: Qwen3VLConfig
 
     def __init__(self, config):
@@ -161,7 +151,6 @@ class Qwen3VLForConditionalGeneration(HFQwen3VLForConditionalGeneration, Generat
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         pixel_values_videos: Optional[torch.FloatTensor] = None,
-        cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
@@ -182,7 +171,6 @@ class Qwen3VLForConditionalGeneration(HFQwen3VLForConditionalGeneration, Generat
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
-            cache_position=cache_position,
             vision_position_ids=vision_position_ids,
             adapter_args=adapter_args,
             **kwargs,

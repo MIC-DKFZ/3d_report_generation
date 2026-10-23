@@ -17,6 +17,25 @@
 from typing import Optional
 
 import torch
+from transformers.generation import GenerationMixin
+
+
+class VisionRopeGenerationMixin:
+    """Generation position IDs for Qwen-VL models whose vision positions come from the adapter."""
+
+    def _prepare_position_ids_for_generation(self, inputs_tensor, model_kwargs):
+        # Skip the upstream Qwen-VL override, which derives vision positions from the video grid.
+        text_positions = GenerationMixin._prepare_position_ids_for_generation(
+            self, inputs_tensor, model_kwargs
+        )
+        vision_positions, self.model.rope_deltas = self.model.get_rope_index(
+            inputs_tensor,
+            model_kwargs.get("vision_position_ids"),
+            attention_mask=model_kwargs.get("attention_mask"),
+        )
+        # As upstream: [text; temporal; height; width]. Each decoding step continues every row
+        # from its last position, which holds the maximum position after the vision blocks.
+        return torch.cat([text_positions[None], vision_positions], dim=0)
 
 
 def get_vision_rope_index(

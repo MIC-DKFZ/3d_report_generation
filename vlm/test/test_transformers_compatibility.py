@@ -15,7 +15,7 @@ from transformers import (
     Phi3Config,
     Phi3ForCausalLM,
     Qwen2_5_VLConfig,
-    Qwen2TokenizerFast,
+    Qwen2Tokenizer,
     Qwen2VLImageProcessor,
     Qwen3Config,
     Qwen3ForCausalLM,
@@ -30,7 +30,6 @@ from vlm.models.qwen25vl.processing_3d import QwenVLProcessor3D as Qwen25Process
 from vlm.models.qwen3.modeling_qwen3_text_vl import Qwen3TextVLForConditionalGeneration
 from vlm.models.qwen3vl.modeling_qwen3_vl import Qwen3VLForConditionalGeneration
 from vlm.models.qwen3vl.processing_3d import QwenVLProcessor3D as Qwen3Processor
-from vlm.training.checkpoint_state import load_model_checkpoint
 
 
 BACKBONES = ["qwen25", "qwen3vl", "qwen3", "phi4", "gemma3"]
@@ -55,7 +54,7 @@ def make_config(backbone):
         video_token_id=4, image_token_id=4, vision_start_token_id=6, vision_end_token_id=7
     )
     if backbone in ("qwen25", "qwen3vl"):
-        text["rope_scaling"] = {"rope_type": "default", "mrope_section": [1, 1, 2]}
+        text["rope_parameters"] = {"rope_type": "default", "mrope_section": [1, 1, 2]}
         config_class = Qwen2_5_VLConfig if backbone == "qwen25" else Qwen3VLConfig
         config = config_class(text_config=text, **special)
     else:
@@ -241,9 +240,11 @@ def test_trainable_parameters_keep_names_and_dtypes(monkeypatch, tmp_path, tie_w
         "lm_head.lora_B.default.weight": torch.float32,
     }
     assert model.lm_head.base_layer.weight.dtype == torch.bfloat16
+    tied = {"lm_head.base_layer.weight": "model.language_model.embed_tokens.weight"}
+    assert model.all_tied_weights_keys == (tied if tie_word_embeddings else {})
 
 
-def test_qwen25_save_load_and_legacy_checkpoint(tmp_path):
+def test_qwen25_save_load_and_hub_checkpoint_layout(tmp_path):
     from safetensors.torch import save_file
 
     model = make_model("qwen25")
@@ -274,21 +275,15 @@ def test_qwen25_save_load_and_legacy_checkpoint(tmp_path):
     ).eval()
     torch.testing.assert_close(model(**batch).logits, converted(**batch).logits)
 
-    with torch.no_grad():
-        reloaded.model.language_model.embed_tokens.weight.zero_()
-    _, unexpected = load_model_checkpoint(reloaded, legacy)
-    assert not unexpected
-    torch.testing.assert_close(model(**batch).logits, reloaded(**batch).logits)
-
 
 @pytest.mark.parametrize("processor_class", [Qwen25Processor, Qwen3Processor])
 def test_processor_roundtrip_expands_custom_vision_tokens(tmp_path, processor_class):
     vocab = {"[UNK]": 0, "[PAD]": 1, "<|image_pad|>": 2, "<|video_pad|>": 3}
-    tokenizer = Qwen2TokenizerFast(
+    tokenizer = Qwen2Tokenizer(
         tokenizer_object=Tokenizer(WordLevel(vocab, unk_token="[UNK]")),
         unk_token="[UNK]",
         pad_token="[PAD]",
-        additional_special_tokens=["<|image_pad|>", "<|video_pad|>"],
+        extra_special_tokens=["<|image_pad|>", "<|video_pad|>"],
     )
     processor = processor_class(image_processor=Qwen2VLImageProcessor(), tokenizer=tokenizer)
     processor.save_pretrained(tmp_path)
