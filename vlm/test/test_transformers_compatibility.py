@@ -207,7 +207,7 @@ def test_trainable_parameters_keep_names_and_dtypes(monkeypatch, tmp_path, tie_w
     )
     from vlm.models.qwen3.wrapper import Qwen3TextVLWrapper
 
-    # The backbone is loaded in bfloat16; the adapter is built afterwards in float32. The base
+    # The backbone is loaded in bfloat16; all trainable parameters are kept in float32. The base
     # layer of the lm_head LoRA stays frozen whether or not it is tied to the embeddings.
     config = make_config("qwen3")
     config.tie_word_embeddings = tie_word_embeddings
@@ -235,11 +235,12 @@ def test_trainable_parameters_keep_names_and_dtypes(monkeypatch, tmp_path, tie_w
     } == {
         "model.vision_adapter.weight": torch.float32,
         "model.vision_adapter.bias": torch.float32,
-        lora + "A.default.weight": torch.bfloat16,
-        lora + "B.default.weight": torch.bfloat16,
-        "lm_head.lora_A.default.weight": torch.bfloat16,
-        "lm_head.lora_B.default.weight": torch.bfloat16,
+        lora + "A.default.weight": torch.float32,
+        lora + "B.default.weight": torch.float32,
+        "lm_head.lora_A.default.weight": torch.float32,
+        "lm_head.lora_B.default.weight": torch.float32,
     }
+    assert model.lm_head.base_layer.weight.dtype == torch.bfloat16
 
 
 def test_qwen25_save_load_and_legacy_checkpoint(tmp_path):

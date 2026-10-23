@@ -268,6 +268,12 @@ class AbstractVLWrapper(ABC):
             else:
                 raise ValueError(f"Unknown mode in {TrainableModuleConfig.__name__}: {mode}")
 
+        # Keep trainable weights, and thus their gradients and optimizer states, in float32.
+        # Mixed-precision autocast still runs the computation in bfloat16.
+        for param in self.model.parameters():
+            if param.requires_grad:
+                param.data = param.data.float()
+
     def initialize_checkpoint_tracking(self) -> None:
         """Register state that must be included in partial model checkpoints.
 
