@@ -4,6 +4,7 @@ from vlm.models.gemma3.wrapper import Gemma3TextVLWrapper
 from vlm.models.phi4mini.wrapper import Phi4MiniVLWrapper
 from vlm.models.qwen25vl.wrapper import Qwen25VLWrapper
 from vlm.models.qwen3.wrapper import Qwen3TextVLWrapper
+from vlm.models.qwen35.wrapper import Qwen35VLWrapper
 from vlm.models.qwen3vl.wrapper import Qwen3VLWrapper
 
 
@@ -32,6 +33,18 @@ VLM_REGISTRY: dict[str, VLMConfig] = {
     "Qwen3-VL-8B": VLMConfig(
         model_id="Qwen/Qwen3-VL-8B-Instruct",
         model_class=Qwen3VLWrapper
+    ),
+    "Qwen3.5-2B": VLMConfig(
+        model_id="Qwen/Qwen3.5-2B",
+        model_class=Qwen35VLWrapper
+    ),
+    "Qwen3.5-4B": VLMConfig(
+        model_id="Qwen/Qwen3.5-4B",
+        model_class=Qwen35VLWrapper
+    ),
+    "Qwen3.5-9B": VLMConfig(
+        model_id="Qwen/Qwen3.5-9B",
+        model_class=Qwen35VLWrapper
     ),
     "Phi4Mini": VLMConfig(
         model_id="microsoft/Phi-4-mini-instruct",

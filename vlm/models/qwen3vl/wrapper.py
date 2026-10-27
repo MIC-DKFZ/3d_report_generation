@@ -8,6 +8,8 @@ from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 
 
 class Qwen3VLWrapper(AbstractVLWrapper):
+    model_class = Qwen3VLForConditionalGeneration
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._model_str = "qwen"
@@ -23,7 +25,7 @@ class Qwen3VLWrapper(AbstractVLWrapper):
 
         cache_dir = get_hf_hub_cache_dir()
 
-        self.model = Qwen3VLForConditionalGeneration.from_pretrained(
+        self.model = self.model_class.from_pretrained(
             self.model_cfg.model_id.get_resolved_path(),
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,

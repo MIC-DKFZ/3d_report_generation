@@ -15,6 +15,7 @@ from transformers import (
     Phi3Config,
     Phi3ForCausalLM,
     Qwen2_5_VLConfig,
+    Qwen3_5Config,
     Qwen2Tokenizer,
     Qwen2VLImageProcessor,
     Qwen3Config,
@@ -28,11 +29,12 @@ from vlm.models.phi4mini.modeling_phi4mini_vl import Phi4MiniVLForConditionalGen
 from vlm.models.qwen25vl.modeling_qwen25_vl import Qwen25VLForConditionalGeneration
 from vlm.models.qwen25vl.processing_3d import QwenVLProcessor3D as Qwen25Processor
 from vlm.models.qwen3.modeling_qwen3_text_vl import Qwen3TextVLForConditionalGeneration
+from vlm.models.qwen35.modeling_qwen35 import Qwen35VLForConditionalGeneration
 from vlm.models.qwen3vl.modeling_qwen3_vl import Qwen3VLForConditionalGeneration
 from vlm.models.qwen3vl.processing_3d import QwenVLProcessor3D as Qwen3Processor
 
 
-BACKBONES = ["qwen25", "qwen3vl", "qwen3", "phi4", "gemma3"]
+BACKBONES = ["qwen25", "qwen3vl", "qwen35", "qwen3", "phi4", "gemma3"]
 VISION_TOKENS = [4, 6, 7]
 
 
@@ -53,10 +55,22 @@ def make_config(backbone):
     special = dict(
         video_token_id=4, image_token_id=4, vision_start_token_id=6, vision_end_token_id=7
     )
-    if backbone in ("qwen25", "qwen3vl"):
+    if backbone in ("qwen25", "qwen3vl", "qwen35"):
         text["rope_parameters"] = {"rope_type": "default", "mrope_section": [1, 1, 2]}
-        config_class = Qwen2_5_VLConfig if backbone == "qwen25" else Qwen3VLConfig
-        config = config_class(text_config=text, **special)
+        if backbone == "qwen35":
+            # One recurrent linear-attention layer before one full-attention layer.
+            text.update(
+                num_hidden_layers=2,
+                layer_types=["linear_attention", "full_attention"],
+                linear_num_key_heads=2,
+                linear_num_value_heads=2,
+                linear_key_head_dim=4,
+                linear_value_head_dim=4,
+                linear_conv_kernel_dim=2,
+            )
+            text["rope_parameters"].update(mrope_interleaved=True, partial_rotary_factor=1.0)
+        config_class = {"qwen25": Qwen2_5_VLConfig, "qwen3vl": Qwen3VLConfig, "qwen35": Qwen3_5Config}
+        config = config_class[backbone](text_config=text, **special)
     else:
         config_class = {"qwen3": Qwen3Config, "phi4": Phi3Config, "gemma3": Gemma3TextConfig}[
             backbone
@@ -72,6 +86,7 @@ def make_model(backbone):
     model_class = {
         "qwen25": Qwen25VLForConditionalGeneration,
         "qwen3vl": Qwen3VLForConditionalGeneration,
+        "qwen35": Qwen35VLForConditionalGeneration,
         "qwen3": Qwen3TextVLForConditionalGeneration,
         "phi4": Phi4MiniVLForConditionalGeneration,
         "gemma3": Gemma3TextVLForConditionalGeneration,
@@ -146,7 +161,7 @@ def test_generation_steps_match_uncached_forward(backbone):
             input_ids=generated.sequences[:, : prompt_length + step],
             attention_mask=attention_mask,
         )
-        if backbone not in ("qwen25", "qwen3vl"):
+        if backbone not in ("qwen25", "qwen3vl", "qwen35"):
             # Text backbones use 1D positions that skip left padding.
             inputs["position_ids"] = (attention_mask.cumsum(-1) - 1).clamp(min=0)
         expected = model(**inputs, use_cache=False).logits[:, -1]
@@ -313,3 +328,4 @@ def test_shared_registry_registers_nnfoundation_backbone(monkeypatch, tmp_path):
 
     assert VLM_REGISTRY["Qwen2.5-VL-3B"].model_class is Qwen25VLWrapper
     assert {"Qwen3-1.7B", "Qwen3-VL-2B", "Phi4Mini", "Gemma3-4B"} <= VLM_REGISTRY.keys()
+    assert {"Qwen3.5-2B", "Qwen3.5-4B", "Qwen3.5-9B"} <= VLM_REGISTRY.keys()
