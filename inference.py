@@ -8,21 +8,22 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from vlm.configs.run_config import RunConfig
-from vlm.utils.data.dataset_utils import create_dataset
+from vlm.configs.paths import ConfigPath
 from vlm.data.dataloaders import create_eval_dataloader
+from vlm.data.factory import create_dataset
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.utils import logger
 from vlm.utils.decoding import decode_generated_answers, decode_prompts
-from vlm.utils.ddp_utils import setup_ddp, gather_inference_outputs, is_main_process
-from vlm.utils.data.filter_batch import extract_batch_prompt_only
+from vlm.utils.ddp import setup_ddp, gather_inference_outputs, is_main_process
+from vlm.data.batches import extract_batch_prompt_only
 from vlm.utils.run_naming import add_datetime_tag
 from vlm.utils.seeding import seed_everything
-from vlm.utils.config.merging import recursive_dict_merge
-from vlm.utils.load_and_save_files import load_config_file, save_json
-from vlm.utils.training.checkpointing import save_final_config
+from vlm.configs.merging import recursive_dict_merge
+from vlm.utils.serialization import load_config_file, save_json
+from vlm.training.checkpointing import save_final_config
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.paths import VLM_CONFIG_DIR, resolve_run_dir
-from vlm.utils.data.local_staging import get_local_vision_input_path
+from vlm.data.staging import get_local_vision_input_path
 from eval import main as eval_main
 
 
@@ -201,7 +202,7 @@ def parse_args() -> tuple[Namespace, list[str]]:
     )
 
     parser.add_argument(
-        "--inference_dir_suffix",
+        "--suffix",
         type=str,
         default="",
         help="An optional suffix to append to the 'inference' output directory."
@@ -248,7 +249,7 @@ def main(
         vlm_model, cfg = AbstractVLWrapper.load_from_checkpoint_dir(ckpt_dir)
 
     # Moved this bevor `is_main`
-    inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "inference_dir_suffix", ""))
+    inference_output_dir = Path(ckpt_dir, "inference" + getattr(args, "suffix", ""))
 
     # All ranks use rank 0's timestamp, even when model loading finishes at different times.
     log_file_names = [add_datetime_tag("inference") + ".log" if is_main_process() else None]
@@ -275,17 +276,20 @@ def main(
         # CLI values take precedence over file overrides.
         cfg.merge_subconfigs_with_cli_args(config_cli_args or [])
 
-    if getattr(args, "is_staged", False):
-        cfg.data.vision_input_path = str(get_local_vision_input_path())
+    cfg.general.output_dir.set_runtime_path(Path(ckpt_dir).parent)
 
-    cfg.data.vision_input_path = vision_input_path if vision_input_path else cfg.data.vision_input_path
+    if getattr(args, "is_staged", False):
+        vision_input_path = vision_input_path or str(get_local_vision_input_path())
+
+    if vision_input_path:
+        if cfg.data.vision_input_path is None:
+            cfg.data.vision_input_path = ConfigPath(vision_input_path)
+        else:
+            cfg.data.vision_input_path.set_runtime_path(vision_input_path)
     logger.info_main(f"Using {cfg.eval.split} split for inference.")
     inference_dataset = create_dataset(cfg, split=cfg.eval.split)
 
     logger.info_main(f"Loaded {len(inference_dataset)} inference samples")
-
-    if cfg.data.embedding_constant is not None:
-        logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     # Create inference object and run inference
     logger.info_main(f"Config:\n{cfg}")

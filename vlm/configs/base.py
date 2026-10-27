@@ -3,7 +3,7 @@ from pathlib import Path
 from types import UnionType
 from typing import Any, ClassVar, Callable, Type, OrderedDict, List, Tuple, Union, get_type_hints, get_origin
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
-from vlm.utils.class_utils import get_class_from_registry, recursive_find_python_class
+from vlm.utils.classes import get_class_from_registry, recursive_find_python_class
 import vlm
 import inspect
 from inspect import Parameter

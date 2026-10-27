@@ -26,13 +26,6 @@ class MLP(nn.Sequential):
 
         super().__init__(*lis)
 
-    # def forward(self, x):
-    #     for layer in self:
-    #         if isinstance(layer, nn.Linear):
-    #             x = x.to(dtype=layer.weight.dtype)
-    #         x = layer(x)
-    #     return x
-
 
 class MixerBlock(nn.Module):
     def __init__(self, in_features: int, out_features: int, in_vision_tokens: int, out_vision_tokens: int,

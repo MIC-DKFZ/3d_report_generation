@@ -1,13 +1,9 @@
-from typing import Literal
 from pydantic import Field, model_validator
-from pathlib import Path
-import vlm
-
 from torch.utils.data import Dataset
 
 from vlm.configs.base import ConfigBase, RecursiveFindClassConfigBase
-from vlm.utils.data.vision_input_type import VisionInputType
-from vlm.utils.class_utils import recursive_find_python_class
+from vlm.configs.paths import ConfigPath
+from vlm.data.types import VisionInputType
 
 
 class EmbeddingTransformClassConfig(RecursiveFindClassConfigBase):
@@ -22,20 +18,17 @@ class DataConfig(ConfigBase):
     dataset_name: str | None = Field(
         None, description="Name of the dataset."
     )
-    dataset_class_name: str | None = Field(
-        None, description="Dataset class name; inferred from dataset_name and retrieval settings if omitted."
-    )
 
-    train_dataset_json_path: str | None = Field(
+    train_dataset_json_path: ConfigPath | None = Field(
         None, description="Path to the train dataset JSON file."
     )
-    val_dataset_json_path: str | None = Field(
+    val_dataset_json_path: ConfigPath | None = Field(
         None, description="Path to the validation dataset JSON file."
     )
-    test_dataset_json_path: str | None = Field(
+    test_dataset_json_path: ConfigPath | None = Field(
         None, description="Path to the test dataset JSON file."
     )
-    vision_input_path: str | None = Field(
+    vision_input_path: ConfigPath | None = Field(
         None, description="Path to the vision input (either embeddings or images)."
     )
     vision_input_is_sharded: bool = Field(
@@ -59,11 +52,11 @@ class DataConfig(ConfigBase):
         False,
         description="Whether to only input text and omit any vision tokens."
     )
-    embedding_constant: float | Literal["random"] | None = Field(
-        None, description="Constant value for language-only baseline. Either a float or 'random'."
-    )
 
-    n_train_samples: int | None = Field(None, description="Number of training samples to use.")
+    n_train_samples: int | None = Field(
+        None,
+        description="Number of training query samples to use. Retrieval uses the full training JSON.",
+    )
     n_val_samples: int | None = Field(1, description="Number of validation samples to use.")
 
     do_resize: bool = Field(
@@ -97,7 +90,7 @@ class DataConfig(ConfigBase):
         description="Add a suffix to the image IDs provided in the dataset JSON. "
         "WARNING: Only works for CTRATE embeddings.",
     )
-    retrieval_json_path: str | None = Field(
+    retrieval_json_path: ConfigPath | None = Field(
         None, description="Path to the retrieval JSON file mapping for the respective dataset."
     )
 
@@ -111,16 +104,10 @@ class DataConfig(ConfigBase):
 
     @model_validator(mode="after")
     def maybe_set_val_dataset_json_path_to_none(self):
-        if isinstance(self.val_dataset_json_path, str):
-            normalized_path = self.val_dataset_json_path.strip().lower()
+        if self.val_dataset_json_path is not None:
+            normalized_path = self.val_dataset_json_path.expression.strip().lower()
             if normalized_path in {"none", "null"}:
                 self.val_dataset_json_path = None
-        return self
-
-    @model_validator(mode="after")
-    def validate_vision_input_modifiers(self):
-        if self.text_only and self.embedding_constant is not None:
-            raise ValueError(f"'text_only' and 'embedding_constant' cannot be used together.")
         return self
 
     @model_validator(mode="after")
@@ -145,23 +132,22 @@ class DataConfig(ConfigBase):
         return self
 
     @model_validator(mode="after")
-    def resolve_dataset_class_name(self):
-        """Fill a missing class name from the dataset registry."""
-        if self.dataset_class_name:
-            return self
+    def validate_dataset_class(self):
+        """Validate the class selected by the dataset and retrieval settings."""
+        self.get_dataset_class()
+        return self
 
-        from vlm.registries.dataset_registry import get_dataset_class
-
-        self.dataset_class_name = get_dataset_class(self).__name__
+    @model_validator(mode="after")
+    def validate_text_only_retrieval(self):
+        if self.text_only and self.retrieval_use_image_in_prompt:
+            raise ValueError(
+                "'text_only=True' cannot be used with image retrieval. "
+                "Disable 'retrieval_use_image_in_prompt' to use report-only retrieval."
+            )
         return self
 
     def get_dataset_class(self) -> type[Dataset]:
-        """Look up the configured dataset class by name."""
-        dataset_class = recursive_find_python_class(
-            folder=str(Path(vlm.__path__[0], "data")),
-            class_name=self.dataset_class_name,
-            current_module="vlm.data",
-        )
-        if dataset_class is None:
-            raise ValueError(f"Unknown dataset class: {self.dataset_class_name}")
-        return dataset_class
+        """Select the registered class from the current dataset and retrieval settings."""
+        from vlm.registries.dataset_registry import get_dataset_class
+
+        return get_dataset_class(self)

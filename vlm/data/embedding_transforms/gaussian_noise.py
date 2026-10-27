@@ -1,6 +1,6 @@
 import numpy as np
 
-from vlm.utils.data.embedding_transforms import (
+from vlm.data.embedding_transforms._helpers import (
     should_apply,
     validate_embedding,
     validate_probability,

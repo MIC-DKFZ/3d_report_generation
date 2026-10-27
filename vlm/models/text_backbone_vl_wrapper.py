@@ -5,7 +5,7 @@ import torch
 from transformers import AutoTokenizer, PreTrainedModel
 
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
-from vlm.utils.data.filter_batch import extract_raw_samples_from_batch
+from vlm.data.batches import extract_raw_samples_from_batch
 from vlm.utils.paths import get_hf_hub_cache_dir
 
 
@@ -32,14 +32,14 @@ class TextBackboneVLWrapper(AbstractVLWrapper):
         """Load the tokenizer and model, then initialize the configured vision components."""
         cache_dir = get_hf_hub_cache_dir()
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_cfg.model_id,
+            self.model_cfg.model_id.get_resolved_path(),
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
         )
         self._configure_tokenizer()
 
         self.model = self.model_class.from_pretrained(
-            self.model_cfg.model_id,
+            self.model_cfg.model_id.get_resolved_path(),
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
             torch_dtype=torch.bfloat16,

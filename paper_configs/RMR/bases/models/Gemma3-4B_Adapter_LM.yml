@@ -1,0 +1,34 @@
+model:
+  model_type: Gemma3-4B
+  model_id: google/gemma-3-4b-it
+
+  trainable_params:
+
+    vision_encoder:
+      mode: frozen
+
+    adapter:
+      mode: full
+
+    language_model:
+      mode: peft
+      peft:
+        type: lora
+        r: 32
+        lora_alpha: 64
+        lora_dropout: 0.1
+        target_modules:
+          - q_proj
+          - k_proj
+          - v_proj
+          - gate_proj
+          - up_proj
+          - down_proj
+
+    lm_head:
+      mode: peft
+      peft:
+        type: lora
+        r: 32
+        lora_alpha: 64
+        lora_dropout: 0.1

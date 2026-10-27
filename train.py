@@ -9,11 +9,18 @@ from trl import SFTConfig
 
 from vlm.configs.run_config import RunConfig
 from vlm.data.dataloaders import create_eval_dataloader
+from vlm.data.factory import create_dataset
 from inference import main as inference_main
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
-from vlm.training.callbacks.logging import LossLoggingCallback, PycocoevalCallback, WandbGroupedLRCallback, \
-    TerminateOnNaNLossCallback, EveryNEpochsCallback
-from vlm.utils.training.checkpointing import (
+from vlm.models.factory import create_model_wrapper
+from vlm.training.callbacks import (
+    EveryNEpochsCallback,
+    LossLoggingCallback,
+    ReportEvaluationCallback,
+    TerminateOnNaNLossCallback,
+    WandbGroupedLRCallback,
+)
+from vlm.training.checkpointing import (
     CheckpointPlan,
     TrainRuntimeArgs,
     create_checkpoint_plan,
@@ -22,20 +29,16 @@ from vlm.utils.training.checkpointing import (
     save_final_config,
 )
 from vlm.training.trainers import VLMSFTTrainer
-from vlm.utils.model_utils import create_model_wrapper
 from vlm.utils import logger
-from vlm.utils.ddp_utils import setup_ddp, is_main_process
+from vlm.utils.ddp import setup_ddp, is_main_process
 from vlm.utils.seeding import seed_everything
-from vlm.utils.data.dataset_utils import (
-    collect_image_ids_from_config_dataset_jsons,
-    create_dataset,
-)
-from vlm.utils.training.optimizer_and_params import count_parameters
-from vlm.utils.training.wandb_utils import finish_wandb, initialize_wandb
-from vlm.utils.data.local_staging import stage_vision_input_to_local
-from vlm.utils.load_and_save_files import load_config_file, save_json
+from vlm.data.image_ids import collect_image_ids_from_config_dataset_jsons
+from vlm.training.parameters import count_parameters
+from vlm.training.wandb import finish_wandb, initialize_wandb
+from vlm.data.staging import stage_vision_input_to_local
+from vlm.utils.serialization import load_config_file, save_json
 from vlm.utils.logging import setup_logger, log_banner
-from vlm.utils.memory_utils import (
+from vlm.utils.memory import (
     aggressive_cleanup,
     log_memory_usage,
     setup_memory_efficient_training,
@@ -90,7 +93,7 @@ class UnifiedVLMTrainer:
             **trainer_args,
             **model_args,
             run_name=self.cfg.general.run_name,
-            output_dir=self.cfg.general.output_dir,
+            output_dir=self.cfg.general.output_dir.get_resolved_path(),
             seed=self.cfg.general.seed,
         )
 
@@ -126,7 +129,9 @@ class UnifiedVLMTrainer:
             _stats = {
                 "parameter_count": adapter_parameter_count
             }
-            save_json(_stats, Path(self.cfg.general.output_dir, ADAPTER_STATS_FILENAME))
+            save_json(
+                _stats, Path(self.cfg.general.output_dir.get_resolved_path(), ADAPTER_STATS_FILENAME)
+            )
 
         initialize_wandb(self.vlm_model, self.cfg, self.world_size, self.rank)
 
@@ -140,12 +145,7 @@ class UnifiedVLMTrainer:
         ]
 
         if self.cfg.trainer.eval_strategy == "epoch":
-            if self.cfg.trainer.eval_steps is None:
-                raise ValueError(
-                    "trainer.eval_steps must be set when trainer.eval_strategy='epoch' "
-                    "because it controls EveryNEpochsCallback.n."
-                )
-            callbacks.append(EveryNEpochsCallback(n=self.cfg.trainer.eval_steps))
+            callbacks.append(EveryNEpochsCallback(n=self.cfg.eval.eval_every_n_epochs))
 
         if val_dataset is not None:
             callback_eval_dataset = callback_val_dataset if callback_val_dataset is not None else val_dataset
@@ -162,14 +162,12 @@ class UnifiedVLMTrainer:
             )
 
             callbacks.append(
-                PycocoevalCallback(  # type: ignore[arg-type]
+                ReportEvaluationCallback(  # type: ignore[arg-type]
                     eval_dataloader=callback_eval_dataloader,
                     max_new_tokens=self.cfg.eval.max_new_tokens,
-                    eval_every_n_epochs=self.cfg.eval.eval_every_n_epochs,
                     tokenizer=self.vlm_model.tokenizer,
-                    processor=self.vlm_model.processor,
                     is_distributed=self.is_distributed,
-                    calculate_radbert_score=self.cfg.eval.calculate_radbert_score,
+                    calculate_classifier_score=self.cfg.eval.calculate_classifier_score,
                     dataset_name=self.cfg.data.dataset_name
                 )
             )
@@ -195,7 +193,7 @@ class UnifiedVLMTrainer:
             scheduler=self.cfg.scheduler.to_instance(
                 module_attr_map=self.vlm_model.module_attr_map,
                 forbidden_name_patterns_for_wd=self.vlm_model.forbidden_name_patterns_for_wd,
-                output_dir=self.cfg.general.output_dir
+                output_dir=self.cfg.general.output_dir.get_resolved_path()
             ),
         )
 
@@ -300,38 +298,32 @@ def setup_config_and_logging(
         # Merge base configs into cfg_dict
         cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
 
-        # Set to absolute path
-        cfg_dict["general"]["train_config"] = str(train_config_path)
+        cfg_dict.setdefault("general", {})["train_config"] = str(train_config_path)
 
         # Validate the file config before registering CLI override options.
         cfg = RunConfig.model_validate(cfg_dict)
 
-        # Setup output directory and log file
+        output_dir = cfg.general.output_dir.get_resolved_path()
         if is_main_process():
-            os.makedirs(cfg.general.output_dir, exist_ok=True)
-            shutil.copyfile(
-                cfg.general.train_config, os.path.join(cfg.general.output_dir, INPUT_CONFIG_FILENAME)
-            )
-
-        log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
-        setup_logger(log_file_path)  # Setup logger on every rank
-
-        logger.info_main(f"Successfully set up output directory at {cfg.general.output_dir}")
+            os.makedirs(output_dir, exist_ok=True)
+            shutil.copyfile(cfg.general.train_config, Path(output_dir, INPUT_CONFIG_FILENAME))
+        setup_logger(os.path.join(output_dir, TRAIN_LOG_FILENAME))
+        logger.info_main(f"Successfully set up output directory at {output_dir}")
 
     else:
         cfg, config_warnings = load_run_config_from_run_dir(runtime_args.continue_training_run_dir)
 
-        log_file_path = os.path.join(cfg.general.output_dir, TRAIN_LOG_FILENAME)
-        setup_logger(log_file_path)  # Setup logger on every rank
+        output_dir = cfg.general.output_dir.get_resolved_path()
+        setup_logger(os.path.join(output_dir, TRAIN_LOG_FILENAME))
 
         for message in config_warnings:
             logger.warning_main(message)
 
-        logger.info_main(f"Continuing training from run directory: {cfg.general.output_dir}")
+        logger.info_main(f"Continuing training from run directory: {output_dir}")
 
     cfg.merge_subconfigs_with_cli_args(config_cli_args)
     if runtime_args.continue_training_run_dir is not None:
-        cfg.general.output_dir = str(runtime_args.continue_training_run_dir)
+        cfg.general.output_dir.set_runtime_path(runtime_args.continue_training_run_dir)
     cfg.apply_conditional_resets()
     cfg.resolve_dataloader_workers(is_distributed, local_world_size)
 
@@ -353,9 +345,6 @@ def train_val_data_from_config(cfg: RunConfig):
         if val_dataset
         else None
     )
-
-    if cfg.data.embedding_constant is not None:
-        logger.info_main(f"Using embedding constant: {cfg.data.embedding_constant}")
 
     logger.info_main(
         f"Loaded {len(train_dataset)} training samples and "
@@ -386,17 +375,19 @@ def main():
     if run_dir_file and is_main_process():
         run_dir_file_path = Path(run_dir_file)
         run_dir_file_path.parent.mkdir(parents=True, exist_ok=True)
-        run_dir_file_path.write_text(cfg.general.output_dir + "\n", encoding="utf-8")
+        run_dir_file_path.write_text(
+            cfg.general.output_dir.get_resolved_path() + "\n", encoding="utf-8"
+        )
 
     # Copy vision inputs to node-local storage to reduce shared filesystem I/O.
     if cfg.general.stage_vision_input_to_local:
         image_ids = collect_image_ids_from_config_dataset_jsons(cfg, ["train", "val", "test"])
-        cfg.data.vision_input_path = str(
+        cfg.data.vision_input_path.set_runtime_path(
             stage_vision_input_to_local(
-                vision_input_path=cfg.data.vision_input_path,  # type: ignore
+                vision_input_path=cfg.data.vision_input_path.get_resolved_path(),
                 vision_input_is_sharded=cfg.data.vision_input_is_sharded,
                 image_ids=image_ids,
-            )
+            ),
         )
 
     seed_everything(cfg.general.seed)  # Set a random seed for reproducibility
@@ -418,10 +409,17 @@ def main():
 
     if cfg.eval.run_inference and not already_complete_on_resume:
         inference_args = argparse.Namespace(
-            run_dir=cfg.general.output_dir,
+            run_dir=cfg.general.output_dir.get_resolved_path(),
             mode=cfg.eval.mode
         )
-        inference_main(inference_args, vision_input_path=cfg.data.vision_input_path, is_main=False)
+        inference_main(
+            inference_args,
+            vision_input_path=(
+                cfg.data.vision_input_path.get_resolved_path()
+                if cfg.data.vision_input_path is not None else None
+            ),
+            is_main=False
+        )
 
 
 if __name__ == "__main__":

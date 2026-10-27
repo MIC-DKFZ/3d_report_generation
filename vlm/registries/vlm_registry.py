@@ -2,6 +2,7 @@ from pydantic import BaseModel
 
 from vlm.models.gemma3.wrapper import Gemma3TextVLWrapper
 from vlm.models.phi4mini.wrapper import Phi4MiniVLWrapper
+from vlm.models.qwen25vl.wrapper import Qwen25VLWrapper
 from vlm.models.qwen3.wrapper import Qwen3TextVLWrapper
 from vlm.models.qwen3vl.wrapper import Qwen3VLWrapper
 
@@ -12,6 +13,10 @@ class VLMConfig(BaseModel):
 
 
 VLM_REGISTRY: dict[str, VLMConfig] = {
+    "Qwen2.5-VL-3B": VLMConfig(
+        model_id="Qwen/Qwen2.5-VL-3B-Instruct",
+        model_class=Qwen25VLWrapper,
+    ),
     "Qwen3-1.7B": VLMConfig(
         model_id="Qwen/Qwen3-1.7B",
         model_class=Qwen3TextVLWrapper

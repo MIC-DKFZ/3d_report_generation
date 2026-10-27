@@ -74,7 +74,8 @@ def setup_logger(log_file_path: str | Path | None = None):
     )
     if log_file_path is not None:
         loguru_logger.add(str(log_file_path), enqueue=True, format=fmt, level="DEBUG")
-    loguru_logger.add(sys.stderr, enqueue=True, format=fmt, colorize=True)
+    is_cluster_job = bool(os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"))
+    loguru_logger.add(sys.stderr, enqueue=True, format=fmt, colorize=not is_cluster_job)
 
     loguru_logger.configure(extra={"rank": rank})
 

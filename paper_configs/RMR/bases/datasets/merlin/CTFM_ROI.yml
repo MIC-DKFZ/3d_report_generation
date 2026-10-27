@@ -1,0 +1,7 @@
+base_configs:
+  - bases/datasets/merlin/Embedding.yml
+
+data:
+  vision_input_path: ${VLM_EMBEDS}/MERLIN_CTFM_ROI
+  embed_dim: 512
+  embed_size: [12, 12, 12]

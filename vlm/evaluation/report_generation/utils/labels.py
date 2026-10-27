@@ -3,6 +3,8 @@
 from pathlib import Path
 
 import pandas as pd
+from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -10,6 +12,49 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
+
+
+def _model_reference_labels_path(model_id):
+    source = Path(model_id)
+    if source.is_dir():
+        path = source / "gt_labels.csv"
+        return path if path.is_file() else None
+    try:
+        return Path(hf_hub_download(model_id, "gt_labels.csv"))
+    except EntryNotFoundError:
+        return None
+
+
+def get_reference_labels(
+    reports,
+    image_ids,
+    label_columns,
+    predict_labels,
+    default_gt_df=None,
+    gt_labels_path=None,
+    model_id=None,
+) -> pd.DataFrame:
+    """Use supplied labels, a CSV from the model, or classify reference reports."""
+    if len(reports) != len(image_ids):
+        raise ValueError("Reference reports and image_ids must have equal lengths")
+    if default_gt_df is not None:
+        labels = default_gt_df
+    else:
+        if gt_labels_path is None and model_id is not None:
+            gt_labels_path = _model_reference_labels_path(model_id)
+        if gt_labels_path is not None:
+            return load_reference_labels(Path(gt_labels_path), image_ids, label_columns)
+        labels = predict_labels(reports)
+
+    if len(labels) != len(image_ids):
+        raise ValueError("Reference labels and image_ids must have equal lengths")
+    missing = set(label_columns) - set(labels.columns)
+    if missing:
+        raise ValueError(f"Reference labels are missing label columns: {sorted(missing)}")
+    labels = labels[list(label_columns)].reset_index(drop=True)
+    if not labels.isin([0, 1]).all().all():
+        raise ValueError("Reference labels must contain binary labels without missing values")
+    return labels
 
 
 def load_reference_labels(
@@ -21,6 +66,8 @@ def load_reference_labels(
     gt_labels = pd.read_csv(gt_labels_path, dtype={"image_id": str})
     if "image_id" not in gt_labels.columns:
         raise ValueError(f"{gt_labels_path} is missing the required 'image_id' column")
+    if gt_labels["image_id"].isna().any() or gt_labels["image_id"].eq("").any():
+        raise ValueError(f"{gt_labels_path} contains empty image_id values")
 
     duplicate_image_ids = gt_labels.loc[
         gt_labels["image_id"].duplicated(keep=False), "image_id"
@@ -45,7 +92,10 @@ def load_reference_labels(
             f"{missing_image_ids[:10]}"
         )
 
-    return gt_labels.loc[image_ids, label_cols].reset_index(drop=True)
+    labels = gt_labels.loc[image_ids, label_cols].reset_index(drop=True)
+    if not labels.isin([0, 1]).all().all():
+        raise ValueError(f"{gt_labels_path} must contain binary labels without missing values")
+    return labels
 
 
 def compute_label_metrics(

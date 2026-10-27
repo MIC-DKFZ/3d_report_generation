@@ -1,7 +1,7 @@
 import torch
 from vlm.models.qwen3vl.processing_3d import QwenVLProcessor3D
 from vlm.models.qwen3vl.modeling_qwen3_vl import Qwen3VLForConditionalGeneration
-from vlm.utils.data.filter_batch import extract_raw_samples_from_batch
+from vlm.data.batches import extract_raw_samples_from_batch
 from vlm.utils.paths import get_hf_hub_cache_dir
 
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
@@ -24,18 +24,22 @@ class Qwen3VLWrapper(AbstractVLWrapper):
         cache_dir = get_hf_hub_cache_dir()
 
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
-            self.model_cfg.model_id,
+            self.model_cfg.model_id.get_resolved_path(),
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
             torch_dtype=torch.bfloat16,
         )
 
         self._setup_vision_components()
+
+        # Uncomment to exactly reproduce RMR experiments; see README reproducibility section.
+        # self.model.post_init()
+
         if self.model_cfg.vision_encoder is not None:
             self.downsample_factor = self.model.model.vision_encoder.downsample_factor
 
         self.processor = QwenVLProcessor3D.from_pretrained(
-            self.model_cfg.model_id,
+            self.model_cfg.model_id.get_resolved_path(),
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
         )

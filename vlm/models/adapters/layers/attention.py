@@ -21,11 +21,6 @@ class SeperateKVMHXAttention(nn.Module):
     def forward(self, latents: torch.Tensor, context_1: torch.Tensor, context_2: torch.Tensor):
         batch_size, num_latents, _ = latents.shape
 
-        # Keep projection inputs aligned with parameter dtype (e.g. DeepSpeed bf16).
-        latents = latents.to(dtype=self.to_q.weight.dtype)
-        context_1 = context_1.to(dtype=self.to_kv_1.weight.dtype)
-        context_2 = context_2.to(dtype=self.to_kv_2.weight.dtype)
-
         q = self.to_q(latents)
         k1, v1 = self.to_kv_1(context_1).chunk(2, dim=-1)
         k2, v2 = self.to_kv_2(context_2).chunk(2, dim=-1)
@@ -56,10 +51,6 @@ class MHXAttention(nn.Module):
     def forward(self, latents: torch.Tensor, context: torch.Tensor):
         batch_size, num_latents, _ = latents.shape
 
-        # Keep projection inputs aligned with parameter dtype (e.g. DeepSpeed bf16).
-        # latents = latents.to(dtype=self.to_q.weight.dtype)
-        # context = context.to(dtype=self.to_kv.weight.dtype)
-
         q = self.to_q(latents)
         k, v = self.to_kv(context).chunk(2, dim=-1)
 
@@ -87,11 +78,6 @@ class MHAttention(nn.Module):
 
     def forward(self, query, key, value):
         batch_size, num_queries, _ = query.shape
-
-        # Keep projection inputs aligned with parameter dtype (e.g. DeepSpeed bf16).
-        query = query.to(dtype=self.to_q.weight.dtype)
-        key = key.to(dtype=self.to_k.weight.dtype)
-        value = value.to(dtype=self.to_v.weight.dtype)
 
         q = self.to_q(query)
         k = self.to_k(key)

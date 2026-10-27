@@ -9,14 +9,14 @@ import torch
 import torch.nn as nn
 from scipy.special import expit
 from torch.utils.data import DataLoader, Dataset, SequentialSampler
-from transformers import AutoConfig, AutoModel, AutoTokenizer
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from vlm.evaluation.report_generation.utils import (
-    compute_label_metrics,
-    load_reference_labels,
-)
-from vlm.utils import logger
+from vlm.evaluation.report_generation.utils import compute_label_metrics, get_reference_labels
 
+
+MODEL_ID = "IAMJB/RadBERT-CT"
+MAX_LENGTH = 512
+THRESHOLD = 0.5
 
 LABEL_COLUMNS = [
     "Medical material",
@@ -41,12 +41,12 @@ LABEL_COLUMNS = [
 
 
 class CTDataset(Dataset):
-    def __init__(self, data_files, class_count, label_cols, hf_model_dir=None):
+    def __init__(self, data_files, class_count, label_cols):
         self.data_files = data_files
         self.class_count = class_count
 
-        self.tokenizer = AutoTokenizer.from_pretrained(hf_model_dir, do_lower_case=True)
-        self.max_length = 512
+        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, do_lower_case=True)
+        self.max_length = MAX_LENGTH
         self.label_cols = label_cols
 
     def __len__(self):
@@ -70,13 +70,15 @@ class CTDataset(Dataset):
 
 
 class RadBertClassifier(nn.Module):
-    def __init__(self, n_classes=10, hf_model_dir=None):
+    def __init__(self):
         super().__init__()
 
-        self.config = AutoConfig.from_pretrained(hf_model_dir)
-        self.model = AutoModel.from_pretrained(hf_model_dir, config=self.config)
-
-        self.classifier = nn.Linear(self.model.config.hidden_size, n_classes)
+        self.model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
+        if self.model.config.num_labels != len(LABEL_COLUMNS):
+            raise ValueError(
+                f"CT-RATE checkpoint has {self.model.config.num_labels} labels, "
+                f"expected {len(LABEL_COLUMNS)}"
+            )
 
     def forward(self, input_ids, attn_mask):
         # ensure input_ids and attention_mask are 2D
@@ -84,10 +86,7 @@ class RadBertClassifier(nn.Module):
             input_ids = input_ids.unsqueeze(0)
         if attn_mask.dim() == 1:
             attn_mask = attn_mask.unsqueeze(0)
-        output = self.model(input_ids=input_ids, attention_mask=attn_mask)
-        output = self.classifier(output.pooler_output)
-
-        return output
+        return self.model(input_ids=input_ids, attention_mask=attn_mask).logits
 
 
 class RadBertInference:
@@ -97,7 +96,7 @@ class RadBertInference:
         dataloaders,
         num_class,
         test_label_cols,
-        threshold=0.5,
+        threshold=THRESHOLD,
     ):
 
         self.model = model
@@ -108,14 +107,13 @@ class RadBertInference:
 
     def infer(self):
         self.model.eval()
+        device = next(self.model.parameters()).device
         pred_logits = np.zeros(self.num_class).reshape(1, self.num_class)
 
         with torch.no_grad():
             for input_ids, attention_mask in self.dataloaders["test"]:
-                input_ids = torch.squeeze(input_ids)
-                attention_mask = torch.squeeze(attention_mask)
-                input_ids = input_ids.to("cuda")
-                attention_mask = attention_mask.to("cuda")
+                input_ids = torch.squeeze(input_ids, dim=1).to(device)
+                attention_mask = torch.squeeze(attention_mask, dim=1).to(device)
 
                 logits = self.model(input_ids, attention_mask)
 
@@ -132,7 +130,7 @@ class RadBertInference:
         return pred_labels
 
 
-def predict_labels(reports: list[str], ckpt_path: str | Path, hf_radbert_dir: str | Path):
+def predict_labels(reports: list[str]):
     df = pd.DataFrame({"reports": reports})
     for col in LABEL_COLUMNS:
         df[col] = 0
@@ -142,20 +140,13 @@ def predict_labels(reports: list[str], ckpt_path: str | Path, hf_radbert_dir: st
         batch_size = 96
 
     # DataLoader
-    ds = CTDataset(df, len(LABEL_COLUMNS), LABEL_COLUMNS, hf_radbert_dir)
+    ds = CTDataset(df, len(LABEL_COLUMNS), LABEL_COLUMNS)
     loader = DataLoader(
         ds, sampler=SequentialSampler(ds), batch_size=batch_size, num_workers=4, pin_memory=True
     )
 
     # Model
-    model = RadBertClassifier(n_classes=len(LABEL_COLUMNS), hf_model_dir=hf_radbert_dir)
-
-    state_dict = torch.load(ckpt_path, map_location="cpu")
-    if "model.embeddings.position_ids" in state_dict:
-        del state_dict["model.embeddings.position_ids"]
-
-    model.load_state_dict(state_dict)
-    model = model.cuda().eval()
+    model = RadBertClassifier().cuda().eval()
 
     trainer = RadBertInference(
         model,
@@ -174,37 +165,28 @@ def evaluate_reports(
     gts: list,
     image_ids: list[str],
     default_gt_df: pd.DataFrame | None = None,
-) -> tuple[dict, pd.DataFrame | None, pd.DataFrame | None]:
+    gt_labels_path: str | Path | None = None,
+) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     """
     Returns (aggregate_metrics, pred_df, gt_df).
-    pred_df / gt_df are [N, C] DataFrames of binary class predictions; None when RadBERT is unavailable.
+    pred_df / gt_df are [N, C] DataFrames of binary class predictions.
+    Reference labels come from a supplied dataframe or explicit CSV.
+    Otherwise the reference reports are classified.
     """
     if not (len(preds) == len(gts) == len(image_ids)):
         raise ValueError(
             "Classifier evaluation inputs must have equal lengths: "
             f"preds={len(preds)}, gts={len(gts)}, image_ids={len(image_ids)}"
         )
-    radbert_dir = os.getenv("VLM_CTRATE_RADBERT_DIR")
-    if radbert_dir is None:
-        logger.warning_main(
-            "The environment variable 'VLM_CTRATE_RADBERT_DIR' is not set. "
-            "Cannot proceed with RadBERT inference for CT-RATE."
-        )
-        return {}, None, None
-
-    radbert_dir = Path(radbert_dir)
-    radbert_ckpt = radbert_dir / "RadBertClassifier.pth"
-    hf_radbert_dir = radbert_dir / "RadBERT-RoBERTa-4m"
-
-    pred_df = predict_labels(preds, radbert_ckpt, hf_radbert_dir)
-    gt_labels_path = radbert_dir / "gt_labels.csv"
-    if default_gt_df is not None:
-        gt_df = default_gt_df.reset_index(drop=True)
-    elif gt_labels_path.is_file():
-        logger.info_main(f"Loading CT-RATE ground-truth labels from {gt_labels_path}")
-        gt_df = load_reference_labels(gt_labels_path, image_ids, LABEL_COLUMNS)
-    else:
-        gt_df = predict_labels(gts, radbert_ckpt, hf_radbert_dir)
+    gt_df = get_reference_labels(
+        gts,
+        image_ids,
+        LABEL_COLUMNS,
+        predict_labels,
+        default_gt_df=default_gt_df,
+        gt_labels_path=gt_labels_path,
+    )
+    pred_df = predict_labels(preds)
 
     results = compute_label_metrics(
         pred_df,

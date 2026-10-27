@@ -12,15 +12,15 @@ from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.model.trainable_params.trainable_linear_layer import TrainableLinearConfig
 from vlm.configs.model.trainable_params.trainable_module import TrainableModuleConfig
 from vlm.configs.run_config import RunConfig
-from vlm.utils.model_utils import create_model_wrapper
-from vlm.utils.config.compatibility import normalize_saved_config
-from vlm.utils.training.checkpointing import resolve_ckpt_dir_in_run_dir
-from vlm.utils.training.checkpoint_state import (
+from vlm.models.factory import create_model_wrapper
+from vlm.configs.compatibility import normalize_saved_config
+from vlm.training.checkpointing import resolve_ckpt_dir_in_run_dir
+from vlm.training.checkpoint_state import (
     initialize_checkpoint_state, load_model_checkpoint,
 )
 from vlm.utils import logger
-from vlm.utils.class_utils import getattr_nested, setattr_nested
-from vlm.utils.load_and_save_files import load_yaml
+from vlm.utils.classes import getattr_nested, setattr_nested
+from vlm.utils.serialization import load_yaml
 
 
 class AbstractVLWrapper(ABC):
@@ -326,6 +326,7 @@ class AbstractVLWrapper(ABC):
         for message in config_warnings:
             logger.warning_main(message)
         cfg = RunConfig(**cfg_dict)
+        cfg.general.output_dir.set_runtime_path(ckpt_dir.parent)
 
         logger.info_main(f"Loading model from {str(ckpt_dir)}")
 

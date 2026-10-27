@@ -3,17 +3,22 @@ name = "vlm"
 version = "0.1.0"
 description = "Training and evaluation of vision-language models for report generation from 3D medical images."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE.md", "NOTICE.md"]
 dependencies = [
     "accelerate==1.9.0",
     "einops>=0.8.1",
+    "faiss-cpu",
     "matplotlib>=3.10.6",
     "numpy>=1.26.4",
+    "pandas>=2.2.3",
+    "openpyxl>=3.1.0",
     "peft==0.10.0",
     "simpleitk>=2.5.2",
     "torch>=2.6.0,<2.7.0",
     "torchvision>=0.21.0,<0.22.0",
-    "transformers==4.57.3",
+    "transformers==4.57.6",
     "trl==0.20.0",
     "wandb>=0.21.0",
     "loguru>=0.7.3",
@@ -21,17 +26,19 @@ dependencies = [
     "batchgenerators==0.25.1",
     "batchgeneratorsv2==0.3.0",
     "blosc2==3.11.0",
-    "torchrun-jsc",
-    "pycocoevalcap"
+    "pycocoevalcap",
+    "PyYAML>=6.0",
+    "pydantic>=2.0,<3",
+    "psutil>=5.9",
+    "safetensors>=0.4",
+    "scipy>=1.11",
+    "scikit-image>=0.22",
+    "scikit-learn>=1.3",
+    "tqdm>=4.66",
 ]
 
-[project.scripts]
-vlm-train = "train:main"
-vlm-inference = "inference:main_cli"
-vlm-eval = "eval:main_cli"
-
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -41,13 +48,6 @@ py-modules = ["train", "inference", "eval"]
 include = ["vlm*"]
 
 [project.optional-dependencies]
-
-# clinical-metrics = [
-#   "crimson-score",
-#   "green-score",
-#   "radgraph",
-#   "ratescore>=0.6.0",
-# ]
 
 dev = [
   "pytest>=8.4.1",

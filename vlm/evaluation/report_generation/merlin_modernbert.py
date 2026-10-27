@@ -1,6 +1,5 @@
 """Evaluate generated MERLIN reports using ModernBERT finding labels."""
 
-import json
 import os
 from pathlib import Path
 
@@ -9,54 +8,20 @@ import pandas as pd
 import torch
 from scipy.special import expit
 from torch.utils.data import DataLoader, Dataset, SequentialSampler
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
 
-from vlm.evaluation.report_generation.utils import (
-    compute_label_metrics,
-    load_reference_labels,
-)
-from vlm.utils import logger
+from vlm.evaluation.report_generation.utils import compute_label_metrics, get_reference_labels
 
 
-LABEL_COLUMNS = [
-    "submucosal_edema",
-    "renal_hypodensities",
-    "aortic_valve_calcification",
-    "coronary_calcification",
-    "thrombosis",
-    "metastatic_disease",
-    "pancreatic_atrophy",
-    "renal_cyst",
-    "osteopenia",
-    "surgically_absent_gallbladder",
-    "atelectasis",
-    "abdominal_aortic_aneurysm",
-    "anasarca",
-    "hiatal_hernia",
-    "lymphadenopathy",
-    "prostatomegaly",
-    "biliary_ductal_dilation",
-    "cardiomegaly",
-    "splenomegaly",
-    "hepatomegaly",
-    "atherosclerosis",
-    "ascites",
-    "pleural_effusion",
-    "hepatic_steatosis",
-    "appendicitis",
-    "gallstones",
-    "hydronephrosis",
-    "bowel_obstruction",
-    "free_air",
-    "fracture",
-]
+MODEL_ID = "MIC-DKFZ/ModernBERT-Merlin"
+MAX_LENGTH = 1024
+THRESHOLD = 0.5
 
 
 class MerlinDataset(Dataset):
     """Tokenizes reports for inference (returns input_ids + attention_mask)."""
 
-    def __init__(self, data_files, class_count, label_cols, hf_model_dir=None, max_length=1024):
-        from transformers import AutoTokenizer
-
+    def __init__(self, data_files, class_count, label_cols, hf_model_dir=None, max_length=MAX_LENGTH):
         self.data_files = data_files
         self.class_count = class_count
         self.label_cols = label_cols
@@ -81,14 +46,14 @@ class MerlinDataset(Dataset):
 class MerlinBertClassifier(torch.nn.Module):
     """Thin wrapper around the fine-tuned ModernBERT sequence-classification model."""
 
-    def __init__(self, n_classes=len(LABEL_COLUMNS), hf_model_dir=None):
+    def __init__(self, n_classes, hf_model_dir):
         super().__init__()
-        from transformers import AutoModelForSequenceClassification
 
         self.model = AutoModelForSequenceClassification.from_pretrained(hf_model_dir)
-        assert self.model.config.num_labels == n_classes, (
-            f"checkpoint has {self.model.config.num_labels} labels, expected {n_classes}"
-        )
+        if self.model.config.num_labels != n_classes:
+            raise ValueError(
+                f"MERLIN checkpoint has {self.model.config.num_labels} labels, expected {n_classes}"
+            )
 
     def forward(self, input_ids, attn_mask):
         if input_ids.dim() == 1:
@@ -101,7 +66,7 @@ class MerlinBertClassifier(torch.nn.Module):
 class MerlinBertInference:
     """Runs the classifier over a dataloader and returns binary predictions."""
 
-    def __init__(self, model, dataloaders, num_class, test_label_cols, threshold=0.5):
+    def __init__(self, model, dataloaders, num_class, test_label_cols, threshold=THRESHOLD):
         self.model = model
         self.dataloaders = dataloaders
         self.num_class = num_class
@@ -110,12 +75,13 @@ class MerlinBertInference:
 
     def infer(self):
         self.model.eval()
+        device = next(self.model.parameters()).device
         pred_logits = np.zeros(self.num_class).reshape(1, self.num_class)
 
         with torch.no_grad():
             for input_ids, attention_mask in self.dataloaders["test"]:
-                input_ids = torch.squeeze(input_ids, dim=1).to("cuda")
-                attention_mask = torch.squeeze(attention_mask, dim=1).to("cuda")
+                input_ids = torch.squeeze(input_ids, dim=1).to(device)
+                attention_mask = torch.squeeze(attention_mask, dim=1).to(device)
                 logits = self.model(input_ids, attention_mask)
                 pred_logits = np.concatenate(
                     (pred_logits, logits.detach().float().cpu().numpy()), axis=0
@@ -128,20 +94,21 @@ class MerlinBertInference:
         return pred_labels
 
 
-def load_label_columns(model_dir):
-    """Return the label order saved alongside the model (falls back to module default)."""
-    f = Path(model_dir) / "label_cols.json"
-    if f.exists():
-        return json.loads(f.read_text())
-    return LABEL_COLUMNS
+def load_label_columns(model_id: str | Path | None = None) -> list[str]:
+    """Read finding names in classifier-output order from the model config."""
+    model_id = MODEL_ID if model_id is None else str(model_id)
+    config = AutoConfig.from_pretrained(model_id)
+    mapping = config.id2label
+    if not mapping or set(mapping) != set(range(config.num_labels)):
+        raise ValueError("MERLIN config.id2label must map every output index to a finding")
+    labels = [mapping[index] for index in range(config.num_labels)]
+    return labels
 
 
-def predict_labels(reports, model_dir: str | Path):
+def predict_labels(reports, model_id: str | Path | None = None):
     """Classify reports with the fine-tuned Merlin ModernBERT model -> [N, 30] binary df.
 
-    Unlike RadBERT (a custom module + ``.pth``), the Merlin model is a
-    self-contained ``AutoModelForSequenceClassification`` directory, so
-    ``model_dir`` points straight at it (no separate base-model / checkpoint).
+    The model source may be a Hugging Face repository ID or a local checkpoint.
     """
 
     def _as_report_list(reports):
@@ -154,19 +121,20 @@ def predict_labels(reports, model_dir: str | Path):
         return list(reports)
 
     reports = _as_report_list(reports)
-    label_cols = load_label_columns(model_dir)
+    model_id = MODEL_ID if model_id is None else str(model_id)
+    label_cols = load_label_columns(model_id)
     df = pd.DataFrame({"reports": reports})
 
     batch_size = 32
     if os.getenv("SLURM_JOB_ID") or os.getenv("LSB_JOBID"):
         batch_size = 96
 
-    ds = MerlinDataset(df, len(label_cols), label_cols, hf_model_dir=str(model_dir))
+    ds = MerlinDataset(df, len(label_cols), label_cols, hf_model_dir=model_id)
     loader = DataLoader(
         ds, sampler=SequentialSampler(ds), batch_size=batch_size, num_workers=4, pin_memory=True
     )
 
-    model = MerlinBertClassifier(n_classes=len(label_cols), hf_model_dir=str(model_dir))
+    model = MerlinBertClassifier(n_classes=len(label_cols), hf_model_dir=model_id)
     model = model.cuda().eval()
 
     trainer = MerlinBertInference(model, {"test": loader}, len(label_cols), label_cols)
@@ -179,41 +147,38 @@ def evaluate_reports(
     gts,
     image_ids: list[str],
     default_gt_df: pd.DataFrame | None = None,
-) -> tuple[dict, pd.DataFrame | None, pd.DataFrame | None]:
-    """Compare generated and reference reports using ModernBERT finding labels.
+    model_id: str | Path | None = None,
+    gt_labels_path: str | Path | None = None,
+) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
+    """Compare ModernBERT predictions against supplied or classified references.
 
     Returns (aggregate_metrics, pred_df, gt_df); the dfs are [N, 30] binary
-    class predictions, or None when the classifier dir is not configured.
+    finding labels. References come from a supplied dataframe or explicit CSV,
+    then gt_labels.csv in the local model directory or pinned Hub snapshot.
+    Otherwise ModernBERT classifies the reference reports.
     """
     if not (len(preds) == len(gts) == len(image_ids)):
         raise ValueError(
             "Classifier evaluation inputs must have equal lengths: "
             f"preds={len(preds)}, gts={len(gts)}, image_ids={len(image_ids)}"
         )
-    model_dir = os.getenv("VLM_MERLIN_MODERNBERT_DIR")
-    if model_dir is None:
-        logger.warning_main(
-            "The environment variable 'VLM_MERLIN_MODERNBERT_DIR' is not set. "
-            "Cannot proceed with Merlin ModernBERT inference."
-        )
-        return {}, None, None
-
-    model_dir = Path(model_dir)
-    label_cols = load_label_columns(model_dir)
-    pred_df = predict_labels(preds, model_dir)
-    gt_labels_path = model_dir / "gt_labels.csv"
-    if default_gt_df is not None:
-        gt_df = default_gt_df.reset_index(drop=True)
-    elif gt_labels_path.is_file():
-        logger.info_main(f"Loading MERLIN ground-truth labels from {gt_labels_path}")
-        gt_df = load_reference_labels(gt_labels_path, image_ids, label_cols)
-    else:
-        gt_df = predict_labels(gts, model_dir)
+    model_id = MODEL_ID if model_id is None else str(model_id)
+    label_cols = load_label_columns(model_id)
+    gt_df = get_reference_labels(
+        gts,
+        image_ids,
+        label_cols,
+        lambda reports: predict_labels(reports, model_id),
+        default_gt_df=default_gt_df,
+        gt_labels_path=gt_labels_path,
+        model_id=model_id,
+    )
+    pred_df = predict_labels(preds, model_id)
 
     results = compute_label_metrics(
         pred_df,
         gt_df,
-        label_columns=LABEL_COLUMNS,
+        label_columns=label_cols,
         zero_division=0,
     )
     return results, pred_df, gt_df

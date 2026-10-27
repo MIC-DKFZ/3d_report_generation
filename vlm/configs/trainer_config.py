@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import Field, field_validator
+from pydantic import Field
 from vlm.configs.base import ConfigBase
 
 
@@ -13,6 +13,10 @@ class SFTTrainerConfig(ConfigBase):
     per_device_eval_batch_size: int = Field(1, ge=1, description="Batch size per device during evaluation.")
 
     gradient_accumulation_steps: int = Field(1, ge=1, description="Number of updates steps to accumulate before performing a backward/update pass.")
+    average_tokens_across_devices: bool = Field(
+        True,
+        description="Normalize training loss by supervised tokens across all DDP processes.",
+    )
     gradient_checkpointing: bool = Field(False, description="Enable gradient checkpointing to save memory at the cost of extra compute.")
     gradient_checkpointing_kwargs: dict = Field(default_factory=lambda: {"use_reentrant": False}, description="Additional keyword arguments for gradient checkpointing.")
 
@@ -20,7 +24,7 @@ class SFTTrainerConfig(ConfigBase):
 
     logging_steps: int = Field(25, ge=1, description="Number of steps between logging events.")
 
-    eval_steps: int | None = Field(1, ge=1, description="Number of steps between evaluation runs.")
+    eval_steps: int | None = Field(1, ge=1, description="Number of steps between evaluations when eval_strategy='steps'.")
     eval_strategy: Literal["no", "steps", "epoch"] | None = Field("epoch", description="Evaluation strategy to adopt during training.")
     metric_for_best_model: str | None = Field("eval_loss", description="Metric to use for selecting the best model (e.g. 'eval_loss', 'accuracy').")
     greater_is_better: bool = Field(False, description="Whether the chosen metric should be maximized ('True') or minimized ('False').")
@@ -50,22 +54,3 @@ class SFTTrainerConfig(ConfigBase):
     torch_empty_cache_steps: int = Field(10, description="Clear PyTorch CUDA cache every X steps to manage GPU memory.")
     ddp_find_unused_parameters: bool = Field(False, description="Whether to enable detection of unused parameters in DDP training.")
     ddp_bucket_cap_mb: int = Field(25, description="Bucket size in MB for gradient synchronization in DDP.")
-    deepspeed: str | None = Field(None, description="Path to DeepSpeed config JSON.")
-
-    @field_validator("deepspeed", mode="before")
-    @classmethod
-    def normalize_deepspeed_placeholder(cls, value):
-        # Keep backward compatibility with old placeholder values while
-        # making "not configured" explicit.
-        if value is None:
-            return None
-        if isinstance(value, str) and value.strip().lower() in {
-            "",
-            "none",
-            "null",
-            "false",
-            "off",
-            "deepspeed",
-        }:
-            return None
-        return value

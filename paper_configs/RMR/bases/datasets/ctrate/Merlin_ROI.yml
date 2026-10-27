@@ -1,0 +1,7 @@
+base_configs:
+  - bases/datasets/ctrate/Embedding.yml
+
+data:
+  vision_input_path: ${VLM_EMBEDS}/CTRATE_Merlin_ROI
+  embed_dim: 2048
+  embed_size: [10, 8, 8]

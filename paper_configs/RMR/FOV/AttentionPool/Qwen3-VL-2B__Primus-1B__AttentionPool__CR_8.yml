@@ -1,0 +1,15 @@
+base_configs:
+- bases/models/Qwen3-VL-2B_Adapter_LM.yml
+- bases/schedulers/AdapterDWUScheduler.yml
+- bases/ProjectDefaults.yml
+model:
+  adapter:
+    class_name: AttentionPool
+    class_kwargs:
+      num_query_tokens: 1728
+      head_dim: 72
+      depth: 1
+scheduler:
+  class_kwargs:
+    adapter_lr: 0.0003
+    lm_lr: 0.0003

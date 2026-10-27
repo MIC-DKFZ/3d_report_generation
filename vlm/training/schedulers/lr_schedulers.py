@@ -59,8 +59,12 @@ class LinearIncreasingOffsetLR(LRScheduler):
             current_step = self.ctr
             self.ctr += 1
 
+        current_step = current_step - self.start_step
+        if current_step <= 0:
+            current_step = 0
+
         for param_group, max_lr in zip(self.optimizer.param_groups, self.max_lrs):
-            new_lr = max_lr / self.max_steps * (1 + current_step - self.start_step)
+            new_lr = max_lr / self.max_steps * (1 + current_step)
             param_group["lr"] = new_lr
 
         self._last_lr: List[float] = [group["lr"] for group in self.optimizer.param_groups]
