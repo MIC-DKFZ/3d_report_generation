@@ -66,6 +66,11 @@ dev = [
   "isort",
   "pre-commit",
 ]
+# Triton kernels for the Qwen3.5 linear-attention layers. GPU environments only: once
+# installed, transformers routes these layers through them on every device.
+linear-attention = [
+  "flash-linear-attention>=0.6.0",
+]
 
 [tool.isort]
 profile = "black"

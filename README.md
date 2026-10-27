@@ -43,6 +43,9 @@ From the repository root:
 uv sync --locked --python 3.12
 ```
 
+For Qwen3.5 training on GPUs, add `--extra linear-attention` to install the
+flash-linear-attention kernels for its linear-attention layers.
+
 ## Quick start
 
 The example below trains nnFoundationViT on CT-RATE. Before running it,
