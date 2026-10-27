@@ -100,6 +100,7 @@ def test_trainer_evaluation_adds_classifier_metric_before_best_model_selection(
     metrics = trainer.evaluate()
 
     assert metrics["eval_classifier_f1"] == 0.75
+    assert trainer.state.log_history[-1]["eval_classifier_f1"] == 0.75
     assert trainer._determine_best_metric(metrics, trial=None)
     assert trainer.state.best_metric == 0.75
     assert calls[0]["image_ids"] == ["first", "second"]

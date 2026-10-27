@@ -88,6 +88,10 @@ class ReportEvaluationCallback(TrainerCallback):
 
             if metrics is not None:
                 metrics.update(metric_results)
+            # Trainer.evaluate logs its metrics before this hook, so extend that logged entry.
+            last_log = state.log_history[-1] if state.log_history else {}
+            if last_log.get("step") == state.global_step and "eval_loss" in last_log:
+                last_log.update(metric_results)
         finally:
             model.train(was_training)
 
