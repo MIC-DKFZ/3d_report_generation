@@ -30,6 +30,7 @@ class Qwen3VLWrapper(AbstractVLWrapper):
             cache_dir=cache_dir,
             local_files_only=self.local_files_only,
             dtype=torch.bfloat16,
+            attn_implementation=self.model_cfg.attn_implementation,
         )
 
         self._setup_vision_components()

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field
 
 from vlm.models.adapters.base import AdapterBase
@@ -11,6 +13,11 @@ from vlm.models.vision_encoders.base import VisionEncoderBase
 class ModelConfig(ConfigBase):
     model_type: str = Field(..., description="Type of VLM model to train.")
     model_id: ConfigPath | None = Field(None, description="Model ID or path.")
+    attn_implementation: Literal["sdpa", "eager", "flash_attention_2", "flash_attention_3"] = Field(
+        "sdpa",
+        description="Attention kernel of the language model, passed to Hugging Face 'from_pretrained'. "
+                    "Used by the Qwen3-VL and Qwen3.5 models; 'flash_attention_3' needs the FA3 wheel."
+    )
 
     vision_encoder: VisionEncoderClassConfig | None = Field(
         None,
