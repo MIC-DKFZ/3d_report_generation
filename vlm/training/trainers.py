@@ -66,6 +66,11 @@ class VLMTrainer(Trainer):
     def log(self, logs, start_time=None):
         # WandbGroupedLRCallback logs the learning rate of every parameter group instead.
         logs.pop("learning_rate", None)
+        if "loss" in logs and torch.cuda.is_available():
+            # Peak since the previous training log, then reset so each interval shows its own peak.
+            logs["gpu_peak_allocated_gb"] = round(torch.cuda.max_memory_allocated() / 1024**3, 2)
+            logs["gpu_peak_reserved_gb"] = round(torch.cuda.max_memory_reserved() / 1024**3, 2)
+            torch.cuda.reset_peak_memory_stats()
         super().log(logs, start_time)
 
     def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
