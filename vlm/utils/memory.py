@@ -56,9 +56,6 @@ def monitor_memory_during_training():
 def setup_memory_efficient_training():
     """Setup memory-efficient training settings."""
     if torch.cuda.is_available():
-        # Enable memory fraction for CUDA
-        torch.cuda.set_per_process_memory_fraction(0.95)
-
         # Set memory growth
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
