@@ -68,8 +68,8 @@ def shard_files(img_files, shard_id, num_shards):
 
 
 
-def save_embeddings_blosc2(embeddings, output_path, clevel: int = 8, codec=blosc2.Codec.ZSTD):
-    blosc2.set_nthreads(1)
+def save_embeddings_blosc2(embeddings, output_path, clevel: int = 8, codec=blosc2.Codec.ZSTD, nthreads: int = 1):
+    blosc2.set_nthreads(nthreads)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
