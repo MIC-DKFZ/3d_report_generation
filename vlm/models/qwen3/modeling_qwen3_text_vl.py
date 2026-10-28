@@ -29,6 +29,8 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3PreTrainedModel,
 )
 
+from vlm.models.lm_loss import compute_logits_and_loss
+
 
 class Qwen3TextVLModel(nn.Module):
     def __init__(
@@ -184,22 +186,38 @@ class Qwen3TextVLForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
         pixel_values_videos: Optional[torch.FloatTensor] = None,
         vision_position_ids: Optional[list[torch.Tensor]] = None,
         adapter_args: Optional[dict] = None,
+        num_items_in_batch: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         """
-        Run the upstream forward; the vision kwargs are consumed by the inner model. They are listed
-        here because GenerationMixin._validate_model_kwargs() inspects this signature.
+        Upstream forward with the LM head applied only to the response tokens during training. The
+        vision kwargs are consumed by the inner model; they are listed here because
+        GenerationMixin._validate_model_kwargs() inspects this signature.
         """
-        return super().forward(
+        outputs: BaseModelOutputWithPast = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
-            labels=labels,
-            logits_to_keep=logits_to_keep,
             pixel_values_videos=pixel_values_videos,
             vision_position_ids=vision_position_ids,
             adapter_args=adapter_args,
             **kwargs,
+        )
+        logits, loss = compute_logits_and_loss(
+            outputs.last_hidden_state,
+            labels,
+            logits_to_keep,
+            self.lm_head,
+            self.loss_function,
+            self.config.vocab_size,
+            num_items_in_batch,
+        )
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
         )
