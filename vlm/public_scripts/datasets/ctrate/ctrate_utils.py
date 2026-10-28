@@ -26,16 +26,17 @@ def format_report(findings, impression):
 
 
 def format_report_v1(findings, impression):
-    """Format a report for nnFoundation (v1), keeping "Not given." impressions."""
+    """Format a report for nnFoundation (v1), keeping "Not given." and empty impressions.
 
-    def clean(text):
-        text = re.sub(r" {2,}", " ", text.strip())
-        return text.replace(" . ", ". ")
+    Reproduces the original nnFoundation text exactly: the section label is cleaned together
+    with its text, so a leading " ." collapses onto the label (e.g. "Impression:. ...").
+    """
 
-    answer = f"Findings: {clean(findings)}"
-    if impression is not None:
-        answer += f"\nImpression: {clean(impression)}"
-    return answer
+    def clean(label, text):
+        text = re.sub(r" {2,}", " ", f"{label}: {text.strip()}")
+        return re.sub(r" \.(?= )", ".", text)
+
+    return f"{clean('Findings', findings)}\n{clean('Impression', impression or '')}"
 
 
 def entries_from_csv(path, excluded_ids, keep_missing_findings, v1_format=False):
