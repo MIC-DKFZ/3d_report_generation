@@ -19,7 +19,11 @@ class TestCTRATEJSONCreation(unittest.TestCase):
             format_report_v1("  Clear  lungs . No effusion ; stable .  ", "Not given."),
             "Findings: Clear lungs. No effusion ; stable .\nImpression: Not given.",
         )
-        self.assertEqual(format_report_v1("Normal .", None), "Findings: Normal .")
+        self.assertEqual(format_report_v1("Normal .", None), "Findings: Normal .\nImpression: ")
+        self.assertEqual(
+            format_report_v1("Mass.", " . Consolidation area . . Nodules ."),
+            "Findings: Mass.\nImpression:. Consolidation area.. Nodules .",
+        )
 
     def test_both_generators_use_workspace_layout(self):
         with tempfile.TemporaryDirectory() as directory:
