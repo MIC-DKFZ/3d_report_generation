@@ -178,18 +178,24 @@ class AdapterVisionForConditionalGenerationMixin:
 
         hidden_states = outputs[0]
 
-        # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-        logits = self.lm_head(hidden_states[:, slice_indices, :])
-
         loss = None
         if labels is not None:
+            # Apply the LM head only where a target exists (the response), skipping the vision and prompt
+            # positions. Logits are then (num_targets, vocab) instead of (batch, sequence, vocab).
+            shift_labels = labels[:, 1:]
+            has_target = shift_labels != -100
+            logits = self.lm_head(hidden_states[:, :-1][has_target])
             loss = self.loss_function(
                 logits=logits,
-                labels=labels,
+                labels=None,
+                shift_labels=shift_labels[has_target],
                 vocab_size=self.config.text_config.vocab_size,
                 num_items_in_batch=num_items_in_batch,
             )
+        else:
+            # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+            slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+            logits = self.lm_head(hidden_states[:, slice_indices, :])
 
         return self.output_class(
             loss=loss,

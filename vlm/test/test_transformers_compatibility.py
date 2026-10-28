@@ -117,11 +117,13 @@ def test_backbone_training_and_cached_generation(backbone):
     labels = batch["input_ids"].clone()
     labels[:, :-1] = -100
     output = model(**batch, labels=labels, num_items_in_batch=torch.tensor(2), use_cache=False)
+    # Qwen-VL models compute training logits only at the target positions: (num_targets, vocab).
+    # Text backbones still return full-sequence logits.
+    has_target = labels[:, 1:] != -100
+    logits = output.logits[:, :-1][has_target] if output.logits.dim() == 3 else output.logits
+    assert logits.shape == (int(has_target.sum()), 32)
     expected = (
-        torch.nn.functional.cross_entropy(
-            output.logits[:, :-1].reshape(-1, 32), labels[:, 1:].reshape(-1), reduction="sum"
-        )
-        / 2
+        torch.nn.functional.cross_entropy(logits, labels[:, 1:][has_target], reduction="sum") / 2
     )
     torch.testing.assert_close(output.loss, expected)
     output.loss.backward()
