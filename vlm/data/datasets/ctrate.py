@@ -32,6 +32,26 @@ class CTRATEDataset(MedicalImageDataset):
     """
 
     dataset_name: ClassVar[str] = "ctrate"
+    class_list_names: ClassVar[tuple[str, ...]] = (
+        "Medical material",
+        "Arterial wall calcification",
+        "Cardiomegaly",
+        "Pericardial effusion",
+        "Coronary artery wall calcification",
+        "Hiatal hernia",
+        "Lymphadenopathy",
+        "Emphysema",
+        "Atelectasis",
+        "Lung nodule",
+        "Lung opacity",
+        "Pulmonary fibrotic sequela",
+        "Pleural effusion",
+        "Mosaic attenuation pattern",
+        "Peribronchial thickening",
+        "Consolidation",
+        "Bronchiectasis",
+        "Interlobular septal thickening",
+    )
 
     @staticmethod
     def _base_image_id(image_id: str) -> str:
@@ -87,7 +107,9 @@ class CTRATEDataset(MedicalImageDataset):
                 result.append(part)
             # Shuffle sentences in content sections
             elif part.strip():
-                sentences = re.split(r"(?<=[.!?])\s+", part.strip())
+                # Split only before an uppercase start, so abbreviations such as 'lab.' or 'e.g.'
+                # stay inside their sentence.
+                sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", part.strip())
                 if len(sentences) > 1 and random.uniform(0, 1) < self.sentence_shuffle_p:
                     random.shuffle(sentences)
                     result.append(" " + " ".join(sentences))

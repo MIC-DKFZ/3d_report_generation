@@ -3,7 +3,7 @@
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, Literal, Tuple
+from typing import ClassVar, Dict, Literal, Tuple
 
 import numpy as np
 from torch.utils.data import Dataset
@@ -12,6 +12,7 @@ from vlm.configs.run_config import RunConfig
 from vlm.data.embedding_transforms import EmbeddingCompose
 from vlm.data.image_transforms import get_training_image_transforms
 from vlm.utils import logger
+from vlm.utils.class_list import split_class_list
 from vlm.data.types import VisionInputType
 
 from .vision import load_vision_input
@@ -34,6 +35,10 @@ class MedicalImageDataset(Dataset, ABC):
         do_transforms (bool, optional): If True, apply data augmentations to images
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
+
+    # Abnormality classes that a report's trailing '<answer>…</answer>' class list can name.
+    # Evaluation scores generated class lists over these when the references carry one.
+    class_list_names: ClassVar[tuple[str, ...]] = ()
 
     def __init__(
         self,
@@ -190,9 +195,11 @@ class MedicalImageDataset(Dataset, ABC):
         # result = self.modify_sample(result)
 
         if self.sentence_shuffle_p > 0:
-            result["question"], result["full_answer"] = self.shuffle_sentences(
-                result["question"], result["full_answer"]
-            )
+            # Shuffle only the report; a trailing class list stays last and unchanged.
+            answer = result["full_answer"]
+            report, class_list = split_class_list(answer) if isinstance(answer, str) else (answer, "")
+            result["question"], report = self.shuffle_sentences(result["question"], report)
+            result["full_answer"] = report + class_list if class_list else report
 
         formatted_qa, formatted_qa_prompt_only = self.format_into_message(
             result["question"],

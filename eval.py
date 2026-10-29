@@ -6,8 +6,11 @@ from pathlib import Path
 import pandas as pd
 
 from vlm.evaluation.report_generation import lexical_metrics
+from vlm.evaluation.report_generation.class_list import evaluate_class_lists
+from vlm.registries.dataset_registry import get_class_list_names
 from vlm.registries.evaluation_registry import get_classifier_evaluator
 from vlm.utils import logger
+from vlm.utils.class_list import strip_class_list
 from vlm.utils.serialization import load_json, save_json
 from vlm.utils.logging import log_banner, setup_logger
 from vlm.utils.run_naming import add_datetime_tag
@@ -67,15 +70,16 @@ def main(args):
     num_samples = len(inference_results)
     logger.info_main(f"Loaded {num_samples} samples")
 
-    image_ids, preds, gts = [], [], []
+    image_ids, raw_preds, raw_gts = [], [], []
     for dic in inference_results:
         image_ids.append(dic["image_id"])
-        preds.append(dic["output_text_clean"])
-        gts.append(dic["answer"])
+        raw_preds.append(dic["output_text_clean"])
+        raw_gts.append(dic["answer"])
 
+    # Score only the report text; class lists are scored separately below.
     # Remove '\n' here as this will interfere Pycocoeval (specifically METEOR)
-    preds = [pred.replace("\n", " ") for pred in preds]
-    gts = [gt.replace("\n", " ") for gt in gts]
+    preds = [strip_class_list(pred).replace("\n", " ") for pred in raw_preds]
+    gts = [strip_class_list(gt).replace("\n", " ") for gt in raw_gts]
 
     aggregate_results = {}
     nlp_aggregate, nlp_per_case = lexical_metrics.evaluate_reports(preds, gts)
@@ -93,6 +97,11 @@ def main(args):
         )
 
     aggregate_results.update(radbert_metrics)
+
+    class_list_metrics, class_list_pred_df = evaluate_class_lists(
+        raw_preds, raw_gts, get_class_list_names(args.dataset_name), radbert_gt_df
+    )
+    aggregate_results.update({f"class_list_{key}": value for key, value in class_list_metrics.items()})
     logger.info_main("[METRICS] Evaluation Summary:")
     for metric_name, value in aggregate_results.items():
         logger.info_main(f"    > {metric_name}: {value:.4f}")
@@ -119,6 +128,15 @@ def main(args):
         radbert_path = inference_dir / "radbert_predictions.csv"
         radbert_out.to_csv(radbert_path, index=False)
         logger.info_main(f"Saved RadBERT class predictions to {str(radbert_path)}")
+
+    # --- Class list predictions ---
+    if class_list_pred_df is not None:
+        class_list_out = pd.DataFrame({"image_id": image_ids})
+        for col in class_list_pred_df.columns:
+            class_list_out[f"pred_{col}"] = class_list_pred_df[col].values
+        class_list_path = inference_dir / "class_list_predictions.csv"
+        class_list_out.to_csv(class_list_path, index=False)
+        logger.info_main(f"Saved class list predictions to {str(class_list_path)}")
 
     log_banner("Successfully finished Evaluation")
 

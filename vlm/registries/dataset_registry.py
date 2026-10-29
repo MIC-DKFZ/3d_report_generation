@@ -49,3 +49,9 @@ def get_dataset_class(data: DataConfig) -> type[MedicalImageDataset]:
         variant = "retrieval_with_image" if data.retrieval_use_image_in_prompt else "retrieval"
     # Datasets without retrieval variants keep using their default class.
     return variants.get(variant, variants["default"])
+
+
+def get_class_list_names(dataset_name: str) -> tuple[str, ...]:
+    """Return the dataset's class list names, or none for unregistered datasets."""
+    variants = DATASET_REGISTRY.get(dataset_name)
+    return variants["default"].class_list_names if variants else ()

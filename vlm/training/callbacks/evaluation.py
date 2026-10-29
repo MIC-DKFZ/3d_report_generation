@@ -14,6 +14,7 @@ import wandb
 from vlm.data.batches import extract_batch_prompt_only
 from vlm.utils import logger
 from vlm.utils.ddp import gather_inference_outputs
+from vlm.utils.class_list import strip_class_list
 from vlm.utils.decoding import decode_generated_answers, decode_label_answers, strip_thinking
 from vlm.utils.serialization import save_json
 
@@ -50,6 +51,9 @@ class ReportEvaluationCallback(TrainerCallback):
         self.is_distributed = is_distributed
         self.classifier_scorer = None
         self.classifier_gt_df = None
+        from vlm.registries.dataset_registry import get_class_list_names
+
+        self.class_list_names = get_class_list_names(dataset_name)
 
         if calculate_classifier_score:
             from vlm.registries.evaluation_registry import get_classifier_evaluator
@@ -176,11 +180,13 @@ class ReportEvaluationCallback(TrainerCallback):
             # "cider_score": cider_score,
         }
         classifier_scores = {}
+        class_list_scores = {}
         pred_df = gt_df = None
         if self.classifier_scorer is not None:
+            # Classify only the report text; class lists are scored separately.
             classifier_scores, pred_df, gt_df = self.classifier_scorer(
-                preds=all_preds,
-                gts=all_gts,
+                preds=[strip_class_list(pred) for pred in all_preds],
+                gts=[strip_class_list(gt) for gt in all_gts],
                 image_ids=all_image_ids,
                 default_gt_df=self.classifier_gt_df,
             )
@@ -188,20 +194,35 @@ class ReportEvaluationCallback(TrainerCallback):
                 raise ValueError("Classifier evaluation did not return the required 'f1' metric.")
             if self.classifier_gt_df is None:
                 self.classifier_gt_df = gt_df
+            from vlm.evaluation.report_generation.class_list import evaluate_class_lists
+
+            class_list_scores, _ = evaluate_class_lists(
+                all_preds, all_gts, self.class_list_names, gt_df
+            )
 
         callback_eval_dir = Path(output_dir) / "callback_eval" / f"step-{global_step}"
         callback_eval_dir.mkdir(parents=True, exist_ok=True)
         if self.classifier_scorer is not None:
             for key, value in classifier_scores.items():
                 logger.info_main(f"classifier_{key}: {value:.4f}")
+            for key, value in class_list_scores.items():
+                logger.info_main(f"class_list_{key}: {value:.4f}")
             if wandb.run is not None:
                 wandb.log({f"classifier_{key}": value for key, value in classifier_scores.items()})
+                wandb.log({f"class_list_{key}": value for key, value in class_list_scores.items()})
             if pred_df is not None:
                 self._save_classifier_predictions(callback_eval_dir, all_image_ids, pred_df, gt_df)
 
         # Keep unprefixed scores on disk so earlier callback evaluations remain plottable.
         metrics_path = callback_eval_dir / "VLM_metrics.json"
-        save_json({**metric_results, **classifier_scores}, metrics_path)
+        save_json(
+            {
+                **metric_results,
+                **classifier_scores,
+                **{f"class_list_{key}": value for key, value in class_list_scores.items()},
+            },
+            metrics_path,
+        )
         logger.info_main(f"Saved metric results to {metrics_path}")
         if self.classifier_scorer is not None:
             self.save_f1_plot(callback_eval_dir.parent)
@@ -209,6 +230,7 @@ class ReportEvaluationCallback(TrainerCallback):
         return {
             **{f"eval_{key}": value for key, value in metric_results.items()},
             **{f"eval_classifier_{key}": value for key, value in classifier_scores.items()},
+            **{f"eval_class_list_{key}": value for key, value in class_list_scores.items()},
         }
 
     @staticmethod
