@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 
+from accelerate.state import AcceleratorState
 from transformers import TrainerState
 from transformers.trainer import TRAINER_STATE_NAME
 
@@ -46,6 +47,9 @@ def train_phases(
         state, resume_checkpoint = trainer.state, None
         trainer.accelerator.free_memory()
         del trainer
+        # The next phase's Trainer creates a new Accelerator with the same DeepSpeed plugin, which
+        # accelerate only accepts once its shared state is cleared; the process group is kept.
+        AcceleratorState._reset_state()
         if state.epoch < phase.end_epoch:
             break  # Early stopping ends the run, not just the phase.
     return True

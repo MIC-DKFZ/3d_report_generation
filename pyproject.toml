@@ -71,6 +71,10 @@ dev = [
 linear-attention = [
   "flash-linear-attention>=0.6.0",
 ]
+# DeepSpeed ZeRO, enabled with 'trainer.deepspeed'.
+deepspeed = [
+  "deepspeed==0.19.7",
+]
 
 [tool.isort]
 profile = "black"

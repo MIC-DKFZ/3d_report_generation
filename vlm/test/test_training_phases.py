@@ -58,7 +58,15 @@ class StopAtStep(TrainerCallback):
             control.should_training_stop = True
 
 
-def train(output_dir, checkpoint=None, world_size=1, callbacks=(), save_strategy="steps"):
+def train(
+    output_dir,
+    checkpoint=None,
+    world_size=1,
+    callbacks=(),
+    save_strategy="steps",
+    deepspeed=None,
+    bf16=False,
+):
     model = make_model()
     initialize_checkpoint_state(model)
     if checkpoint is not None:
@@ -82,8 +90,9 @@ def train(output_dir, checkpoint=None, world_size=1, callbacks=(), save_strategy
     recorder = OptimizerRecorder()
     args = TrainingArguments(
         output_dir=str(output_dir),
-        use_cpu=True,
-        bf16=False,
+        use_cpu=deepspeed is None,
+        bf16=bf16,
+        deepspeed=deepspeed,
         num_train_epochs=EPOCHS,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=ACCUMULATION,

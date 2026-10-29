@@ -86,12 +86,14 @@ class UnifiedVLMTrainer:
         model_args = self.vlm_model.get_model_specific_training_args()
 
         trainer_args = self.cfg.trainer.model_dump(
-            exclude={"early_stopping_patience", "early_stopping_threshold"}
+            exclude={"early_stopping_patience", "early_stopping_threshold", "deepspeed"}
         )
+        deepspeed = self.cfg.trainer.deepspeed
 
         return TrainingArguments(
             **trainer_args,
             **model_args,
+            deepspeed=deepspeed.get_resolved_path() if deepspeed is not None else None,
             run_name=self.cfg.general.run_name,
             output_dir=self.cfg.general.output_dir.get_resolved_path(),
             seed=self.cfg.general.seed,

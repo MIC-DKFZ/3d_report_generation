@@ -32,16 +32,21 @@ def test_trainer_overrides_match_upstream_methods():
         assert parameters(method) == parameters(upstream), f"Trainer.{name} changed"
 
 
-@pytest.mark.parametrize(
-    "field, value",
-    [("deepspeed", "config.json"), ("dataset_kwargs", {"skip_prepare_dataset": True})],
-)
-def test_removed_trainer_field_is_rejected_but_old_saved_configs_load(field, value):
+def test_removed_trainer_field_is_rejected_but_old_saved_configs_load():
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        TrainerConfig(**{field: value})
-    normalized, warnings = normalize_saved_config({"trainer": {field: value}})
+        TrainerConfig(dataset_kwargs={"skip_prepare_dataset": True})
+    normalized, warnings = normalize_saved_config(
+        {"trainer": {"dataset_kwargs": {"skip_prepare_dataset": True}}}
+    )
     assert TrainerConfig.model_validate(normalized["trainer"])
-    assert any(f"trainer.{field}" in message for message in warnings)
+    assert any("trainer.dataset_kwargs" in message for message in warnings)
+
+
+def test_deepspeed_config_path_keeps_its_expression(monkeypatch):
+    monkeypatch.setenv("VLM_REPO", "/repo")
+    config = TrainerConfig(deepspeed="${VLM_REPO}/paper_configs/deepspeed/zero2.json")
+    assert config.model_dump()["deepspeed"] == "${VLM_REPO}/paper_configs/deepspeed/zero2.json"
+    assert config.deepspeed.get_resolved_path() == "/repo/paper_configs/deepspeed/zero2.json"
 
 
 @pytest.mark.parametrize("preloaded", [False, True])
