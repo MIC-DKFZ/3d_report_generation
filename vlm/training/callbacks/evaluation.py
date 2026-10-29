@@ -14,7 +14,7 @@ import wandb
 from vlm.data.batches import extract_batch_prompt_only
 from vlm.utils import logger
 from vlm.utils.ddp import gather_inference_outputs
-from vlm.utils.decoding import decode_generated_answers, decode_label_answers
+from vlm.utils.decoding import decode_generated_answers, decode_label_answers, strip_thinking
 from vlm.utils.serialization import save_json
 
 # Lexical metrics are inactive; restore these imports and scorer initialization
@@ -109,7 +109,8 @@ class ReportEvaluationCallback(TrainerCallback):
                 outputs = model.generate(**prompt_inputs, max_new_tokens=self.max_new_tokens)
                 results["gts"].extend(decode_label_answers(self.tokenizer, inputs["labels"]))
                 results["preds"].extend(
-                    decode_generated_answers(self.tokenizer, outputs, prompt_input_ids)
+                    strip_thinking(answer)
+                    for answer in decode_generated_answers(self.tokenizer, outputs, prompt_input_ids)
                 )
                 del prompt_inputs, outputs
                 torch.cuda.empty_cache()

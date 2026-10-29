@@ -13,7 +13,12 @@ from vlm.data.dataloaders import create_eval_dataloader
 from vlm.data.factory import create_dataset
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.utils import logger
-from vlm.utils.decoding import decode_generated_answers, decode_prompts
+from vlm.utils.decoding import (
+    decode_generated_answers,
+    decode_prompts,
+    has_thinking_tags,
+    strip_thinking,
+)
 from vlm.utils.ddp import setup_ddp, gather_inference_outputs, is_main_process
 from vlm.data.batches import extract_batch_prompt_only
 from vlm.utils.run_naming import add_datetime_tag
@@ -145,7 +150,7 @@ class UnifiedVLMInference:
                             **{key: value[i] for key, value in raw_samples.items()},
                             "complete_input": decoded_input[i],
                             "output_text": do,
-                            "output_text_clean": do.strip(),
+                            "output_text_clean": strip_thinking(do),
                         }
                         for i, do in enumerate(decoded_output)
                     ]
@@ -163,6 +168,14 @@ class UnifiedVLMInference:
             save_json(all_results, Path(self.output_dir, results_filename))
 
             logger.info_main(f"Total number of inference samples: {len(all_results)}")
+            num_with_thinking = sum(has_thinking_tags(r["output_text"]) for r in all_results)
+            if num_with_thinking:
+                # The prompt pre-fills an empty think block, so generated thinking tags point to a
+                # mismatch between the training and generation chat templates.
+                logger.warning_main(
+                    f"{num_with_thinking}/{len(all_results)} generated answers contain thinking tags, "
+                    "which were stripped from 'output_text_clean'."
+                )
             logger.info_main(
                 f"Saved inference results to {str(Path(self.output_dir, results_filename))}"
             )
