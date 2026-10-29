@@ -45,7 +45,6 @@ uv sync --locked --python 3.12
 
 For Qwen3.5 training on GPUs, add `--extra linear-attention` to install the
 flash-linear-attention kernels for its linear-attention layers.
-For [DeepSpeed ZeRO](documentation/training.md#deepspeed), add `--extra deepspeed`.
 
 ## Quick start
 

@@ -69,8 +69,7 @@ training requires `trainer.num_train_epochs` instead of `trainer.max_steps`.
 
 ## DeepSpeed
 
-Install the `deepspeed` extra, then pass a DeepSpeed config to the usual
-`torchrun` command, for example
+Pass a DeepSpeed config to the usual `torchrun` command, for example
 `--trainer.deepspeed "$PWD/paper_configs/deepspeed/zero2.json"`. ZeRO-2
 ([zero2.json](../paper_configs/deepspeed/zero2.json)) shards gradients and
 optimizer states across GPUs; ZeRO-3 ([zero3.json](../paper_configs/deepspeed/zero3.json))

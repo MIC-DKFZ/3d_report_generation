@@ -2511,6 +2511,7 @@ dependencies = [
     { name = "batchgenerators" },
     { name = "batchgeneratorsv2" },
     { name = "blosc2" },
+    { name = "deepspeed" },
     { name = "einops" },
     { name = "faiss-cpu" },
     { name = "huggingface-hub" },
@@ -2538,9 +2539,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-deepspeed = [
-    { name = "deepspeed" },
-]
 dev = [
     { name = "black" },
     { name = "isort" },
@@ -2559,7 +2557,7 @@ requires-dist = [
     { name = "batchgeneratorsv2", specifier = "==0.3.0" },
     { name = "black", marker = "extra == 'dev'" },
     { name = "blosc2", specifier = "==3.11.0" },
-    { name = "deepspeed", marker = "extra == 'deepspeed'", specifier = "==0.19.7" },
+    { name = "deepspeed", specifier = "==0.19.7" },
     { name = "einops", specifier = ">=0.8.1" },
     { name = "faiss-cpu" },
     { name = "flash-linear-attention", marker = "extra == 'linear-attention'", specifier = ">=0.6.0" },
@@ -2590,7 +2588,7 @@ requires-dist = [
     { name = "transformers", specifier = "==5.19.0" },
     { name = "wandb", specifier = ">=0.21.0" },
 ]
-provides-extras = ["dev", "linear-attention", "deepspeed"]
+provides-extras = ["dev", "linear-attention"]
 
 [[package]]
 name = "wandb"

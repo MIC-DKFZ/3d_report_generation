@@ -1,6 +1,5 @@
 """Phased training and resuming under DeepSpeed ZeRO on one GPU."""
 
-import importlib.util
 import os
 
 import pytest
@@ -10,10 +9,7 @@ from test_gradient_accumulation import make_model
 from test_training_phases import EMBEDDINGS, MAX_STEPS, train
 from transformers.integrations.deepspeed import unset_hf_deepspeed_config
 
-pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available() or importlib.util.find_spec("deepspeed") is None,
-    reason="DeepSpeed training requires CUDA and the 'deepspeed' extra",
-)
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="DeepSpeed requires CUDA")
 
 
 def zero_config(stage):

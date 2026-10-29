@@ -8,6 +8,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE.md", "NOTICE.md"]
 dependencies = [
     "accelerate==1.15.0",
+    "deepspeed==0.19.7",
     "einops>=0.8.1",
     "faiss-cpu",
     "huggingface-hub>=1.31.0",
@@ -70,10 +71,6 @@ dev = [
 # installed, transformers routes these layers through them on every device.
 linear-attention = [
   "flash-linear-attention>=0.6.0",
-]
-# DeepSpeed ZeRO, enabled with 'trainer.deepspeed'.
-deepspeed = [
-  "deepspeed==0.19.7",
 ]
 
 [tool.isort]

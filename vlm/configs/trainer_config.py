@@ -58,6 +58,6 @@ class TrainerConfig(ConfigBase):
         None,
         description=(
             "DeepSpeed config JSON (e.g. 'paper_configs/deepspeed/zero2.json'); 'None' trains with "
-            "DDP. Requires the 'deepspeed' extra."
+            "DDP."
         ),
     )
