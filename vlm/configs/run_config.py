@@ -13,7 +13,7 @@ from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.scheduler.scheduler_config import SchedulerClassConfig
 from vlm.configs.trainer_config import TrainerConfig
 from vlm.configs.cli import add_config_cli_args, add_new_class_kwarg_cli_args
-from vlm.configs.merging import recursive_dict_merge, unflatten_dict
+from vlm.configs.merging import merge_overrides, recursive_dict_merge, unflatten_dict
 from vlm.utils.ddp import is_main_process
 from vlm.utils.run_naming import add_datetime_tag, get_random_uid
 from vlm.utils.classes import setattr_nested
@@ -130,6 +130,8 @@ class RunConfig(ConfigBase):
             job_id = os.getenv("SLURM_JOB_ID")
             uid = job_id if job_id else get_random_uid(length=8)
             config_name, _ = os.path.splitext(os.path.basename(self.general.train_config))
+            if self.general.run_name_suffix:
+                config_name = f"{config_name}__{self.general.run_name_suffix}"
             run_name = [f"{add_datetime_tag(config_name)}__{uid}"]
         else:
             run_name = [None]
@@ -284,34 +286,47 @@ class RunConfig(ConfigBase):
         self._maybe_reset_validation_specific_args()
         self._maybe_reset_early_stopping_specific_args()
 
-    def merge_subconfigs_with_cli_args(self, cli_args: list[str]) -> None:
-        """Parse and apply dotted CLI overrides, rejecting unknown arguments."""
+    @classmethod
+    def validate_with_cli_args(cls, cfg_dict: dict[str, Any], cli_args: list[str]) -> "RunConfig":
+        """
+        Validate a config dictionary with dotted CLI overrides applied.
+
+        The dictionary is validated once to register the override options, and again with the
+        overrides, so that derived fields such as the run name and output directory reflect them.
+        """
+        cfg = cls.model_validate(cfg_dict)
+        overrides = cfg.parse_cli_args(cli_args)
+        if not overrides:
+            return cfg
+        return cls.model_validate(merge_overrides(cfg_dict, overrides, cfg.model_dump()))
+
+    def parse_cli_args(self, cli_args: list[str]) -> dict[str, Any]:
+        """Parse dotted CLI overrides into a nested dictionary, rejecting unknown arguments."""
         if not cli_args:
-            return
+            return {}
 
         parser = argparse.ArgumentParser(allow_abbrev=False)
-        subconfigs = {}
+        dynamic_kwargs_paths = set()
         for name in type(self).model_fields:
             subconfig = getattr(self, name)
             if isinstance(subconfig, ConfigBase):
-                subconfigs[name] = subconfig
-        dynamic_kwargs_paths = set()
-        for name, subconfig in subconfigs.items():
-            dynamic_kwargs_paths.update(add_config_cli_args(parser, subconfig, parent_key=name))
+                dynamic_kwargs_paths.update(add_config_cli_args(parser, subconfig, parent_key=name))
 
         add_new_class_kwarg_cli_args(parser, cli_args, dynamic_kwargs_paths)
 
-        parsed_args = vars(parser.parse_args(cli_args))
-        for name, subconfig in subconfigs.items():
-            prefix = f"{name}."
-            overrides = {
-                key.removeprefix(prefix): value
-                for key, value in parsed_args.items()
-                if key.startswith(prefix)
-            }
-            if overrides:
-                merged = recursive_dict_merge(subconfig.model_dump(), unflatten_dict(overrides))
-                setattr(self, name, type(subconfig).model_validate(merged))
+        return unflatten_dict(vars(parser.parse_args(cli_args)))
+
+    def merge_subconfigs_with_cli_args(self, cli_args: list[str]) -> None:
+        """
+        Apply dotted CLI overrides to this validated config, rejecting unknown arguments.
+
+        Derived fields such as the run name and output directory keep their values; use
+        'validate_with_cli_args' for configs whose derived fields should reflect the overrides.
+        """
+        for name, overrides in self.parse_cli_args(cli_args).items():
+            subconfig = getattr(self, name)
+            merged = recursive_dict_merge(subconfig.model_dump(), overrides)
+            setattr(self, name, type(subconfig).model_validate(merged))
 
     @staticmethod
     def apply_base_configs(cfg_dict: dict[str, Any], config_dir: str | Path, seen: list[str] | None = None) -> dict:

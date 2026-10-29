@@ -31,3 +31,21 @@ def recursive_dict_merge(d1: dict[str, Any], d2: dict[str, Any]) -> dict[str, An
         else:
             merged[key] = value
     return merged
+
+
+def merge_overrides(
+    config: dict[str, Any], overrides: dict[str, Any], effective: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Merge 'overrides' into the unvalidated 'config', like 'recursive_dict_merge'.
+
+    A nested override of a field that 'config' leaves to its default starts from that field's
+    'effective' value, the validated config's dump, so its other keys keep their defaults.
+    """
+    merged = dict(config)
+    for key, value in overrides.items():
+        base = config[key] if key in config else effective.get(key)
+        if isinstance(base, dict) and isinstance(value, dict):
+            value = merge_overrides(base, value, effective.get(key) or {})
+        merged[key] = value
+    return merged

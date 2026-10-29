@@ -10,43 +10,45 @@ from vlm.utils.serialization import load_yaml, save_yaml
 
 
 def make_run_config() -> RunConfig:
-    return RunConfig.model_validate(
-        {
-            "general": {
-                "train_config": "/tmp/config.yml",
-                "run_name": "kwargs-check",
-                "output_dir": "/tmp/kwargs-check",
+    return RunConfig.model_validate(make_run_config_dict())
+
+
+def make_run_config_dict() -> dict:
+    return {
+        "general": {
+            "train_config": "/tmp/config.yml",
+            "run_name": "kwargs-check",
+            "output_dir": "/tmp/kwargs-check",
+        },
+        "model": {
+            "model_type": "stub",
+            "model_id": "stub",
+            "trainable_params": {
+                "language_model": {"mode": "full"},
+                "lm_head": {"mode": "full"},
             },
-            "model": {
-                "model_type": "stub",
-                "model_id": "stub",
-                "trainable_params": {
-                    "language_model": {"mode": "full"},
-                    "lm_head": {"mode": "full"},
-                },
+        },
+        "data": {
+            "dataset_name": "ctrate",
+            "vision_input_path": "/tmp/input",
+            "answer_types": "all",
+            "text_only": True,
+        },
+        "trainer": {},
+        "scheduler": {
+            "class_name": "AdapterDWUConstScheduler",
+            "class_kwargs": {
+                "adapter_lr": 0.0001,
+                "lm_lr": 0.0003,
+                "reset_optimizer": True,
             },
-            "data": {
-                "dataset_name": "ctrate",
-                "vision_input_path": "/tmp/input",
-                "answer_types": "all",
-                "text_only": True,
+            "optimizer": {
+                "class_name": "AdamW",
+                "class_kwargs": {"lr": 0.001, "weight_decay": 0.01},
             },
-            "trainer": {},
-            "scheduler": {
-                "class_name": "AdapterDWUConstScheduler",
-                "class_kwargs": {
-                    "adapter_lr": 0.0001,
-                    "lm_lr": 0.0003,
-                    "reset_optimizer": True,
-                },
-                "optimizer": {
-                    "class_name": "AdamW",
-                    "class_kwargs": {"lr": 0.001, "weight_decay": 0.01},
-                },
-            },
-            "eval": {"run_inference": False, "run_eval": False},
-        }
-    )
+        },
+        "eval": {"run_inference": False, "run_eval": False},
+    }
 
 
 def test_dynamic_class_kwargs_overrides_preserve_types_and_siblings():
@@ -173,4 +175,73 @@ def test_cli_rejects_removed_dataset_class_override():
     with pytest.raises(SystemExit, match="2"):
         cfg.merge_subconfigs_with_cli_args(
             ["--data.dataset_class_name", "CTRATEDatasetRetrievalWithImagePrompt1"]
+        )
+
+
+def make_unnamed_run_config_dict(monkeypatch, tmp_path) -> dict:
+    monkeypatch.setenv("VLM_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("SLURM_JOB_ID", "1234567")
+    cfg_dict = make_run_config_dict()
+    del cfg_dict["general"]["run_name"], cfg_dict["general"]["output_dir"]
+    return cfg_dict
+
+
+def test_cli_overrides_name_the_run_directory(monkeypatch, tmp_path):
+    cfg = RunConfig.validate_with_cli_args(
+        make_unnamed_run_config_dict(monkeypatch, tmp_path),
+        ["--general.run_name_suffix", "nv_reason_ct", "--data.vision_input_path", "/tmp/other"],
+    )
+
+    run_name = cfg.general.run_name
+    assert run_name.startswith("config__nv_reason_ct__") and run_name.endswith("__1234567")
+    assert cfg.general.output_dir.get_resolved_path() == str(tmp_path / "ctrate" / "other" / run_name)
+
+
+def test_run_name_suffix_does_not_change_an_explicit_run_name(monkeypatch, tmp_path):
+    cfg_dict = make_unnamed_run_config_dict(monkeypatch, tmp_path)
+
+    cfg = RunConfig.validate_with_cli_args(
+        cfg_dict, ["--general.run_name", "explicit", "--general.run_name_suffix", "nv_reason_ct"]
+    )
+
+    assert cfg.general.run_name == "explicit"
+    assert cfg.general.output_dir.get_resolved_path().endswith("/explicit")
+
+
+def test_cli_overrides_keep_defaults_of_dict_fields_missing_from_the_config(
+    monkeypatch, tmp_path
+):
+    cfg = RunConfig.validate_with_cli_args(
+        make_unnamed_run_config_dict(monkeypatch, tmp_path),
+        [
+            "--trainer.gradient_checkpointing_kwargs.every_n_layers",
+            "3",
+            "--scheduler.class_kwargs.adapter_lr",
+            "0.0002",
+        ],
+    )
+
+    assert cfg.trainer.gradient_checkpointing_kwargs == {"use_reentrant": False, "every_n_layers": 3}
+    assert cfg.scheduler.class_kwargs == {
+        "adapter_lr": 0.0002,
+        "lm_lr": 0.0003,
+        "reset_optimizer": True,
+    }
+
+
+def test_validation_without_cli_overrides_matches_plain_validation(monkeypatch, tmp_path):
+    cfg_dict = make_unnamed_run_config_dict(monkeypatch, tmp_path)
+
+    cfg = RunConfig.validate_with_cli_args(cfg_dict, [])
+
+    assert cfg.general.run_name.startswith("config__") and "nv_reason_ct" not in cfg.general.run_name
+    assert cfg.model_dump(exclude={"general"}) == RunConfig.model_validate(cfg_dict).model_dump(
+        exclude={"general"}
+    )
+
+
+def test_validation_rejects_unknown_cli_overrides(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit, match="2"):
+        RunConfig.validate_with_cli_args(
+            make_unnamed_run_config_dict(monkeypatch, tmp_path), ["--general.seeed", "3"]
         )

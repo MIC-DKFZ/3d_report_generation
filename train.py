@@ -299,8 +299,8 @@ def setup_config_and_logging(
 
         cfg_dict.setdefault("general", {})["train_config"] = str(train_config_path)
 
-        # Validate the file config before registering CLI override options.
-        cfg = RunConfig.model_validate(cfg_dict)
+        # Apply CLI overrides before creating the output directory, which they can change.
+        cfg = RunConfig.validate_with_cli_args(cfg_dict, config_cli_args)
 
         output_dir = cfg.general.output_dir.get_resolved_path()
         if is_main_process():
@@ -320,9 +320,9 @@ def setup_config_and_logging(
 
         logger.info_main(f"Continuing training from run directory: {output_dir}")
 
-    cfg.merge_subconfigs_with_cli_args(config_cli_args)
-    if runtime_args.continue_training_run_dir is not None:
+        cfg.merge_subconfigs_with_cli_args(config_cli_args)
         cfg.general.output_dir.set_runtime_path(runtime_args.continue_training_run_dir)
+
     cfg.apply_conditional_resets()
     cfg.resolve_dataloader_workers(is_distributed, local_world_size)
 

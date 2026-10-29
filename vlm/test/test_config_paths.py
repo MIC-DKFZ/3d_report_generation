@@ -2,6 +2,7 @@
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 from pydantic import Field, ValidationError
@@ -269,6 +270,7 @@ def test_training_setup_preserves_train_config_handling_and_portable_output(
     monkeypatch.setattr(run_config, "VLM_CONFIG_DIR", str(tmp_path))
     raw = cfg.model_dump()
     raw["general"]["output_dir"] = None
+    raw["general"]["run_name"] = None
     monkeypatch.delenv("UNUSED_TEST_ROOT", raising=False)
     raw["data"]["test_dataset_json_path"] = "${UNUSED_TEST_ROOT}/test.json"
     save_yaml(raw, tmp_path / "run.yml")
@@ -281,32 +283,23 @@ def test_training_setup_preserves_train_config_handling_and_portable_output(
             "run.yml",
             "--data.train_dataset_json_path",
             "${DATA_ROOT}/override.json",
+            "--general.run_name_suffix",
+            "nv_reason_ct",
         ],
     )
-    from loguru import logger
-
-    handlers = []
     log_files = []
+    monkeypatch.setattr(train, "setup_logger", log_files.append)
+    monkeypatch.setenv("SLURM_JOB_ID", "1234567")
 
-    def setup_logger(path):
-        log_files.append(path)
-        handlers.append(logger.add(path, format="{message}"))
+    loaded, _ = train.setup_config_and_logging(False, 1)
 
-    merge_overrides = RunConfig.merge_subconfigs_with_cli_args
-
-    def merge_with_logging(self, cli_args):
-        logger.info("Applying config overrides")
-        return merge_overrides(self, cli_args)
-
-    monkeypatch.setattr(train, "setup_logger", setup_logger)
-    monkeypatch.setattr(RunConfig, "merge_subconfigs_with_cli_args", merge_with_logging)
-    try:
-        loaded, _ = train.setup_config_and_logging(False, 1)
-    finally:
-        for handler in handlers:
-            logger.remove(handler)
-    with open(log_files[0]) as log_file:
-        assert "Applying config overrides" in log_file.read()
+    # The CLI suffix names the run directory, which holds the log and the input config.
+    assert loaded.general.run_name.startswith("run__nv_reason_ct__")
+    assert loaded.general.run_name.endswith("__1234567")
+    run_dir = Path(loaded.general.output_dir.get_resolved_path())
+    assert run_dir.name == loaded.general.run_name
+    assert log_files == [str(run_dir / train.TRAIN_LOG_FILENAME)]
+    assert (run_dir / train.INPUT_CONFIG_FILENAME).exists()
     saved = load_yaml(
         os.path.join(loaded.general.output_dir.get_resolved_path(), "final_config.yml")
     )

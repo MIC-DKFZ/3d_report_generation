@@ -9,6 +9,11 @@ class GeneralConfig(ConfigBase):
     General training and experiment configuration.
     """
     run_name: str | None = Field(None, description="Name of the run. Also applies naming to WandB.")
+    run_name_suffix: str | None = Field(
+        None,
+        description="Suffix after the config name in generated run names, e.g. to tell apart runs "
+        "of one config on different dataset JSONs. Ignored when 'run_name' is set.",
+    )
     train_config: str | None = Field(None, description="Path to config file (YAML or JSON), "
                                                "relative to the 'VLM_CONFIG_DIR' environment variable")
     seed: int | None = Field(42, description="Random seed for reproducibility.")
