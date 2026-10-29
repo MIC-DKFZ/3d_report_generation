@@ -17,6 +17,7 @@ from torch.utils.data import SequentialSampler
 from transformers import PreTrainedTokenizerFast, Qwen3Config, TrainingArguments
 
 from vlm.configs.trainer_config import TrainerConfig
+from vlm.training.schedulers.base import TrainingPhase
 from vlm.training.trainers import VLMTrainer
 
 
@@ -26,14 +27,11 @@ class SequentialTrainer(VLMTrainer):
 
 
 class ConstantScheduler:
-    def initialize(self, model, max_steps):
-        pass
+    def create_optimizer(self, model, phase):
+        return torch.optim.SGD(model.parameters(), lr=0.1)
 
-    def prepare_training_step(self, model, optimizer, lr_scheduler, global_step, max_steps):
-        if optimizer is None:
-            optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
-            lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
-        return optimizer, lr_scheduler, False
+    def create_lr_scheduler(self, optimizer, **kwargs):
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
 
 
 def make_model():
@@ -86,6 +84,7 @@ def make_trainer(model, samples, batch_size, accumulation_steps, output_dir):
         model=model,
         processing_class=tokenizer,
         scheduler=ConstantScheduler(),
+        phase=TrainingPhase("DEFAULT", 0, 1),
         data_collator=collate,
         train_dataset=samples,
         args=TrainingArguments(

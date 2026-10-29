@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import torch.nn as nn
-from transformers.trainer import OPTIMIZER_NAME, SCHEDULER_NAME, TRAINER_STATE_NAME
+from transformers.trainer import TRAINER_STATE_NAME
 
 from vlm.configs.run_config import RunConfig
 from vlm.configs.compatibility import normalize_saved_config
@@ -35,7 +35,6 @@ class CheckpointPlan:
 
     model_checkpoints: tuple[Path, ...] = ()
     trainer_state_checkpoint: Path | None = None
-    optimizer_scheduler_checkpoint: Path | None = None
 
     @property
     def is_resume(self) -> bool:
@@ -95,24 +94,6 @@ def save_final_config(cfg: RunConfig, output_dir: str | Path | None = None) -> N
     )
 
 
-def _validated_optimizer_scheduler_checkpoint(
-    checkpoint_dir: Path | None,
-) -> Path | None:
-    if checkpoint_dir is None:
-        return None
-
-    scheduler_path = checkpoint_dir / SCHEDULER_NAME
-    optimizer_path = checkpoint_dir / OPTIMIZER_NAME
-    if scheduler_path.is_file() and optimizer_path.is_file():
-        return checkpoint_dir
-
-    logger.warning_main(
-        f"Skipping optimizer/scheduler initialization from checkpoint '{checkpoint_dir}' because "
-        f"'{SCHEDULER_NAME}' or '{OPTIMIZER_NAME}' is missing."
-    )
-    return None
-
-
 def create_checkpoint_plan(
     cfg: RunConfig,
     runtime_args: TrainRuntimeArgs,
@@ -148,9 +129,6 @@ def create_checkpoint_plan(
             model_checkpoints=(resume_checkpoint,) if cumulative
             else model_checkpoints + (resume_checkpoint,),
             trainer_state_checkpoint=resume_checkpoint,
-            optimizer_scheduler_checkpoint=_validated_optimizer_scheduler_checkpoint(
-                resume_checkpoint
-            ),
         )
 
     return CheckpointPlan(model_checkpoints=model_checkpoints)

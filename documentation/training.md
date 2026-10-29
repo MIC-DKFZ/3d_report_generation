@@ -57,6 +57,16 @@ the run config overrides its bases, with earlier bases taking precedence.
 Use `${NAME}` in YAML paths to reference environment variables.
 See [vlm/configs](../vlm/configs/) for all fields and defaults.
 
+## Training phases
+
+The paper recipes train in two phases. During `warmup_1_duration`, only the
+adapter trains; afterwards, all configured parameters train with a fresh
+optimizer, a second warmup over `warmup_2_duration`, and a cosine decay. Durations
+are fractions of the whole training. The first phase is rounded to whole epochs
+(for example, 0.1 of 12 epochs is 1 epoch) and must leave at least one epoch for
+the second. A checkpoint is always saved at the end of the first phase. Phased
+training requires `trainer.num_train_epochs` instead of `trainer.max_steps`.
+
 ## Resuming
 
 Each training run creates a folder under `VLM_OUTPUT_DIR` containing its saved

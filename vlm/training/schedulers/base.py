@@ -1,257 +1,111 @@
-import os
+import math
 from abc import ABC, abstractmethod
-from enum import StrEnum
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
-import torch
 import torch.nn as nn
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import _LRScheduler
+from torch.optim.lr_scheduler import LambdaLR
 
-from transformers.trainer import SCHEDULER_NAME, OPTIMIZER_NAME
-
-from vlm.utils import logger
-from vlm.training.checkpoint_state import record_trainable_checkpoint_keys
-from vlm.utils.ddp import is_main_process
 from vlm.training.parameters import get_param_groups, log_param_groups
+from vlm.utils.ddp import is_main_process
+
+MIN_LR = 1e-6
+
+
+@dataclass(frozen=True)
+class TrainingPhase:
+    """Whole epochs trained with one set of trainable parameters and one optimizer."""
+
+    name: str
+    start_epoch: int
+    end_epoch: int
+    adapter_only: bool = False
+
+
+def cosine_decay(step: int, steps: int, max_lr: float) -> float:
+    return MIN_LR + (max_lr - MIN_LR) * (1 + math.cos(math.pi * step / steps)) / 2
 
 
 class SchedulerBase(ABC):
-    def __init__(
-            self,
-            optimizer_class: type[Optimizer],
-            optimizer_kwargs: dict,
-            module_attr_map: dict,
-            forbidden_name_patterns_for_wd: list[str],
-            output_dir: str | Path
-    ):
-        self.training_stage: StrEnum | None = None
-        self.new_training_stage: bool = False
+    """
+    Split training into phases and define the learning rate of every optimizer step.
 
+    Each phase is trained by its own 'VLMTrainer', so changing the trainable parameters always
+    starts a fresh optimizer. The learning rate is a function of the global step over the whole
+    run, so a later phase continues the schedule where the previous phase ended.
+    """
+
+    def __init__(
+        self,
+        optimizer_class: type[Optimizer],
+        optimizer_kwargs: dict,
+        module_attr_map: dict,
+        forbidden_name_patterns_for_wd: list[str],
+        output_dir: str | Path,
+    ):
         self.optimizer_class = optimizer_class
         self.optimizer_kwargs = optimizer_kwargs
-
         self.module_attr_map = module_attr_map
         self.forbidden_name_patterns_for_wd = forbidden_name_patterns_for_wd
         self.output_dir = output_dir
 
-        self.configured_trainable_params_state: dict[str, bool] = {}
-        self._is_initialized = False
+        # (module name, parameter name prefix, learning rate); earlier entries take precedence.
+        self.lr_param_groups: list[tuple[str, str, float]] = []
+        self.configured_requires_grad: dict[str, bool] | None = None
 
-    def initialize(self, model: nn.Module, max_steps: int):
-        if self._is_initialized:
-            logger.warning_main("Scheduler has already been initialized. Skipping repeated initialization.")
-            return
+    @abstractmethod
+    def phases(self, num_train_epochs: int) -> list[TrainingPhase]:
+        """Return consecutive phases that cover all training epochs."""
 
-        # Capture flags set by model config and PEFT before the scheduler modifies them.
-        self.configured_trainable_params_state = {
-            name: param.requires_grad for name, param in model.named_parameters()
-        }
+    @abstractmethod
+    def lr_schedule(
+        self, max_steps: int, steps_per_epoch: int, num_train_epochs: int
+    ) -> Callable[[int, float], float]:
+        """Return 'lr(step, max_lr)': the learning rate of a group at a global step."""
 
-        self._initialize(max_steps=max_steps)
-        self._is_initialized = True
-
-    def _restore_configured_trainable_params_state(self, model: nn.Module) -> bool:
-        """Restore configured flags captured before scheduler modifications; report changes."""
-        changed = False
+    def set_trainable_params(self, model: nn.Module, phase: TrainingPhase):
+        # The first call sees the flags set by the model config and PEFT, before any phase.
+        if self.configured_requires_grad is None:
+            self.configured_requires_grad = {
+                name: param.requires_grad for name, param in model.named_parameters()
+            }
+        adapter_prefix = self.module_attr_map["adapter"]
         for name, param in model.named_parameters():
-            if name in self.configured_trainable_params_state:
-                configured_state = self.configured_trainable_params_state[name]
-                if param.requires_grad != configured_state:
-                    param.requires_grad = configured_state
-                    changed = True
-        return changed
+            param.requires_grad = self.configured_requires_grad[name] and (
+                not phase.adapter_only or name.startswith(adapter_prefix)
+            )
 
-    def _configure_optimizer(
-        self, model: nn.Module, optimizer: Optimizer | None, *, reset: bool = False
-    ) -> tuple[Optimizer, list[dict]]:
-        """Match trainable parameters, preserving per-parameter state unless reset."""
-        # Fresh groups provide the maximum learning rates to the LR scheduler.
+    def create_optimizer(self, model: nn.Module, phase: TrainingPhase) -> Optimizer:
         param_groups = get_param_groups(
             self.lr_param_groups,
             self.optimizer_kwargs.get("weight_decay", 0.0),
             model,
             self.forbidden_name_patterns_for_wd,
         )
+        optimizer = self.optimizer_class(param_groups, **self.optimizer_kwargs)
+        if is_main_process():
+            log_param_groups(
+                model, optimizer, Path(self.output_dir, f"param_groups__{phase.name}.log")
+            )
+        return optimizer
 
-        def parameter_ids(groups):
-            return [tuple(id(param) for param in group["params"]) for group in groups]
-
-        if (
-            optimizer is not None
-            and not reset
-            and parameter_ids(optimizer.param_groups) == parameter_ids(param_groups)
-        ):
-            return optimizer, param_groups
-
-        new_optimizer = self.optimizer_class(param_groups, **self.optimizer_kwargs)
-        if optimizer is not None and not reset:
-            for group in new_optimizer.param_groups:
-                for param in group["params"]:
-                    if param in optimizer.state:
-                        new_optimizer.state[param] = optimizer.state[param]
-
-        return new_optimizer, param_groups
-
-    def _log_param_groups(self, model: nn.Module, optimizer: Optimizer):
-        # file_path = Path(self.output_dir, f"param_groups_{self.training_stage}_{os.getenv("LOCAL_RANK")}.log")
-        file_path = Path(self.output_dir, f"param_groups__{self.training_stage}.log")
-        log_param_groups(model, optimizer, file_path)
-
-    def prepare_training_step(
-            self,
-            model,
-            optimizer,
-            lr_scheduler,
-            global_step: int,
-            max_steps: int,
-    ) -> tuple[Optimizer, _LRScheduler, bool]:
-        """Configure trainability, the optimizer, and the LR scheduler for a training step."""
-        self.update_training_stage(global_step=global_step, max_steps=max_steps)
-        changed_requires_grad_status = self.set_trainable_params(model=model)
-        if changed_requires_grad_status:
-            record_trainable_checkpoint_keys(model)
-        optimizer, lr_scheduler = self.configure_optimizer_and_lr_scheduler(
-            model,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler
-        )
-        if self.new_training_stage:
-            if is_main_process():
-                self._log_param_groups(model, optimizer)
-            self.new_training_stage = False
-
-        return optimizer, lr_scheduler, changed_requires_grad_status
-
-    def restore_checkpoint_state(
-            self,
-            model,
-            global_step: int,
-            max_steps: int,
-            checkpoint_dir: str | Path,
-    ) -> tuple[Optimizer, _LRScheduler, bool]:
-        """Restore the optimizer and scheduler state that produced a checkpoint."""
-        checkpoint_stage_step = max(global_step - 1, 0)
-        # Resume always reconstructs fresh objects, even within the current stage.
-        self.new_training_stage = True
-        optimizer, lr_scheduler, changed_requires_grad_status = self.prepare_training_step(
-            model=model,
-            optimizer=None,
-            lr_scheduler=None,
-            global_step=checkpoint_stage_step,
-            max_steps=max_steps,
-        )
-
-        scheduler_state = torch.load(
-            os.path.join(checkpoint_dir, SCHEDULER_NAME),
-            weights_only=True,
-        )
-        lr_scheduler.load_state_dict(scheduler_state)
-        optimizer_state = torch.load(
-            os.path.join(checkpoint_dir, OPTIMIZER_NAME),
-            map_location=model.device,
-            weights_only=True,
-        )
-        optimizer.load_state_dict(optimizer_state)
-
-        return optimizer, lr_scheduler, changed_requires_grad_status
-
-    def resume(
-            self,
-            model,
-            global_step: int,
-            max_steps: int,
-            checkpoint_dir: str,
-    ) -> tuple[Optimizer, _LRScheduler, bool]:
-        """
-        Restore the optimizer/scheduler state and prepare the next training step.
-
-        Trainer increments ``global_step`` after an optimizer step and saves the
-        checkpoint afterwards. A checkpoint at step N therefore contains state
-        produced by the scheduler configuration for step N - 1, while resumed
-        training must use the configuration for step N.
-        """
-        logger.info_main(
-            "[SCHEDULER] Restoring checkpoint state from the stage active at "
-            f"step {max(global_step - 1, 0)}, then preparing step {global_step}."
-        )
-
-        # Recreate the stage that produced the checkpoint before loading its state.
-        optimizer, lr_scheduler, changed_for_checkpoint_stage = self.restore_checkpoint_state(
-            model=model,
-            global_step=global_step,
-            max_steps=max_steps,
-            checkpoint_dir=checkpoint_dir,
-        )
-        # Advance the scheduler configuration to the stage used by the next step.
-        optimizer, lr_scheduler, changed_for_next_stage = self.prepare_training_step(
-            model=model,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-            global_step=global_step,
-            max_steps=max_steps,
-        )
-
-        return (
-            optimizer,
-            lr_scheduler,
-            changed_for_checkpoint_stage or changed_for_next_stage,
-        )
-
-    @abstractmethod
-    def _initialize(self, max_steps):
-        """
-        Initialize stage boundaries using `max_steps` provided by the Trainer.
-        """
-        ...
-
-    @abstractmethod
-    def update_training_stage(self, global_step: int, max_steps: int):
-        """
-        Update the internal training stage based on the current progress.
-
-        Implementations should decide which stage is active given the global
-        step, update the stored stage in `self.training_stage`, and set
-        `self.new_training_stage=True` when a stage transition occurs
-        so the other methods can react accordingly.
-        """
-        ...
-
-    @abstractmethod
-    def configure_optimizer_and_lr_scheduler(
-            self,
-            model,
-            optimizer: Optimizer | None,
-            lr_scheduler: _LRScheduler
-    ) -> tuple[Optimizer, _LRScheduler]:
-        """
-        Reconfigure the optimizer and LR scheduler when entering a new training stage.
-
-        If `self.new_training_stage` is set, this method may recreate the optimizer
-        (e.g., to reset momentum) and will initialize the appropriate scheduler
-        for the current training stage. Returns the updated optimizer and scheduler.
-        """
-        ...
-
-    @abstractmethod
-    def set_trainable_params(self, model) -> bool:
-        """
-        Control which parameters are trainable for each training stage.
-
-        This method is responsible for enabling or disabling gradient updates
-        (via the `requires_grad` flag) for specific subsets of the model's
-        parameters. It is typically called at the beginning of a training
-        stage or whenever the training configuration changes.
-
-        Args:
-            model: A Hugging Face Transformers model whose parameters may be
-                selectively frozen or unfrozen.
-
-        Returns:
-            changed_requires_grad_state (bool): True if this method modified
-            the `requires_grad` state of **any** parameter. This signals to
-            `VLMTrainer` that the model must be re-wrapped in Distributed
-            Data Parallel (DDP), because changing which parameters require
-            gradients alters the gradient buckets.
-        """
-        ...
+    def create_lr_scheduler(
+        self,
+        optimizer: Optimizer,
+        max_steps: int,
+        steps_per_epoch: int,
+        num_train_epochs: int,
+        start_step: int,
+    ) -> LambdaLR:
+        lr = self.lr_schedule(max_steps, steps_per_epoch, num_train_epochs)
+        # LambdaLR scales each group's configured learning rate by the returned factor.
+        lr_lambdas = [
+            lambda step, max_lr=group["lr"]: lr(step, max_lr) / max_lr if max_lr else 0.0
+            for group in optimizer.param_groups
+        ]
+        # Starting at 'start_step' requires 'initial_lr', which LambdaLR only sets at step 0.
+        for group in optimizer.param_groups:
+            group.setdefault("initial_lr", group["lr"])
+        return LambdaLR(optimizer, lr_lambdas, last_epoch=start_step - 1)
