@@ -73,7 +73,7 @@ def test_missing_required_key_on_save(tmp_path):
         save_model_checkpoint(model, tmp_path)
 
 
-@pytest.mark.parametrize("value", [torch.zeros(3, 3), torch.zeros(2, 2, dtype=torch.float64)])
+@pytest.mark.parametrize("value", [torch.zeros(3, 3), torch.zeros(2, 2, dtype=torch.int64)])
 def test_shape_and_dtype_validation(tmp_path, value):
     save_file({"adapter.weight": value}, tmp_path / WEIGHTS_NAME)
     (tmp_path / MANIFEST_NAME).write_text(json.dumps({"previous_run_dirs": []}))

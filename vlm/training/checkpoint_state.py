@@ -95,7 +95,12 @@ def load_model_checkpoint(model, directory):
     for name, value in weights.items():
         if name not in state:
             raise ValueError(f"Loaded checkpoint key does not exist in model: {name}")
-        if value.shape != state[name].shape or value.dtype != state[name].dtype:
+        # Floating-point precision may differ, e.g. DeepSpeed bf16 saves trainable weights in
+        # bfloat16; loading casts them to the model's dtype.
+        if (
+            value.shape != state[name].shape
+            or value.is_floating_point() != state[name].is_floating_point()
+        ):
             raise ValueError(f"Checkpoint tensor shape/dtype mismatch for {name}")
 
     result = model.load_state_dict(weights, strict=False)

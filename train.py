@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch.distributed as dist
 from transformers import EarlyStoppingCallback, TrainerCallback, TrainingArguments
+from transformers.integrations.deepspeed import unset_hf_deepspeed_config
 
 from vlm.configs.run_config import RunConfig
 from vlm.data.dataloaders import create_eval_dataloader
@@ -134,9 +135,6 @@ class UnifiedVLMTrainer:
 
         initialize_wandb(self.vlm_model, self.cfg, self.world_size, self.rank)
 
-        # Configure training arguments
-        training_args = self.get_training_args()
-
         callbacks: list[TrainerCallback] = [
             LossLoggingCallback(),
             WandbGroupedLRCallback(),
@@ -178,6 +176,10 @@ class UnifiedVLMTrainer:
                     early_stopping_threshold=self.cfg.trainer.early_stopping_threshold,
                 )
             )
+
+        # Created after the callbacks: with DeepSpeed ZeRO-3, models loaded once the
+        # TrainingArguments exist are sharded across ranks.
+        training_args = self.get_training_args()
 
         scheduler = self.cfg.scheduler.to_instance(
             module_attr_map=self.vlm_model.module_attr_map,
@@ -224,6 +226,8 @@ class UnifiedVLMTrainer:
         already_complete_on_resume = not train_phases(
             phases, create_trainer, self.checkpoint_plan.trainer_state_checkpoint
         )
+        # Inference loads the model again and must not shard it as under DeepSpeed ZeRO-3.
+        unset_hf_deepspeed_config()
 
         if is_main_process():
             log_memory_usage("After Training")

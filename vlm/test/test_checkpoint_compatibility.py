@@ -89,7 +89,7 @@ def test_obsolete_saved_dataset_class_is_ignored_even_if_conflicting(class_name)
         ("model.language_model.base_model.weight", torch.ones(3, 2), "shape/dtype mismatch"),
         (
             "model.language_model.base_model.weight",
-            torch.ones(2, 2, dtype=torch.float64),
+            torch.ones(2, 2, dtype=torch.int64),
             "shape/dtype mismatch",
         ),
         ("model.unknown.weight", torch.ones(2, 2), "does not exist"),
@@ -102,3 +102,12 @@ def test_invalid_tensors_are_rejected_before_loading(tmp_path, name, value, erro
     with pytest.raises(ValueError, match=error):
         load_model_checkpoint(model, tmp_path)
     assert torch.equal(model.model.language_model.base_model.weight, before)
+
+
+def test_lower_precision_weights_are_cast_to_the_model_dtype(tmp_path):
+    weight = torch.tensor([[1.5, -2.0], [0.25, 3.0]])
+    save_file({"model.vision_adapter.weight": weight.bfloat16()}, tmp_path / "model.safetensors")
+    model = CheckpointModel()
+    load_model_checkpoint(model, tmp_path)
+    assert model.model.vision_adapter.weight.dtype == torch.float32
+    torch.testing.assert_close(model.model.vision_adapter.weight.detach(), weight)

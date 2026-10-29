@@ -1,5 +1,6 @@
 """Evaluate generated MERLIN reports using ModernBERT finding labels."""
 
+import functools
 import os
 from pathlib import Path
 
@@ -107,6 +108,13 @@ def load_label_columns(model_id: str | Path | None = None) -> list[str]:
     return labels
 
 
+@functools.cache
+def load_classifier(model_id: str = MODEL_ID) -> MerlinBertClassifier:
+    """Load the classifier once; training loads it before DeepSpeed ZeRO-3 could shard it."""
+    n_classes = len(load_label_columns(model_id))
+    return MerlinBertClassifier(n_classes=n_classes, hf_model_dir=model_id).cuda().eval()
+
+
 def predict_labels(reports, model_id: str | Path | None = None):
     """Classify reports with the fine-tuned Merlin ModernBERT model -> [N, 30] binary df.
 
@@ -136,10 +144,9 @@ def predict_labels(reports, model_id: str | Path | None = None):
         ds, sampler=SequentialSampler(ds), batch_size=batch_size, num_workers=4, pin_memory=True
     )
 
-    model = MerlinBertClassifier(n_classes=len(label_cols), hf_model_dir=model_id)
-    model = model.cuda().eval()
-
-    trainer = MerlinBertInference(model, {"test": loader}, len(label_cols), label_cols)
+    trainer = MerlinBertInference(
+        load_classifier(model_id), {"test": loader}, len(label_cols), label_cols
+    )
     preds = trainer.infer()  # ndarray [N, C]
     return pd.DataFrame(preds.astype(int), columns=label_cols)
 
