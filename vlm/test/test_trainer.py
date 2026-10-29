@@ -1,5 +1,6 @@
 """Small CPU training run through the custom scheduler's stage transition."""
 
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -7,12 +8,39 @@ import torch
 from pydantic import ValidationError
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
-from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast, TrainingArguments
+from transformers import (
+    GPT2Config,
+    GPT2LMHeadModel,
+    PreTrainedTokenizerFast,
+    Trainer,
+    TrainingArguments,
+)
 
 from vlm.configs.compatibility import normalize_saved_config
 from vlm.configs.trainer_config import TrainerConfig
 from vlm.training.checkpoint_state import save_model_checkpoint
 from vlm.training.trainers import VLMTrainer
+
+# Methods of VLMTrainer that do not override a Trainer method.
+OWN_TRAINER_METHODS = {"_prepare_training_step"}
+
+
+def parameters(method):
+    return [
+        (param.name, param.kind, param.default)
+        for param in inspect.signature(method).parameters.values()
+    ]
+
+
+def test_trainer_overrides_match_upstream_methods():
+    # Upstream only calls an override while the hook keeps its name and parameters,
+    # so a renamed or changed private hook would otherwise be skipped silently.
+    for name, method in vars(VLMTrainer).items():
+        if name.startswith("__") or not callable(method) or name in OWN_TRAINER_METHODS:
+            continue
+        upstream = getattr(Trainer, name, None)
+        assert upstream is not None, f"Trainer no longer defines '{name}'"
+        assert parameters(method) == parameters(upstream), f"Trainer.{name} changed"
 
 
 @pytest.mark.parametrize(
