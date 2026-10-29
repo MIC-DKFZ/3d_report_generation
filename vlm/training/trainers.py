@@ -1,5 +1,8 @@
+import os
+
 import torch
 from transformers import Trainer, TrainerState
+from transformers.trainer import SCHEDULER_NAME
 
 from vlm.training.checkpoint_state import load_model_checkpoint, save_model_checkpoint
 from vlm.training.schedulers.base import SchedulerBase, TrainingPhase
@@ -59,6 +62,31 @@ class VLMTrainer(Trainer):
         output_dir = output_dir or self.args.output_dir
         model = self.accelerator.unwrap_model(self.model)
         save_model_checkpoint(model, output_dir, state_dict=state_dict)
+
+    def _save_optimizer_and_scheduler(self, output_dir):
+        if not self.is_deepspeed_enabled:
+            return super()._save_optimizer_and_scheduler(output_dir)
+        # Frozen weights come from the pretrained model and trained ones from 'model.safetensors',
+        # so resuming only needs DeepSpeed's optimizer state.
+        self.model_wrapped.save_checkpoint(output_dir, exclude_frozen_parameters=True)
+        if self.args.should_save:
+            torch.save(self.lr_scheduler.state_dict(), os.path.join(output_dir, SCHEDULER_NAME))
+
+    def _prepare_for_training(self, max_steps, train_dataloader, resume_from_checkpoint):
+        if not self.is_deepspeed_enabled or resume_from_checkpoint is None:
+            return super()._prepare_for_training(
+                max_steps, train_dataloader, resume_from_checkpoint
+            )
+        # Upstream loads DeepSpeed checkpoints strictly, which fails without the frozen weights.
+        model, train_dataloader = super()._prepare_for_training(max_steps, train_dataloader, None)
+        load_path, _ = self.model_wrapped.load_checkpoint(
+            resume_from_checkpoint, load_module_strict=False
+        )
+        if load_path is None:
+            raise ValueError(f"DeepSpeed failed to resume from {resume_from_checkpoint}")
+        self._load_optimizer_and_scheduler(resume_from_checkpoint)
+        self._load_scaler(resume_from_checkpoint)
+        return model, train_dataloader
 
     def _init_training_state(
         self,

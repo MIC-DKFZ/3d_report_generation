@@ -79,7 +79,8 @@ bf16 follow the trainer settings.
 
 With bf16, DeepSpeed casts the whole model to bf16, so checkpoints store the
 trained weights in bf16; inference casts them back. Checkpoints also contain
-DeepSpeed's optimizer state, which resuming requires.
+DeepSpeed's optimizer state for resuming, but not the frozen weights, which come
+from the pretrained model.
 
 ## Resuming
 

@@ -62,6 +62,11 @@ def test_phases_and_resume_match_uninterrupted_training(tmp_path, stage, bf16):
     initial = make_model().state_dict()[EMBEDDINGS].to(boundary[EMBEDDINGS].dtype)
     torch.testing.assert_close(boundary[EMBEDDINGS], initial, rtol=0, atol=0)
     assert not torch.equal(expected_weights[EMBEDDINGS], boundary[EMBEDDINGS])
+    # DeepSpeed checkpoints leave out the frozen weights, which come from the pretrained model.
+    (model_states,) = (output_dir / "checkpoint-2").glob("global_step*/*model_states.pt")
+    module_states = torch.load(model_states, weights_only=False)
+    assert EMBEDDINGS not in (module_states["module"] or {})
+    assert not module_states.get("frozen_param_fragments")
 
     for resume_step in (2, 4, 6):
         checkpoint = str(output_dir / f"checkpoint-{resume_step}")
