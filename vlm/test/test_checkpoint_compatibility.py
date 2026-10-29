@@ -4,6 +4,7 @@ from safetensors.torch import save_file
 
 from vlm.configs.compatibility import normalize_saved_config
 from vlm.configs.data_config import DataConfig
+from vlm.configs.general_config import GeneralConfig
 from vlm.training.checkpoint_state import load_model_checkpoint
 
 
@@ -22,6 +23,14 @@ def test_obsolete_eval_sample_limit_is_ignored_without_mutating_input():
     assert normalized == {"eval": {"max_new_tokens": 512}}
     assert original["eval"]["n_samples"] is None
     assert any("eval.n_samples" in warning for warning in warnings)
+
+
+@pytest.mark.parametrize("value", [False, True])
+def test_obsolete_optimizer_initialization_flag_is_ignored(value):
+    original = {"general": {"init_optimizer_scheduler_from_checkpoint": value, "seed": 3}}
+    normalized, warnings = normalize_saved_config(original)
+    assert GeneralConfig.model_validate(normalized["general"]).seed == 3
+    assert any("general.init_optimizer_scheduler_from_checkpoint" in w for w in warnings)
 
 
 @pytest.mark.parametrize("dataset_name", ["ctrate", "merlin", "bonn", "amosmm", "toothfairy4"])

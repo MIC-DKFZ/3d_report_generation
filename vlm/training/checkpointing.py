@@ -153,16 +153,7 @@ def create_checkpoint_plan(
             ),
         )
 
-    optimizer_scheduler_checkpoint = None
-    if cfg.general.init_optimizer_scheduler_from_checkpoint:
-        optimizer_scheduler_checkpoint = _validated_optimizer_scheduler_checkpoint(
-            init_checkpoint
-        )
-
-    return CheckpointPlan(
-        model_checkpoints=model_checkpoints,
-        optimizer_scheduler_checkpoint=optimizer_scheduler_checkpoint,
-    )
+    return CheckpointPlan(model_checkpoints=model_checkpoints)
 
 
 def log_checkpoint_load_result(
