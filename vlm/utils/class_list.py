@@ -23,13 +23,22 @@ def strip_class_list(text: str) -> str:
     return CLASS_LIST_BLOCK_PATTERN.sub("", text).strip()
 
 
+def class_name_pattern(name: str) -> re.Pattern:
+    """Match a class name as whole words, e.g. 'Pleural effusion' in 'bilateral pleural-effusions'."""
+    words = r"[\s_-]+".join(re.escape(word) for word in name.split())
+    return re.compile(rf"\b{words}(?:s|es|e)?\b", flags=re.IGNORECASE)
+
+
 def parse_class_list(text: str, class_names) -> list[int]:
     """
     Mark which of 'class_names' the last class list block of 'text' contains.
 
-    Entries are comma-separated and matched case-insensitively; entries outside 'class_names'
-    are ignored, and a missing block counts as no classes.
+    Entries are comma-separated; a class counts when some entry contains its name (see
+    'class_name_pattern'). Other entries are ignored, and a missing block counts as no classes.
     """
     blocks = CLASS_LIST_BLOCK_PATTERN.findall(text)
-    entries = {entry.strip().lower() for entry in blocks[-1].split(",")} if blocks else set()
-    return [int(name.lower() in entries) for name in class_names]
+    entries = [entry.strip() for entry in blocks[-1].split(",")] if blocks else []
+    return [
+        int(any(class_name_pattern(name).search(entry) for entry in entries))
+        for name in class_names
+    ]

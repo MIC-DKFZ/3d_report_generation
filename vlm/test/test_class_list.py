@@ -39,6 +39,12 @@ def test_strip_and_parse_class_list():
     assert parse_class_list(REPORT, names) == [0, 0, 0]
 
 
+def test_parse_class_list_matches_names_inside_entries():
+    names = ("Lung nodule", "Pleural effusion", "Atelectasis", "Emphysema")
+    text = "<answer>calcified lung-nodules, Bilateral pleural_effusion, Atelectatic band</answer>"
+    assert parse_class_list(text, names) == [1, 1, 0, 0]
+
+
 def test_ctrate_class_names_match_radbert_columns():
     assert match_reference_columns(CTRATEDataset.class_list_names, ctrate_radbert.LABEL_COLUMNS) == list(
         ctrate_radbert.LABEL_COLUMNS
