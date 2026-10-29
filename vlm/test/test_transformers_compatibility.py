@@ -327,3 +327,23 @@ def test_shared_registry_registers_nnfoundation_backbone(monkeypatch, tmp_path):
     assert VLM_REGISTRY["Qwen2.5-VL-3B"].model_class is Qwen25VLWrapper
     assert {"Qwen3-1.7B", "Qwen3-VL-2B", "Phi4Mini", "Gemma3-4B"} <= VLM_REGISTRY.keys()
     assert {"Qwen3.5-2B", "Qwen3.5-4B", "Qwen3.5-9B"} <= VLM_REGISTRY.keys()
+
+
+@pytest.mark.parametrize(
+    ("eos_token_id", "expected"),
+    [(None, [2]), (1, [2, 1]), ([1, 2], [1, 2])],
+)
+def test_generation_stops_at_tokenizer_eos(eos_token_id, expected):
+    from types import SimpleNamespace
+
+    from transformers import GenerationConfig
+
+    from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
+
+    wrapper = SimpleNamespace(
+        tokenizer=SimpleNamespace(eos_token_id=2, pad_token_id=0),
+        model=SimpleNamespace(generation_config=GenerationConfig(eos_token_id=eos_token_id)),
+    )
+    AbstractVLWrapper._stop_generation_at_tokenizer_eos(wrapper)
+    assert wrapper.model.generation_config.eos_token_id == expected
+    assert wrapper.model.generation_config.pad_token_id == 0

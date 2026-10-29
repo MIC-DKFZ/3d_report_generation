@@ -73,9 +73,31 @@ class AbstractVLWrapper(ABC):
         Checkpoint selection and restoration remain the caller's responsibility.
         """
         self.setup_model()
+        self._stop_generation_at_tokenizer_eos()
         self.configure_model_for_training()
         self.initialize_checkpoint_tracking()
         return self.model
+
+    def _stop_generation_at_tokenizer_eos(self) -> None:
+        """
+        Also stop generation at the tokenizer's EOS token, which ends every training response.
+
+        Some checkpoints (e.g. Qwen3.5) ship no generation config, so 'generate' would only stop at
+        the model config's '<|endoftext|>' and run past the '<|im_end|>' that ends each answer.
+        """
+        eos_token_id = self.tokenizer.eos_token_id
+        if eos_token_id is None:
+            return
+        generation_config = self.model.generation_config
+        eos_token_ids = generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if eos_token_id not in eos_token_ids:
+            generation_config.eos_token_id = [eos_token_id, *eos_token_ids]
+        if generation_config.pad_token_id is None:
+            generation_config.pad_token_id = self.tokenizer.pad_token_id
 
     @abstractmethod
     def collate_fn(self, batch):
