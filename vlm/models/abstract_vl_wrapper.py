@@ -24,6 +24,9 @@ from vlm.utils.serialization import load_yaml
 
 
 class AbstractVLWrapper(ABC):
+    # Extra variables for the processor's chat template, e.g. to pin a template's thinking mode.
+    chat_template_kwargs: dict = {}
+
     def __init__(self,
                  model_cfg: ModelConfig,
                  vision_input_type: str,
@@ -123,6 +126,7 @@ class AbstractVLWrapper(ABC):
             messages,
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
+            **self.chat_template_kwargs,
         )
 
     def _prepare_vision_inputs(
