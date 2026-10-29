@@ -11,9 +11,7 @@ def add_config_cli_args(
     default_model: BaseModel,
     parent_key: str = "",
 ) -> set[str]:
-    """Register dotted CLI options and return paths accepting additional class kwargs."""
-    from vlm.configs.base import DynamicClassConfigBase
-
+    """Register dotted CLI options and return the dict field paths that accept new keys."""
     dynamic_kwargs_paths: set[str] = set()
 
     def register_fields(model: BaseModel | dict[str, Any], prefix: str) -> None:
@@ -31,7 +29,9 @@ def add_config_cli_args(
             if isinstance(value, BaseModel):
                 register_fields(value, path)
                 continue
-            if key == "class_kwargs" and isinstance(model, DynamicClassConfigBase):
+            # Free-form dict fields such as 'class_kwargs' and 'gradient_checkpointing_kwargs' get one
+            # option per key and accept new keys.
+            if isinstance(model, BaseModel) and annotation is dict:
                 assert isinstance(value, dict)
                 dynamic_kwargs_paths.add(path)
                 register_fields(value, path)

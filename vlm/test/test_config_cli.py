@@ -93,6 +93,16 @@ def test_new_dynamic_class_kwargs_can_be_added():
     assert cfg.scheduler.optimizer.class_kwargs["weight_decay"] == 0.01
 
 
+def test_plain_dict_field_keys_can_be_overridden_and_added():
+    cfg = make_run_config()
+
+    cfg.merge_subconfigs_with_cli_args(
+        ["--trainer.gradient_checkpointing_kwargs.every_n_layers", "3"]
+    )
+
+    assert cfg.trainer.gradient_checkpointing_kwargs == {"use_reentrant": False, "every_n_layers": 3}
+
+
 def test_unknown_non_class_kwarg_is_rejected():
     cfg = make_run_config()
     with pytest.raises(SystemExit, match="2"):
