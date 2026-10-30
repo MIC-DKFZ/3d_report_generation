@@ -204,6 +204,28 @@ def test_ranks_with_fewer_batches_repeat_generation(make_callback, monkeypatch):
     assert len(results["preds"]) == 2
 
 
+@pytest.mark.parametrize("deepspeed_dtype", [None, torch.bfloat16])
+def test_generation_inputs_take_the_deepspeed_dtype(tmp_path, make_callback, deepspeed_dtype):
+    class VisionModel(TinyModel):
+        dtypes = []
+
+        def generate(self, input_ids, pixel_values_videos, **kwargs):
+            self.dtypes.append((input_ids.dtype, pixel_values_videos.dtype))
+            return super().generate(input_ids, **kwargs)
+
+    callback = make_callback(None, calculate_classifier_score=False)
+    for batch in callback.eval_dataloader:
+        batch["pixel_values_videos"] = torch.ones(1, 2)
+    args, state = args_and_state(tmp_path)
+    if deepspeed_dtype is not None:
+        args.hf_deepspeed_config = SimpleNamespace(dtype=lambda: deepspeed_dtype)
+    model = VisionModel()
+
+    callback.on_evaluate(args, state, TrainerControl(), model=model, metrics={})
+
+    assert model.dtypes == [(torch.long, deepspeed_dtype or torch.float32)] * 2
+
+
 @pytest.mark.parametrize("metric", ["radbert_f1", "eval_radbert_f1"])
 def test_old_saved_classifier_configs_migrate_without_mutating_input(metric):
     original = {
