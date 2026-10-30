@@ -51,6 +51,7 @@ def make_callback(monkeypatch):
 
     def make(scorer, **kwargs):
         monkeypatch.setattr(evaluation_registry, "get_classifier_evaluator", lambda _: scorer)
+        monkeypatch.setattr(evaluation_registry, "load_classifier", lambda _: None)
         return ReportEvaluationCallback(
             [generation_batch("first"), generation_batch("second")],
             max_new_tokens=2,
@@ -166,6 +167,7 @@ def test_secondary_rank_receives_metrics_without_running_classifier(
 
     callback = make_callback(scorer, is_distributed=True)
     monkeypatch.setattr(evaluation, "gather_inference_outputs", lambda **kwargs: None)
+    monkeypatch.setattr(evaluation.dist, "all_reduce", lambda tensor, op: None)
 
     def broadcast(payload, src):
         assert src == 0
@@ -177,6 +179,51 @@ def test_secondary_rank_receives_metrics_without_running_classifier(
     callback.on_evaluate(args, state, TrainerControl(), model=TinyModel(), metrics=metrics)
     assert metrics == {"eval_classifier_f1": 0.8}
     assert not (tmp_path / "callback_eval").exists()
+
+
+def test_ranks_with_fewer_batches_repeat_generation(make_callback, monkeypatch):
+    class CountingModel(TinyModel):
+        calls = 0
+
+        def generate(self, input_ids, **kwargs):
+            self.calls += 1
+            return super().generate(input_ids, **kwargs)
+
+    def all_reduce(tensor, op):
+        assert op == evaluation.dist.ReduceOp.MAX
+        tensor.fill_(3)  # Another rank has three batches.
+
+    monkeypatch.setattr(evaluation.dist, "all_reduce", all_reduce)
+    callback = make_callback(lambda **kwargs: {}, is_distributed=True)
+    model = CountingModel()
+
+    results = callback._generate_reports(model, torch.device("cpu"))
+
+    assert model.calls == 3
+    assert results["image_ids"] == ["first", "second"]
+    assert len(results["preds"]) == 2
+
+
+@pytest.mark.parametrize("deepspeed_dtype", [None, torch.bfloat16])
+def test_generation_inputs_take_the_deepspeed_dtype(tmp_path, make_callback, deepspeed_dtype):
+    class VisionModel(TinyModel):
+        dtypes = []
+
+        def generate(self, input_ids, pixel_values_videos, **kwargs):
+            self.dtypes.append((input_ids.dtype, pixel_values_videos.dtype))
+            return super().generate(input_ids, **kwargs)
+
+    callback = make_callback(None, calculate_classifier_score=False)
+    for batch in callback.eval_dataloader:
+        batch["pixel_values_videos"] = torch.ones(1, 2)
+    args, state = args_and_state(tmp_path)
+    if deepspeed_dtype is not None:
+        args.hf_deepspeed_config = SimpleNamespace(dtype=lambda: deepspeed_dtype)
+    model = VisionModel()
+
+    callback.on_evaluate(args, state, TrainerControl(), model=model, metrics={})
+
+    assert model.dtypes == [(torch.long, deepspeed_dtype or torch.float32)] * 2
 
 
 @pytest.mark.parametrize("metric", ["radbert_f1", "eval_radbert_f1"])

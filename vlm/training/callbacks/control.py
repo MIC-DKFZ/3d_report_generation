@@ -50,6 +50,19 @@ class TerminateOnNaNLossCallback(TrainerCallback):
             )
 
 
+class PhaseEndCallback(TrainerCallback):
+    """Stop training and save a checkpoint after the last epoch of a training phase."""
+
+    def __init__(self, end_epoch: int):
+        self.end_epoch = end_epoch
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        if round(state.epoch) >= self.end_epoch:
+            control.should_training_stop = True
+            control.should_save = True
+        return control
+
+
 class EveryNEpochsCallback(TrainerCallback):
     """
     Run evaluation every ``n`` epochs, using ``eval.eval_every_n_epochs`` as ``n``.

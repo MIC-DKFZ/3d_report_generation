@@ -12,6 +12,12 @@ from torch.utils.data import DataLoader
 from vlm.evaluation.report_generation import merlin_modernbert
 
 
+@pytest.fixture(autouse=True)
+def fresh_classifier():
+    # Each test loads its own fake classifier.
+    merlin_modernbert.load_classifier.cache_clear()
+
+
 def test_labels_come_from_config_in_numeric_output_order(tmp_path):
     (tmp_path / "config.json").write_text(
         json.dumps(
@@ -91,8 +97,9 @@ def test_hf_inference_uses_config_labels_and_preserves_report_order(monkeypatch,
     pd.testing.assert_frame_equal(
         predicted, pd.DataFrame([[1, 0, 1], [0, 1, 1], [1, 1, 1]], columns=labels)
     )
-    for loader in (config_loader, tokenizer_loader):
-        loader.assert_called_once_with(merlin_modernbert.MODEL_ID)
+    # The classifier loader reads the config again to check its label count.
+    config_loader.assert_called_with(merlin_modernbert.MODEL_ID)
+    tokenizer_loader.assert_called_once_with(merlin_modernbert.MODEL_ID)
     model_loader.assert_called_once_with(merlin_modernbert.MODEL_ID, dtype=torch.float32)
     assert [call.args[0] for call in tokenizer.call_args_list] == ["1", "-1", "0"]
     assert all(call.kwargs["max_length"] == 1024 for call in tokenizer.call_args_list)

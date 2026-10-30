@@ -1,5 +1,6 @@
 """Evaluate generated CT-RATE reports using RadBERT finding labels."""
 
+import functools
 import os
 from pathlib import Path
 
@@ -130,6 +131,12 @@ class RadBertInference:
         return pred_labels
 
 
+@functools.cache
+def load_classifier() -> RadBertClassifier:
+    """Load the classifier once; training loads it before DeepSpeed ZeRO-3 could shard it."""
+    return RadBertClassifier().cuda().eval()
+
+
 def predict_labels(reports: list[str]):
     df = pd.DataFrame({"reports": reports})
     for col in LABEL_COLUMNS:
@@ -145,11 +152,8 @@ def predict_labels(reports: list[str]):
         ds, sampler=SequentialSampler(ds), batch_size=batch_size, num_workers=4, pin_memory=True
     )
 
-    # Model
-    model = RadBertClassifier().cuda().eval()
-
     trainer = RadBertInference(
-        model,
+        load_classifier(),
         {"test": loader},
         len(LABEL_COLUMNS),
         LABEL_COLUMNS,

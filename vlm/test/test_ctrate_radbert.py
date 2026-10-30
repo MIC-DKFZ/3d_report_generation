@@ -12,6 +12,12 @@ from torch.utils.data import DataLoader
 from vlm.evaluation.report_generation import ctrate_radbert
 
 
+@pytest.fixture(autouse=True)
+def fresh_classifier():
+    # Each test loads its own fake classifier.
+    ctrate_radbert.load_classifier.cache_clear()
+
+
 class FakeClassifier(torch.nn.Module):
     def __init__(self, num_labels=18):
         super().__init__()

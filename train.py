@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch.distributed as dist
 from transformers import EarlyStoppingCallback, TrainerCallback, TrainingArguments
+from transformers.integrations.deepspeed import unset_hf_deepspeed_config
 
 from vlm.configs.run_config import RunConfig
 from vlm.data.dataloaders import create_eval_dataloader
@@ -27,6 +28,7 @@ from vlm.training.checkpointing import (
     restore_model_checkpoints,
     save_final_config,
 )
+from vlm.training.phases import train_phases
 from vlm.training.trainers import VLMTrainer
 from vlm.utils import logger
 from vlm.utils.ddp import setup_ddp, is_main_process
@@ -68,7 +70,6 @@ class UnifiedVLMTrainer:
             ddp_setup: Distributed topology initialized by main
         """
         self.vlm_model: AbstractVLWrapper = vlm_model
-        self.trainer: VLMTrainer | None = None
         self.cfg: RunConfig = cfg
         self.checkpoint_plan = checkpoint_plan
 
@@ -85,12 +86,14 @@ class UnifiedVLMTrainer:
         model_args = self.vlm_model.get_model_specific_training_args()
 
         trainer_args = self.cfg.trainer.model_dump(
-            exclude={"early_stopping_patience", "early_stopping_threshold"}
+            exclude={"early_stopping_patience", "early_stopping_threshold", "deepspeed"}
         )
+        deepspeed = self.cfg.trainer.deepspeed
 
         return TrainingArguments(
             **trainer_args,
             **model_args,
+            deepspeed=deepspeed.get_resolved_path() if deepspeed is not None else None,
             run_name=self.cfg.general.run_name,
             output_dir=self.cfg.general.output_dir.get_resolved_path(),
             seed=self.cfg.general.seed,
@@ -134,9 +137,6 @@ class UnifiedVLMTrainer:
 
         initialize_wandb(self.vlm_model, self.cfg, self.world_size, self.rank)
 
-        # Configure training arguments
-        training_args = self.get_training_args()
-
         callbacks: list[TrainerCallback] = [
             LossLoggingCallback(),
             WandbGroupedLRCallback(),
@@ -179,22 +179,42 @@ class UnifiedVLMTrainer:
                 )
             )
 
-        self.trainer = VLMTrainer(
-            model=model,
-            args=training_args,
-            processing_class=self.vlm_model.tokenizer,
-            train_dataset=train_dataset,
-            eval_dataset=val_dataset,
-            data_collator=self.vlm_model.collate_fn,
-            callbacks=callbacks,
-            optimizer_scheduler_checkpoint=self.checkpoint_plan.optimizer_scheduler_checkpoint,
-            model_weights_preloaded=self.checkpoint_plan.is_resume,
-            scheduler=self.cfg.scheduler.to_instance(
-                module_attr_map=self.vlm_model.module_attr_map,
-                forbidden_name_patterns_for_wd=self.vlm_model.forbidden_name_patterns_for_wd,
-                output_dir=self.cfg.general.output_dir.get_resolved_path()
-            ),
+        # Created after the callbacks: with DeepSpeed ZeRO-3, models loaded once the
+        # TrainingArguments exist are sharded across ranks.
+        training_args = self.get_training_args()
+
+        scheduler = self.cfg.scheduler.to_instance(
+            module_attr_map=self.vlm_model.module_attr_map,
+            forbidden_name_patterns_for_wd=self.vlm_model.forbidden_name_patterns_for_wd,
+            output_dir=self.cfg.general.output_dir.get_resolved_path()
         )
+        phases = scheduler.phases(self.cfg.trainer.num_train_epochs)
+        if len(phases) > 1 and training_args.max_steps > 0:
+            raise ValueError(
+                "Training phases are whole epochs; set 'trainer.num_train_epochs' instead of "
+                "'trainer.max_steps'."
+            )
+        if len(phases) > 1 and training_args.load_best_model_at_end:
+            raise ValueError(
+                "'trainer.load_best_model_at_end' would load the best checkpoint at the end of "
+                "every training phase instead of continuing from the phase's final weights."
+            )
+
+        def create_trainer(phase, phase_start_state):
+            scheduler.set_trainable_params(model, phase)
+            return VLMTrainer(
+                model=model,
+                args=training_args,
+                processing_class=self.vlm_model.tokenizer,
+                train_dataset=train_dataset,
+                eval_dataset=val_dataset,
+                data_collator=self.vlm_model.collate_fn,
+                callbacks=callbacks,
+                scheduler=scheduler,
+                phase=phase,
+                phase_start_state=phase_start_state,
+                model_weights_preloaded=self.checkpoint_plan.is_resume,
+            )
 
         if self.is_distributed:
             dist.barrier()
@@ -203,13 +223,13 @@ class UnifiedVLMTrainer:
         if is_main_process():
             log_memory_usage("Before Training")
 
-        # Model weights are already loaded; pass the checkpoint path so Trainer can restore
-        # its step, callback, scaler, RNG, and dataloader progress when continuing a run.
-        resume_checkpoint = self.checkpoint_plan.trainer_state_checkpoint
-        self.trainer.train(
-            resume_from_checkpoint=str(resume_checkpoint) if resume_checkpoint is not None else None
+        # Model weights are already loaded; the checkpoint restores the trainer's step, callback,
+        # scaler, RNG, dataloader, and (inside a phase) optimizer progress when continuing a run.
+        already_complete_on_resume = not train_phases(
+            phases, create_trainer, self.checkpoint_plan.trainer_state_checkpoint
         )
-        already_complete_on_resume = self.trainer.already_complete_on_resume
+        # Inference loads the model again and must not shard it as under DeepSpeed ZeRO-3.
+        unset_hf_deepspeed_config()
 
         if is_main_process():
             log_memory_usage("After Training")
@@ -217,10 +237,6 @@ class UnifiedVLMTrainer:
         # Synchronize all processes before cleanup
         if self.is_distributed:
             dist.barrier()
-
-        # Aggressive memory cleanup
-        del self.trainer
-        self.trainer = None
 
         # Clear model memory
         self.vlm_model.clear_memory()

@@ -13,7 +13,7 @@ import wandb
 
 from vlm.data.batches import extract_batch_prompt_only
 from vlm.utils import logger
-from vlm.utils.ddp import gather_inference_outputs
+from vlm.utils.ddp import gather_inference_outputs, is_main_process
 from vlm.utils.class_list import strip_class_list
 from vlm.utils.decoding import decode_generated_answers, decode_label_answers, strip_thinking
 from vlm.utils.serialization import save_json
@@ -56,13 +56,20 @@ class ReportEvaluationCallback(TrainerCallback):
         self.class_list_names = get_class_list_names(dataset_name)
 
         if calculate_classifier_score:
-            from vlm.registries.evaluation_registry import get_classifier_evaluator
+            from vlm.registries.evaluation_registry import (
+                get_classifier_evaluator,
+                load_classifier,
+            )
 
             self.classifier_scorer = get_classifier_evaluator(dataset_name)
             if self.classifier_scorer is None:
                 raise ValueError(
                     f"No classifier evaluator registered for dataset {dataset_name!r}."
                 )
+            if is_main_process():
+                # Load the classifier before the TrainingArguments exist: with DeepSpeed ZeRO-3,
+                # 'from_pretrained' would shard it across ranks while only this rank scores.
+                load_classifier(dataset_name)
 
         # self.bleu_scorer = Bleu(4)
         # self.meteor_scorer = Meteor()
@@ -73,8 +80,12 @@ class ReportEvaluationCallback(TrainerCallback):
         logger.info_main(f"Starting report evaluation at epoch {state.epoch}.")
         was_training = model.training
         model.eval()
+        # Under DeepSpeed the engine has cast the model to its dtype, so cast the float inputs as
+        # 'Trainer._prepare_input' does.
+        deepspeed_config = getattr(args, "hf_deepspeed_config", None)
+        dtype = None if deepspeed_config is None else deepspeed_config.dtype()
         try:
-            results = self._generate_reports(model, args.device)
+            results = self._generate_reports(model, args.device, dtype)
             if self.is_distributed:
                 results = gather_inference_outputs(local_results=results, main_rank=0)
 
@@ -101,12 +112,18 @@ class ReportEvaluationCallback(TrainerCallback):
 
         logger.info_main("Finished report evaluation.")
 
-    def _generate_reports(self, model, device) -> dict[str, list]:
+    def _generate_reports(self, model, device, dtype=None) -> dict[str, list]:
         results = {"preds": [], "gts": [], "image_ids": []}
+        # With DeepSpeed ZeRO-3, every generation step gathers parameters from all ranks, so all
+        # ranks must call 'generate' equally often; ranks with fewer batches repeat their last one.
+        num_batches = torch.tensor(len(self.eval_dataloader), device=device)
+        if self.is_distributed:
+            dist.all_reduce(num_batches, op=dist.ReduceOp.MAX)
+        prompt_inputs = None
         with torch.inference_mode():
             for inputs in self.eval_dataloader:
                 results["image_ids"].extend(inputs["raw_samples"]["image_id"])
-                prompt_inputs = extract_batch_prompt_only(inputs).to(device)
+                prompt_inputs = extract_batch_prompt_only(inputs).to(device=device, dtype=dtype)
                 del prompt_inputs["raw_samples"]
                 del prompt_inputs["batch_count"]
                 prompt_input_ids = prompt_inputs["input_ids"]
@@ -116,8 +133,13 @@ class ReportEvaluationCallback(TrainerCallback):
                     strip_thinking(answer)
                     for answer in decode_generated_answers(self.tokenizer, outputs, prompt_input_ids)
                 )
-                del prompt_inputs, outputs
+                del outputs
                 torch.cuda.empty_cache()
+
+            for _ in range(int(num_batches) - len(self.eval_dataloader)):
+                if prompt_inputs is None:
+                    raise ValueError("Report evaluation needs at least one batch on every rank.")
+                model.generate(**prompt_inputs, max_new_tokens=self.max_new_tokens)
 
         if self.print_first_sample and results["preds"]:
             logger.info_main(f"First sample GROUNDTRUTH:\n{results['gts'][0]}")

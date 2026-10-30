@@ -24,13 +24,6 @@ class GeneralConfig(ConfigBase):
             "checkpoint of a run identified by its run directory name under 'VLM_OUTPUT_DIR'."
         ),
     )
-    init_optimizer_scheduler_from_checkpoint: bool = Field(
-        False,
-        description=(
-            "If 'True' and 'init_from_checkpoint' is set, also initialize optimizer and LR scheduler "
-            "state from the selected checkpoint, when those states are available."
-        ),
-    )
     output_dir: ConfigPath | None = Field(None, description="Directory to save model outputs.")
     wandb_project: str | None = Field(None, description="WandB project name.")
     wandb_entity: str | None = Field(None, description="WandB account or team name.")

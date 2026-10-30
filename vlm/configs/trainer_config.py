@@ -1,6 +1,7 @@
 from typing import Literal
 from pydantic import Field
 from vlm.configs.base import ConfigBase
+from vlm.configs.paths import ConfigPath
 
 
 class TrainerConfig(ConfigBase):
@@ -53,3 +54,10 @@ class TrainerConfig(ConfigBase):
     torch_empty_cache_steps: int = Field(10, description="Clear PyTorch CUDA cache every X steps to manage GPU memory.")
     ddp_find_unused_parameters: bool = Field(False, description="Whether to enable detection of unused parameters in DDP training.")
     ddp_bucket_cap_mb: int = Field(25, description="Bucket size in MB for gradient synchronization in DDP.")
+    deepspeed: ConfigPath | None = Field(
+        None,
+        description=(
+            "DeepSpeed config JSON (e.g. 'paper_configs/deepspeed/zero2.json'); 'None' trains with "
+            "DDP."
+        ),
+    )

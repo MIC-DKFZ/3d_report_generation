@@ -57,6 +57,30 @@ the run config overrides its bases, with earlier bases taking precedence.
 Use `${NAME}` in YAML paths to reference environment variables.
 See [vlm/configs](../vlm/configs/) for all fields and defaults.
 
+## Training phases
+
+The paper recipes train in two phases. During `warmup_1_duration`, only the
+adapter trains; afterwards, all configured parameters train with a fresh
+optimizer, a second warmup over `warmup_2_duration`, and a cosine decay. Durations
+are fractions of the whole training. The first phase is rounded to whole epochs
+(for example, 0.1 of 12 epochs is 1 epoch) and must leave at least one epoch for
+the second. A checkpoint is always saved at the end of the first phase. Phased
+training requires `trainer.num_train_epochs` instead of `trainer.max_steps`.
+
+## DeepSpeed
+
+Pass a DeepSpeed config to the usual `torchrun` command, for example
+`--trainer.deepspeed "$PWD/paper_configs/deepspeed/zero2.json"`. ZeRO-2
+([zero2.json](../paper_configs/deepspeed/zero2.json)) shards gradients and
+optimizer states across GPUs; ZeRO-3 ([zero3.json](../paper_configs/deepspeed/zero3.json))
+also shards the model weights. Batch size, gradient accumulation, clipping, and
+bf16 follow the trainer settings.
+
+With bf16, DeepSpeed casts the whole model to bf16, so checkpoints store the
+trained weights in bf16; inference casts them back. Checkpoints also contain
+DeepSpeed's optimizer state for resuming, but not the frozen weights, which come
+from the pretrained model.
+
 ## Resuming
 
 Each training run creates a folder under `VLM_OUTPUT_DIR` containing its saved

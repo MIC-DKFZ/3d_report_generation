@@ -51,7 +51,7 @@ def cfg(tmp_path):
             },
             "trainer": {},
             "scheduler": {
-                "class_name": "AdapterDWUConstScheduler",
+                "class_name": "AdapterDWUScheduler",
                 "class_kwargs": {"adapter_lr": 0.0001, "lm_lr": 0.0003},
                 "optimizer": {"class_name": "AdamW", "class_kwargs": {"lr": 0.001}},
             },

@@ -37,15 +37,11 @@ def make_run_config_dict() -> dict:
         },
         "trainer": {},
         "scheduler": {
-            "class_name": "AdapterDWUConstScheduler",
-            "class_kwargs": {
-                "adapter_lr": 0.0001,
-                "lm_lr": 0.0003,
-                "reset_optimizer": True,
-            },
+            "class_name": "AdapterDWUScheduler",
+            "class_kwargs": {"adapter_lr": 0.0001, "lm_lr": 0.0003},
             "optimizer": {
                 "class_name": "AdamW",
-                "class_kwargs": {"lr": 0.001, "weight_decay": 0.01},
+                "class_kwargs": {"lr": 0.001, "weight_decay": 0.01, "amsgrad": True},
             },
         },
         "eval": {"run_inference": False, "run_eval": False},
@@ -58,29 +54,29 @@ def test_dynamic_class_kwargs_overrides_preserve_types_and_siblings():
         [
             "--scheduler.class_kwargs.adapter_lr",
             "0.0002",
-            "--scheduler.class_kwargs.no-reset_optimizer",
+            "--scheduler.optimizer.class_kwargs.no-amsgrad",
             "--scheduler.optimizer.class_kwargs.lr",
             "0.005",
         ]
     )
 
-    assert cfg.scheduler.class_kwargs == {
-        "adapter_lr": 0.0002,
-        "lm_lr": 0.0003,
-        "reset_optimizer": False,
+    assert cfg.scheduler.class_kwargs == {"adapter_lr": 0.0002, "lm_lr": 0.0003}
+    assert cfg.scheduler.optimizer.class_kwargs == {
+        "lr": 0.005,
+        "weight_decay": 0.01,
+        "amsgrad": False,
     }
-    assert cfg.scheduler.optimizer.class_kwargs == {"lr": 0.005, "weight_decay": 0.01}
     assert isinstance(cfg.scheduler.optimizer.class_kwargs["lr"], float)
 
 
 def test_new_dynamic_class_kwargs_can_be_added():
     cfg = make_run_config()
-    del cfg.scheduler.class_kwargs["reset_optimizer"]
+    del cfg.scheduler.optimizer.class_kwargs["amsgrad"]
     del cfg.scheduler.optimizer.class_kwargs["lr"]
 
     cfg.merge_subconfigs_with_cli_args(
         [
-            "--scheduler.class_kwargs.reset_optimizer",
+            "--scheduler.optimizer.class_kwargs.amsgrad",
             "false",
             "--scheduler.optimizer.class_kwargs.lr",
             "0.005",
@@ -89,7 +85,7 @@ def test_new_dynamic_class_kwargs_can_be_added():
         ]
     )
 
-    assert cfg.scheduler.class_kwargs["reset_optimizer"] is False
+    assert cfg.scheduler.optimizer.class_kwargs["amsgrad"] is False
     assert cfg.scheduler.optimizer.class_kwargs["lr"] == 0.005
     assert isinstance(cfg.scheduler.optimizer.class_kwargs["lr"], float)
     assert cfg.scheduler.optimizer.class_kwargs["betas"] == (0.9, 0.999)
@@ -226,11 +222,7 @@ def test_cli_overrides_keep_defaults_of_dict_fields_missing_from_the_config(
     )
 
     assert cfg.trainer.gradient_checkpointing_kwargs == {"use_reentrant": False, "every_n_layers": 3}
-    assert cfg.scheduler.class_kwargs == {
-        "adapter_lr": 0.0002,
-        "lm_lr": 0.0003,
-        "reset_optimizer": True,
-    }
+    assert cfg.scheduler.class_kwargs == {"adapter_lr": 0.0002, "lm_lr": 0.0003}
 
 
 def test_validation_without_cli_overrides_matches_plain_validation(monkeypatch, tmp_path):
