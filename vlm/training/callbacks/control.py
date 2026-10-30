@@ -54,6 +54,9 @@ class EveryNEpochsCallback(TrainerCallback):
     """
     Run evaluation every ``n`` epochs, using ``eval.eval_every_n_epochs`` as ``n``.
     This enables an epoch-based evaluation cadence other than every epoch.
+
+    Evaluated epochs are always saved, so the best checkpoint has its metrics. Other epochs
+    are saved as 'save_strategy' says, which keeps resumes from losing up to 'n' epochs.
     """
 
     def __init__(self, n: int = 1):
@@ -80,12 +83,11 @@ class EveryNEpochsCallback(TrainerCallback):
         return control
 
     @staticmethod
-    def _disable_eval_and_save(control):
+    def _disable_eval(control):
         control.should_evaluate = False
-        control.should_save = False
         return control
 
     def on_epoch_end(self, args, state, control, **kwargs):
         if self._should_run_on_epoch(args, state):
             return self._enable_eval_and_save(control)
-        return self._disable_eval_and_save(control)
+        return self._disable_eval(control)
