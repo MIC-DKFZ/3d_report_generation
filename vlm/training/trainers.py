@@ -2,11 +2,31 @@ import os
 
 import torch
 from transformers import Trainer, TrainerState
+from transformers.modeling_layers import GradientCheckpointingLayer
 from transformers.trainer import SCHEDULER_NAME
 
 from vlm.training.checkpoint_state import load_model_checkpoint, save_model_checkpoint
 from vlm.training.schedulers.base import SchedulerBase, TrainingPhase
 from vlm.utils import logger
+
+
+def checkpointed_layer_indices(num_layers: int, fraction: float) -> list[int]:
+    """Indices of 'round(fraction * num_layers)' layers, spread evenly over all layers."""
+    num_checkpointed = round(fraction * num_layers)
+    return [
+        index
+        for index in range(num_layers)
+        if (index + 1) * num_checkpointed // num_layers > index * num_checkpointed // num_layers
+    ]
+
+
+def apply_gradient_checkpointing_fraction(model: torch.nn.Module, fraction: float) -> list[int]:
+    """Checkpoint only a fraction of the layers that upstream 'gradient_checkpointing_enable' set up."""
+    layers = [module for module in model.modules() if isinstance(module, GradientCheckpointingLayer)]
+    checkpointed = checkpointed_layer_indices(len(layers), fraction)
+    for index, layer in enumerate(layers):
+        layer.gradient_checkpointing = index in checkpointed
+    return checkpointed
 
 
 class VLMTrainer(Trainer):
@@ -24,6 +44,7 @@ class VLMTrainer(Trainer):
         phase: TrainingPhase,
         phase_start_state: TrainerState | None = None,
         model_weights_preloaded: bool = False,
+        gradient_checkpointing_fraction: float | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -31,7 +52,28 @@ class VLMTrainer(Trainer):
         self.phase = phase
         self.phase_start_state = phase_start_state
         self.model_weights_preloaded = model_weights_preloaded
+        self.gradient_checkpointing_fraction = gradient_checkpointing_fraction
         self.steps_per_epoch = None
+
+    def _inner_training_loop(
+        self,
+        batch_size=None,
+        args=None,
+        resume_from_checkpoint=None,
+        trial=None,
+        ignore_keys_for_eval=None,
+    ):
+        # 'train' has just enabled checkpointing on every layer; keep it on only for the fraction.
+        if self.args.gradient_checkpointing and self.gradient_checkpointing_fraction is not None:
+            checkpointed = apply_gradient_checkpointing_fraction(
+                self.model, self.gradient_checkpointing_fraction
+            )
+            logger.info_main(
+                f"Gradient checkpointing {len(checkpointed)} layers: {checkpointed}"
+            )
+        return super()._inner_training_loop(
+            batch_size, args, resume_from_checkpoint, trial, ignore_keys_for_eval
+        )
 
     def _get_num_items_in_batch(self, batch_samples, device):
         num_items_in_batch = super()._get_num_items_in_batch(batch_samples, device)

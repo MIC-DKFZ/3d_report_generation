@@ -86,7 +86,12 @@ class UnifiedVLMTrainer:
         model_args = self.vlm_model.get_model_specific_training_args()
 
         trainer_args = self.cfg.trainer.model_dump(
-            exclude={"early_stopping_patience", "early_stopping_threshold", "deepspeed"}
+            exclude={
+                "early_stopping_patience",
+                "early_stopping_threshold",
+                "deepspeed",
+                "gradient_checkpointing_fraction",
+            }
         )
         deepspeed = self.cfg.trainer.deepspeed
 
@@ -214,6 +219,7 @@ class UnifiedVLMTrainer:
                 phase=phase,
                 phase_start_state=phase_start_state,
                 model_weights_preloaded=self.checkpoint_plan.is_resume,
+                gradient_checkpointing_fraction=self.cfg.trainer.gradient_checkpointing_fraction,
             )
 
         if self.is_distributed:

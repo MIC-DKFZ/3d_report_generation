@@ -34,7 +34,7 @@ class ConstantScheduler:
         return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
 
 
-def make_model(tie_word_embeddings=False):
+def make_model(tie_word_embeddings=False, num_hidden_layers=1):
     # Load the model implementation without importing the application wrapper/registry.
     path = Path(__file__).parents[1] / "models/qwen3/modeling_qwen3_text_vl.py"
     model_class = runpy.run_path(str(path))["Qwen3TextVLForConditionalGeneration"]
@@ -44,7 +44,7 @@ def make_model(tie_word_embeddings=False):
             vocab_size=4,
             hidden_size=8,
             intermediate_size=16,
-            num_hidden_layers=1,
+            num_hidden_layers=num_hidden_layers,
             num_attention_heads=2,
             num_key_value_heads=1,
             head_dim=4,
@@ -75,7 +75,9 @@ def collate(samples):
     return {"input_ids": input_ids, "labels": labels, "attention_mask": input_ids.ne(0).long()}
 
 
-def make_trainer(model, samples, batch_size, accumulation_steps, output_dir):
+def make_trainer(
+    model, samples, batch_size, accumulation_steps, output_dir, gradient_checkpointing_fraction=None
+):
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(WordLevel({"[PAD]": 0, "[EOS]": 1, "a": 2, "b": 3})),
         pad_token="[PAD]",
@@ -88,11 +90,13 @@ def make_trainer(model, samples, batch_size, accumulation_steps, output_dir):
         phase=TrainingPhase("DEFAULT", 0, 1),
         data_collator=collate,
         train_dataset=samples,
+        gradient_checkpointing_fraction=gradient_checkpointing_fraction,
         args=TrainingArguments(
             output_dir=str(output_dir),
             use_cpu=True,
             bf16=False,
             max_steps=1,
+            gradient_checkpointing=gradient_checkpointing_fraction is not None,
             per_device_train_batch_size=batch_size,
             gradient_accumulation_steps=accumulation_steps,
             average_tokens_across_devices=TrainerConfig().average_tokens_across_devices,

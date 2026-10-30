@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import Field
+from pydantic import Field, model_validator
 from vlm.configs.base import ConfigBase
 from vlm.configs.paths import ConfigPath
 
@@ -20,6 +20,15 @@ class TrainerConfig(ConfigBase):
     )
     gradient_checkpointing: bool = Field(False, description="Enable gradient checkpointing to save memory at the cost of extra compute.")
     gradient_checkpointing_kwargs: dict = Field(default_factory=lambda: {"use_reentrant": False}, description="Additional keyword arguments for gradient checkpointing.")
+    gradient_checkpointing_fraction: float | None = Field(
+        None,
+        gt=0,
+        le=1,
+        description=(
+            "Fraction of the decoder layers to checkpoint, spread evenly over the model; the others "
+            "keep their activations. 'None' leaves the choice to 'gradient_checkpointing_kwargs'."
+        ),
+    )
 
     max_grad_norm: float = Field(0.3, gt=0, description="Maximum gradient norm for gradient clipping.")
 
@@ -61,3 +70,16 @@ class TrainerConfig(ConfigBase):
             "DDP."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_gradient_checkpointing_fraction(self):
+        if self.gradient_checkpointing_fraction is None:
+            return self
+        if not self.gradient_checkpointing:
+            raise ValueError("'gradient_checkpointing_fraction' requires 'gradient_checkpointing'.")
+        if "every_n_layers" in self.gradient_checkpointing_kwargs:
+            raise ValueError(
+                "Set either 'gradient_checkpointing_fraction' or "
+                "'gradient_checkpointing_kwargs.every_n_layers', not both."
+            )
+        return self
