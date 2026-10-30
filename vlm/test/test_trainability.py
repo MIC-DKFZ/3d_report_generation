@@ -100,6 +100,10 @@ def test_each_phase_optimizer_contains_exactly_its_trainable_parameters(tmp_path
         (AdapterDWUScheduler, {"warmup_1_duration": 0.1}, 12, 1),
         (AdapterDWUScheduler, {"warmup_1_duration": 0.1}, 24, 2),
         (AdapterDWUScheduler, {"warmup_1_duration": 0.0625}, 32, 2),
+        # Halves round up, unlike Python's round-half-to-even: 1.5 -> 2 and 2.5 -> 3.
+        (AdapterDWUScheduler, {"warmup_1_duration": 0.0625}, 24, 2),
+        (AdapterDWUScheduler, {"warmup_1_duration": 0.0625}, 40, 3),
+        (AdapterDWUScheduler, {"warmup_1_duration": 0.0625}, 12, 1),
         (AdapterDWUScheduler, {"warmup_1_duration": 0.0}, 4, 0),
         (
             AdapterExtendedDWUScheduler,
@@ -122,6 +126,18 @@ def test_adapter_only_phase_is_rounded_to_whole_epochs(
         ]
     else:
         assert phases == [default]
+
+
+@pytest.mark.parametrize("num_train_epochs, warned", [(16, False), (32, False), (12, True)])
+def test_rounding_the_adapter_only_phase_is_logged(monkeypatch, num_train_epochs, warned):
+    from vlm.training.schedulers import adapter_dwu_scheduler
+
+    warnings = []
+    monkeypatch.setattr(adapter_dwu_scheduler.logger, "warning_main", warnings.append)
+    make_scheduler(warmup_1_duration=0.0625, warmup_2_duration=0.0625).phases(num_train_epochs)
+    assert bool(warnings) == warned
+    if warned:
+        assert "0.75, trained as 1 (8.33% of training)" in warnings[0]
 
 
 @pytest.mark.parametrize("warmup_1_duration", [0.01, 0.95])

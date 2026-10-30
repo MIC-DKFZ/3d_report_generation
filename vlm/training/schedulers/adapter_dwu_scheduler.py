@@ -1,8 +1,10 @@
+import math
 from pathlib import Path
 
 from torch.optim import Optimizer
 
 from vlm.training.schedulers.base import SchedulerBase, TrainingPhase, cosine_decay
+from vlm.utils import logger
 
 
 class AdapterDWUScheduler(SchedulerBase):
@@ -13,7 +15,7 @@ class AdapterDWUScheduler(SchedulerBase):
     DEFAULT phase: all configured parameters train with a fresh optimizer, a second linear
     warmup over 'warmup_2_duration', and a cosine decay.
 
-    Durations are fractions of the whole training; WARMUP_1 is rounded to whole epochs.
+    Durations are fractions of the whole training; WARMUP_1 is rounded to whole epochs, halves up.
     """
 
     def __init__(
@@ -43,7 +45,8 @@ class AdapterDWUScheduler(SchedulerBase):
         self.warmup_2_duration = warmup_2_duration
 
     def warmup_1_epochs(self, num_train_epochs: int) -> int:
-        epochs = round(self.warmup_1_duration * num_train_epochs)
+        # Halves round up; Python's 'round' rounds them to even, e.g. 2.5 to 2 but 1.5 to 2.
+        epochs = math.floor(self.warmup_1_duration * num_train_epochs + 0.5)
         if epochs >= num_train_epochs or (epochs == 0 and self.warmup_1_duration > 0):
             raise ValueError(
                 f"The first warmup ({self.warmup_1_duration} of {num_train_epochs} epochs) must "
@@ -57,6 +60,13 @@ class AdapterDWUScheduler(SchedulerBase):
 
     def phases(self, num_train_epochs: int) -> list[TrainingPhase]:
         warmup_1_epochs = self.warmup_1_epochs(num_train_epochs)
+        exact_epochs = self.warmup_1_duration * num_train_epochs
+        if not math.isclose(warmup_1_epochs, exact_epochs):
+            logger.warning_main(
+                f"The first warmup is rounded to whole epochs: {self.warmup_1_duration} of "
+                f"{num_train_epochs} epochs is {exact_epochs:g}, trained as {warmup_1_epochs} "
+                f"({warmup_1_epochs / num_train_epochs:.2%} of training)."
+            )
         default = TrainingPhase("DEFAULT", warmup_1_epochs, num_train_epochs)
         if warmup_1_epochs == 0:
             return [default]

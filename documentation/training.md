@@ -62,9 +62,11 @@ See [vlm/configs](../vlm/configs/) for all fields and defaults.
 The paper recipes train in two phases. During `warmup_1_duration`, only the
 adapter trains; afterwards, all configured parameters train with a fresh
 optimizer, a second warmup over `warmup_2_duration`, and a cosine decay. Durations
-are fractions of the whole training. The first phase is rounded to whole epochs
-(for example, 0.1 of 12 epochs is 1 epoch) and must leave at least one epoch for
-the second. A checkpoint is always saved at the end of the first phase. Phased
+are fractions of the whole training, so they scale with the number of epochs: 0.0625
+is 1 of 16 epochs and 2 of 32. The first phase is rounded to whole epochs, with
+halves rounded up (0.1 of 12 epochs is 1 epoch, 0.0625 of 40 is 3), and a warning
+is logged when the rounding changes it. It must leave at least one epoch for the
+second. A checkpoint is always saved at the end of the first phase. Phased
 training requires `trainer.num_train_epochs` instead of `trainer.max_steps`.
 
 ## DeepSpeed
