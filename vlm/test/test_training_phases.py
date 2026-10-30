@@ -66,8 +66,9 @@ def train(
     save_strategy="steps",
     deepspeed=None,
     bf16=False,
+    tie_word_embeddings=False,
 ):
-    model = make_model()
+    model = make_model(tie_word_embeddings)
     initialize_checkpoint_state(model)
     if checkpoint is not None:
         load_model_checkpoint(model, checkpoint)

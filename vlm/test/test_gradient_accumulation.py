@@ -34,7 +34,7 @@ class ConstantScheduler:
         return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
 
 
-def make_model():
+def make_model(tie_word_embeddings=False):
     # Load the model implementation without importing the application wrapper/registry.
     path = Path(__file__).parents[1] / "models/qwen3/modeling_qwen3_text_vl.py"
     model_class = runpy.run_path(str(path))["Qwen3TextVLForConditionalGeneration"]
@@ -50,6 +50,7 @@ def make_model():
             head_dim=4,
             max_position_embeddings=16,
             attention_dropout=0,
+            tie_word_embeddings=tie_word_embeddings,
         )
     )
 

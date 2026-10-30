@@ -68,7 +68,24 @@ class VLMTrainer(Trainer):
             return super()._save_optimizer_and_scheduler(output_dir)
         # Frozen weights come from the pretrained model and trained ones from 'model.safetensors',
         # so resuming only needs DeepSpeed's optimizer state.
-        self.model_wrapped.save_checkpoint(output_dir, exclude_frozen_parameters=True)
+        module = self.model_wrapped.module
+        frozen = [
+            name
+            for name, param in module.named_parameters(remove_duplicate=False)
+            if not param.requires_grad
+        ]
+
+        # DeepSpeed's 'exclude_frozen_parameters' misses tied weights, e.g. a frozen 'lm_head'
+        # tied to the embeddings, since it removes only the deduplicated parameter names.
+        def remove_frozen(module, state_dict, prefix, local_metadata):
+            for name in frozen:
+                state_dict.pop(prefix + name, None)
+
+        handle = module.register_state_dict_post_hook(remove_frozen)
+        try:
+            self.model_wrapped.save_checkpoint(output_dir, exclude_frozen_parameters=True)
+        finally:
+            handle.remove()
         if self.args.should_save:
             torch.save(self.lr_scheduler.state_dict(), os.path.join(output_dir, SCHEDULER_NAME))
 
