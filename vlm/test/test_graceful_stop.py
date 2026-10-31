@@ -84,10 +84,20 @@ def test_without_stop_file_or_time_limit_training_runs_to_the_end(tmp_path):
     assert sorted(steps) == list(range(MAX_STEPS))
 
 
-def epoch_end(stop, should_evaluate):
+def epoch_end(stop, should_evaluate, epoch=2.0):
     control = TrainerControl(should_evaluate=should_evaluate)
-    stop.on_epoch_end(SimpleNamespace(device=torch.device("cpu")), SimpleNamespace(epoch=2.0, global_step=8), control)
+    stop.on_epoch_end(
+        SimpleNamespace(device=torch.device("cpu")), SimpleNamespace(epoch=epoch, global_step=8), control
+    )
     return control
+
+
+def test_stop_inside_an_epoch_does_not_evaluate(tmp_path):
+    # Hugging Face ends the epoch loop after a stop, and 1.88 would round to an evaluated epoch.
+    stop = GracefulStopCallback(tmp_path / STOP_FILENAME, end_time=time.time() + 5 * 3600)
+    stop.stopped = True
+    control = epoch_end(stop, should_evaluate=True, epoch=1.88)
+    assert not control.should_evaluate
 
 
 def test_evaluation_that_might_not_finish_is_skipped(tmp_path):

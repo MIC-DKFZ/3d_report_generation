@@ -225,6 +225,10 @@ class GracefulStopCallback(TrainerCallback):
         return control
 
     def on_epoch_end(self, args, state, control, **kwargs):
+        # A stop inside an epoch also ends the epoch loop; its evaluation follows the resume.
+        if self.stopped and not math.isclose(state.epoch, round(state.epoch), abs_tol=1e-6):
+            control.should_evaluate = False
+            return control
         # A requested stop still evaluates the epoch first, unless the time limit is too close.
         if control.should_evaluate:
             seconds_left = self._seconds_left() if is_main_process() else None
