@@ -21,11 +21,11 @@ class EvaluationConfig(ConfigBase):
     max_new_tokens: int = Field(1024, description="Maximum number of new tokens to generate.")
     per_device_batch_size: int = Field(32, description="Inference batch size per device.")
 
-    # Decoding of the callback and of inference. 'None' keeps the model's generation config, which
-    # differs between checkpoints: Qwen3-VL samples (temperature 0.7, top-p 0.8, top-k 20), Qwen3.5
-    # ships none and decodes greedily.
+    # Decoding of the callback and of inference. Greedy by default, so all models decode alike: their
+    # generation configs differ, e.g. Qwen3-VL samples (temperature 0.7, top-p 0.8, top-k 20) while
+    # Qwen3.5 ships none and decodes greedily. 'None' keeps the model's own setting.
     do_sample: bool | None = Field(
-        None, description="Sample instead of decoding greedily. 'None' keeps the model's setting."
+        False, description="Sample instead of decoding greedily. 'None' keeps the model's setting."
     )
     temperature: float | None = Field(None, gt=0, description="Sampling temperature.")
     top_p: float | None = Field(None, gt=0, le=1, description="Nucleus sampling probability mass.")

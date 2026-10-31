@@ -243,11 +243,11 @@ def test_validation_rejects_unknown_cli_overrides(monkeypatch, tmp_path):
         )
 
 
-def test_decoding_settings_override_the_model_generation_config_only_when_set():
+def test_decoding_is_greedy_unless_the_model_setting_is_kept_or_sampling_is_set():
     from vlm.configs.evaluation_config import EvaluationConfig
 
-    assert EvaluationConfig().generation_kwargs() == {}
-    assert EvaluationConfig(do_sample=False).generation_kwargs() == {"do_sample": False}
+    assert EvaluationConfig().generation_kwargs() == {"do_sample": False}
+    assert EvaluationConfig(do_sample=None).generation_kwargs() == {}
     sampled = EvaluationConfig(do_sample=True, temperature=0.7, top_p=0.8, top_k=20)
     assert sampled.generation_kwargs() == {
         "do_sample": True, "temperature": 0.7, "top_p": 0.8, "top_k": 20
