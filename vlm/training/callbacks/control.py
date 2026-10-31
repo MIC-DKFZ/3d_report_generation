@@ -119,11 +119,17 @@ class EveryNEpochsCallback(TrainerCallback):
 def slurm_job_end_time(attempts: int = 5, retry_seconds: float = 30) -> float | None:
     """
     Return the Slurm end time of the current job as a Unix timestamp, or None outside Slurm.
-    Retried, because Slurm commands time out when the controller is busy.
+
+    Slurm 23.02 and later set it as 'SLURM_JOB_END_TIME'; otherwise 'scontrol' is asked, with
+    retries, because Slurm commands time out when the controller is busy.
     """
     job_id = os.getenv("SLURM_JOB_ID")
     if not job_id:
         return None
+    try:
+        return float(os.environ["SLURM_JOB_END_TIME"])
+    except (KeyError, ValueError):
+        pass
     for attempt in range(attempts):
         if attempt:
             time.sleep(retry_seconds)

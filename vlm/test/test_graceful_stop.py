@@ -128,8 +128,20 @@ def test_evaluation_budget_grows_to_the_longest_evaluation(tmp_path):
     assert stop.evaluation_budget_seconds == pytest.approx(300, abs=5)
 
 
+def test_slurm_end_time_is_read_from_the_environment_without_scontrol(monkeypatch):
+    monkeypatch.setenv("SLURM_JOB_ID", "123")
+    monkeypatch.setenv("SLURM_JOB_END_TIME", "1793476500")
+
+    def fail(*args, **kwargs):
+        raise AssertionError("scontrol should not be called")
+
+    monkeypatch.setattr(control_module.subprocess, "run", fail)
+    assert control_module.slurm_job_end_time() == 1793476500
+
+
 def test_slurm_end_time_is_read_from_scontrol(monkeypatch):
     monkeypatch.setenv("SLURM_JOB_ID", "123")
+    monkeypatch.delenv("SLURM_JOB_END_TIME", raising=False)
     output = "JobId=123 JobName=run\n   StartTime=2026-10-31T09:35:00 EndTime=2026-10-31T21:35:00\n"
     monkeypatch.setattr(
         control_module.subprocess,
@@ -222,6 +234,7 @@ def test_inference_runs_once_after_training(tmp_path, run_inference, already_com
 
 def test_slurm_end_time_is_retried_after_a_timeout(monkeypatch):
     monkeypatch.setenv("SLURM_JOB_ID", "123")
+    monkeypatch.delenv("SLURM_JOB_END_TIME", raising=False)
     outputs = iter(["", "JobId=123 EndTime=2026-10-31T21:35:00"])
     monkeypatch.setattr(
         control_module.subprocess,
