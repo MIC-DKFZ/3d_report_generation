@@ -16,9 +16,13 @@ def train_phases(
     phases: list[TrainingPhase],
     create_trainer: Callable[[TrainingPhase, TrainerState | None], VLMTrainer],
     resume_checkpoint: str | Path | None = None,
+    stop_requested: Callable[[], bool] = lambda: False,
 ) -> bool:
     """
     Train the phases left after 'resume_checkpoint'; return False if the run was already complete.
+
+    'stop_requested' ends the run after the current phase, also when it stopped at the phase's
+    last step, where the epoch alone would let the next phase start.
 
     'create_trainer(phase, phase_start_state)' configures the model for the phase and returns its
     trainer. Resuming inside a phase restores the phase's optimizer from the checkpoint; a phase
@@ -50,6 +54,6 @@ def train_phases(
         # The next phase's Trainer creates a new Accelerator with the same DeepSpeed plugin, which
         # accelerate only accepts once its shared state is cleared; the process group is kept.
         AcceleratorState._reset_state()
-        if state.epoch < phase.end_epoch:
+        if state.epoch < phase.end_epoch or stop_requested():
             break  # Early stopping ends the run, not just the phase.
     return True

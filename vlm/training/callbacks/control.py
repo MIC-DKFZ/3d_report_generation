@@ -1,11 +1,21 @@
 """Evaluation cadence and training termination callbacks."""
 
 import math
+import os
+import subprocess
+import time
+from datetime import datetime
 from pathlib import Path
 
+import torch
+from torch import distributed as dist
 from transformers import TrainerCallback
 
 from vlm.utils import logger
+from vlm.utils.ddp import is_main_process
+
+# Creating this file in the run directory asks the running job to save and stop.
+STOP_FILENAME = "STOP_TRAINING"
 
 
 class TerminateOnNaNLossCallback(TrainerCallback):
@@ -104,3 +114,128 @@ class EveryNEpochsCallback(TrainerCallback):
         if self._should_run_on_epoch(args, state):
             return self._enable_eval_and_save(control)
         return self._disable_eval(control)
+
+
+def slurm_job_end_time() -> float | None:
+    """Return the Slurm end time of the current job as a Unix timestamp, or None outside Slurm."""
+    job_id = os.getenv("SLURM_JOB_ID")
+    if not job_id:
+        return None
+    try:
+        output = subprocess.run(
+            ["scontrol", "show", "job", job_id], capture_output=True, text=True, timeout=30
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for field in output.split():
+        if field.startswith("EndTime="):
+            try:
+                return datetime.fromisoformat(field.removeprefix("EndTime=")).timestamp()
+            except ValueError:
+                return None
+    return None
+
+
+class GracefulStopCallback(TrainerCallback):
+    """
+    Save a checkpoint and stop when the run directory contains 'STOP_TRAINING' or the Slurm
+    time limit comes close, so a follow-up job continues without losing training progress.
+
+    Rank 0 decides every 'check_every_n_steps' steps and at every epoch end, and all ranks
+    follow its decision. An evaluation is skipped instead of started when it might not finish
+    before the time limit. Add this callback after 'EveryNEpochsCallback', so it sees which
+    epochs evaluate.
+    """
+
+    def __init__(
+        self,
+        stop_file: str | Path,
+        end_time: float | None = None,
+        margin_seconds: float = 20 * 60,
+        evaluation_budget_seconds: float = 30 * 60,
+        check_every_n_steps: int = 10,
+    ):
+        self.stop_file = Path(stop_file)
+        self.end_time = end_time
+        self.margin_seconds = margin_seconds
+        self.evaluation_budget_seconds = evaluation_budget_seconds
+        self.check_every_n_steps = check_every_n_steps
+        self.stopped = False
+        self._evaluation_start = None
+
+    @classmethod
+    def from_environment(cls, output_dir: str | Path) -> "GracefulStopCallback":
+        """Use the Slurm end time and the 'VLM_STOP_*' minute settings of the environment."""
+        return cls(
+            Path(output_dir, STOP_FILENAME),
+            end_time=slurm_job_end_time() if is_main_process() else None,
+            margin_seconds=60 * float(os.getenv("VLM_STOP_MARGIN_MINUTES", "20")),
+            evaluation_budget_seconds=60 * float(os.getenv("VLM_STOP_EVALUATION_MINUTES", "30")),
+        )
+
+    def _seconds_left(self) -> float | None:
+        return None if self.end_time is None else self.end_time - time.time()
+
+    def _stop_reason(self, seconds_needed: float) -> str | None:
+        if self.stop_file.exists():
+            return f"'{self.stop_file}' exists"
+        seconds_left = self._seconds_left()
+        if seconds_left is not None and seconds_left < seconds_needed:
+            return f"the Slurm time limit is {seconds_left / 60:.0f} minutes away"
+        return None
+
+    @staticmethod
+    def _agree(args, decision: bool) -> bool:
+        """Broadcast rank 0's decision, so all ranks stop at the same step."""
+        if not (dist.is_available() and dist.is_initialized()):
+            return decision
+        device = args.device if dist.get_backend() == "nccl" else torch.device("cpu")
+        flag = torch.tensor([int(decision)], device=device)
+        dist.broadcast(flag, src=0)
+        return bool(flag.item())
+
+    def _stop(self, args, state, control, reason: str | None):
+        logger.warning_main(
+            f"Saving and stopping at step {state.global_step}: {reason or 'requested by rank 0'}."
+        )
+        self.stopped = True
+        control.should_save = True
+        control.should_training_stop = True
+        return control
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if self.stopped or state.global_step % self.check_every_n_steps:
+            return control
+        reason = self._stop_reason(self.margin_seconds) if is_main_process() else None
+        if self._agree(args, reason is not None):
+            return self._stop(args, state, control, reason)
+        return control
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        # A requested stop still evaluates the epoch first, unless the time limit is too close.
+        if control.should_evaluate:
+            seconds_left = self._seconds_left() if is_main_process() else None
+            needed = self.margin_seconds + self.evaluation_budget_seconds
+            if self._agree(args, seconds_left is not None and seconds_left < needed):
+                logger.warning_main(
+                    f"Skipping the evaluation at epoch {round(state.epoch)}: the Slurm time "
+                    "limit is too close."
+                )
+                control.should_evaluate = False
+                if not self.stopped:
+                    self._stop(args, state, control, "no time left to evaluate")
+                return control
+            self._evaluation_start = time.time()
+        if not self.stopped:
+            reason = self._stop_reason(self.margin_seconds) if is_main_process() else None
+            if self._agree(args, reason is not None):
+                self._stop(args, state, control, reason)
+        return control
+
+    def on_evaluate(self, args, state, control, **kwargs):
+        # Budget the next evaluation by the longest one so far.
+        if self._evaluation_start is not None:
+            duration = time.time() - self._evaluation_start
+            self.evaluation_budget_seconds = max(self.evaluation_budget_seconds, duration)
+            self._evaluation_start = None
+        return control

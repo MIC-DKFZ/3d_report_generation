@@ -15,6 +15,7 @@ from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.models.factory import create_model_wrapper
 from vlm.training.callbacks import (
     EveryNEpochsCallback,
+    GracefulStopCallback,
     LossLoggingCallback,
     ReportEvaluationCallback,
     TerminateOnNaNLossCallback,
@@ -50,6 +51,9 @@ from vlm.utils.paths import VLM_CONFIG_DIR, resolve_run_dir
 INPUT_CONFIG_FILENAME = "input_config.yml"
 TRAIN_LOG_FILENAME = "train.log"
 ADAPTER_STATS_FILENAME = "adapter_stats.json"
+# Run directory markers for follow-up jobs: training finished, then inference finished too.
+TRAINING_COMPLETE_FILENAME = "TRAINING_COMPLETE"
+RUN_COMPLETE_FILENAME = "RUN_COMPLETE"
 
 
 class UnifiedVLMTrainer:
@@ -80,6 +84,8 @@ class UnifiedVLMTrainer:
             self.local_rank,
             self.local_world_size,
         ) = ddp_setup
+        # Whether the last 'train' call saved and stopped before the end, for a follow-up job.
+        self.stopped_early = False
 
     def get_training_args(self):
         """Configure standard training arguments for distributed training"""
@@ -184,6 +190,12 @@ class UnifiedVLMTrainer:
                 )
             )
 
+        # Last, after 'EveryNEpochsCallback' has decided which epochs evaluate.
+        stop_callback = GracefulStopCallback.from_environment(
+            self.cfg.general.output_dir.get_resolved_path()
+        )
+        callbacks.append(stop_callback)
+
         # Created after the callbacks: with DeepSpeed ZeRO-3, models loaded once the
         # TrainingArguments exist are sharded across ranks.
         training_args = self.get_training_args()
@@ -232,8 +244,12 @@ class UnifiedVLMTrainer:
         # Model weights are already loaded; the checkpoint restores the trainer's step, callback,
         # scaler, RNG, dataloader, and (inside a phase) optimizer progress when continuing a run.
         already_complete_on_resume = not train_phases(
-            phases, create_trainer, self.checkpoint_plan.trainer_state_checkpoint
+            phases,
+            create_trainer,
+            self.checkpoint_plan.trainer_state_checkpoint,
+            stop_requested=lambda: stop_callback.stopped,
         )
+        self.stopped_early = stop_callback.stopped
         # Inference loads the model again and must not shard it as under DeepSpeed ZeRO-3.
         unset_hf_deepspeed_config()
 
@@ -382,6 +398,20 @@ def train_val_data_from_config(cfg: RunConfig):
     return train_dataset, val_dataset, callback_val_dataset
 
 
+def inference_is_pending(run_dir: Path, run_inference: bool, already_complete_on_resume: bool) -> bool:
+    """
+    Whether to run inference after training: always after training steps, and on a resume of a
+    finished run only when an earlier job finished training but not its inference.
+    """
+    if not run_inference:
+        return False
+    if not already_complete_on_resume:
+        return True
+    return (run_dir / TRAINING_COMPLETE_FILENAME).exists() and not (
+        run_dir / RUN_COMPLETE_FILENAME
+    ).exists()
+
+
 @logger.catch(reraise=True)
 def main():
     # Set up DDP before config validation so generated run paths can be shared across ranks.
@@ -426,11 +456,20 @@ def main():
     )
 
     already_complete_on_resume = trainer.train(train_dataset, val_dataset, callback_val_dataset)
+    run_dir = Path(cfg.general.output_dir.get_resolved_path())
+    if trainer.stopped_early:
+        logger.info_main(f"Stopped before the end of training; continue with a run of {run_dir}.")
+        logger.remove()
+        return
     logger.remove()
 
-    if cfg.eval.run_inference and not already_complete_on_resume:
+    run_inference = inference_is_pending(run_dir, cfg.eval.run_inference, already_complete_on_resume)
+    if is_main_process():
+        (run_dir / TRAINING_COMPLETE_FILENAME).touch()
+
+    if run_inference:
         inference_args = argparse.Namespace(
-            run_dir=cfg.general.output_dir.get_resolved_path(),
+            run_dir=str(run_dir),
             mode=cfg.eval.mode
         )
         inference_main(
@@ -441,6 +480,8 @@ def main():
             ),
             is_main=False
         )
+    if is_main_process():
+        (run_dir / RUN_COMPLETE_FILENAME).touch()
 
 
 if __name__ == "__main__":

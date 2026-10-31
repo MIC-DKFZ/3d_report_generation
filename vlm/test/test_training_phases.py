@@ -67,6 +67,7 @@ def train(
     deepspeed=None,
     bf16=False,
     tie_word_embeddings=False,
+    stop_requested=lambda: False,
 ):
     model = make_model(tie_word_embeddings)
     initialize_checkpoint_state(model)
@@ -122,7 +123,7 @@ def train(
             model_weights_preloaded=checkpoint is not None,
         )
 
-    trained = train_phases(scheduler.phases(EPOCHS), create_trainer, checkpoint)
+    trained = train_phases(scheduler.phases(EPOCHS), create_trainer, checkpoint, stop_requested)
     return model, trained, recorder.steps
 
 
