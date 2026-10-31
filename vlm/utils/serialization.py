@@ -1,4 +1,5 @@
 import json
+import os
 import yaml
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,12 @@ def load_yaml(path: str | Path) -> Any:
 
 
 def save_yaml(obj: Any, path: str | Path, indent: int = 2, **kwargs) -> None:
+    """
+    Write atomically: other processes read either the old or the new file, never a partial one,
+    e.g. ranks loading 'final_config.yml' of a resumed run while rank 0 rewrites it.
+    """
     path = Path(path)
-    with path.open("w", encoding="utf-8") as f:
+    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with temporary_path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(obj, f, indent=indent, **kwargs)
+    os.replace(temporary_path, path)
