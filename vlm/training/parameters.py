@@ -34,7 +34,9 @@ def log_param_groups(model: nn.Module, optimizer: Optimizer, file_path=None):
             print(s, file=f)
 
         for i, param_group in enumerate(optimizer.param_groups):
-            print_to_file(f"\n=== Parameter Group {i} ===")
+            print_to_file(f"\n=== Parameter Group {i}: {param_group.get('name', '')} ===")
+            if "use_muon" in param_group:
+                print_to_file(f"Algorithm: {'Muon' if param_group['use_muon'] else 'AdamW'}")
             # print_to_file(f"Learning rate : {param_group.get('lr')}",)
             print_to_file(f"Weight decay: {param_group['weight_decay']}")
             print_to_file("Parameters:")

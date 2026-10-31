@@ -18,10 +18,8 @@ class MuonWithAdamW(Optimizer):
     own Muon or AdamW kernel -- the maths are torch's, not a re-implementation.
 
     The groups must already be split when they reach ``__init__``: use ``split_param_groups``
-    (``SchedulerBase._get_param_groups`` does). Splitting in here instead would leave
-    ``optimizer.param_groups`` longer than the list the LR schedulers were built from, and they
-    zip ``max_lrs`` against ``optimizer.param_groups`` by position -- every group after the
-    first split would silently get its neighbour's learning rate.
+    (``SchedulerBase.create_optimizer`` does), so the param group log and the checkpointed
+    optimizer state show the final groups.
 
     One ``Optimizer`` rather than a wrapper around a ``Muon`` and an ``AdamW``: the trainer,
     accelerate, checkpoint save/load and the schedulers' ``isinstance`` checks all see a single
@@ -112,7 +110,8 @@ class MuonWithAdamW(Optimizer):
         """
         Split every group into a ``<name>_MUON`` group (2D, name matching none of
         ``adamw_name_patterns``) and a ``<name>_ADAMW`` group (the rest), keeping each group's
-        other keys (lr, weight_decay). Empty halves are dropped. Deterministic, so the same
+        other keys (lr, weight_decay). Empty halves are dropped. Add ``"lora_"`` to the patterns
+        to keep LoRA matrices on AdamW. Deterministic, so the same
         trainable set always gives the same group count -- which checkpoint resumes depend on.
         """
         if adamw_name_patterns is None:

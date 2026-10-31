@@ -42,7 +42,8 @@ class OptimizerRecorder(TrainerCallback):
         self.steps = {}
 
     def on_pre_optimizer_step(self, args, state, control, optimizer=None, **kwargs):
-        adam_steps = [int(param_state["step"]) for param_state in optimizer.state.values()]
+        # Muon keeps no step count, only a momentum buffer.
+        adam_steps = [int(param_state.get("step", 0)) for param_state in optimizer.state.values()]
         self.steps[state.global_step] = (
             [group["lr"] for group in optimizer.param_groups],
             max(adam_steps, default=0),
@@ -68,6 +69,8 @@ def train(
     bf16=False,
     tie_word_embeddings=False,
     stop_requested=lambda: False,
+    optimizer_class=torch.optim.AdamW,
+    optimizer_kwargs=None,
 ):
     model = make_model(tie_word_embeddings)
     initialize_checkpoint_state(model)
@@ -79,8 +82,8 @@ def train(
         eos_token="[EOS]",
     )
     scheduler = AdapterDWUScheduler(
-        optimizer_class=torch.optim.AdamW,
-        optimizer_kwargs={"weight_decay": 0.0},
+        optimizer_class=optimizer_class,
+        optimizer_kwargs=optimizer_kwargs or {"weight_decay": 0.0},
         module_attr_map=MODULE_ATTR_MAP,
         forbidden_name_patterns_for_wd=[],
         output_dir=output_dir,

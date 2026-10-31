@@ -84,6 +84,13 @@ class SchedulerBase(ABC):
             model,
             self.forbidden_name_patterns_for_wd,
         )
+        # An optimizer that routes parameters to different algorithms (MuonWithAdamW) gets
+        # its groups split here, so every group still carries its own learning rate.
+        split_param_groups = getattr(self.optimizer_class, "split_param_groups", None)
+        if split_param_groups is not None:
+            param_groups = split_param_groups(
+                param_groups, model, self.optimizer_kwargs.get("adamw_name_patterns")
+            )
         optimizer = self.optimizer_class(param_groups, **self.optimizer_kwargs)
         if is_main_process():
             log_param_groups(
