@@ -43,9 +43,11 @@ class ReportEvaluationCallback(TrainerCallback):
         print_first_sample: bool = True,
         is_distributed: bool = False,
         calculate_classifier_score: bool = True,
+        generation_kwargs: dict | None = None,
     ):
         self.eval_dataloader = eval_dataloader
         self.max_new_tokens = max_new_tokens
+        self.generation_kwargs = generation_kwargs or {}
         self.tokenizer = tokenizer
         self.print_first_sample = print_first_sample
         self.is_distributed = is_distributed
@@ -127,7 +129,9 @@ class ReportEvaluationCallback(TrainerCallback):
                 del prompt_inputs["raw_samples"]
                 del prompt_inputs["batch_count"]
                 prompt_input_ids = prompt_inputs["input_ids"]
-                outputs = model.generate(**prompt_inputs, max_new_tokens=self.max_new_tokens)
+                outputs = model.generate(
+                    **prompt_inputs, max_new_tokens=self.max_new_tokens, **self.generation_kwargs
+                )
                 results["gts"].extend(decode_label_answers(self.tokenizer, inputs["labels"]))
                 results["preds"].extend(
                     strip_thinking(answer)
@@ -139,7 +143,9 @@ class ReportEvaluationCallback(TrainerCallback):
             for _ in range(int(num_batches) - len(self.eval_dataloader)):
                 if prompt_inputs is None:
                     raise ValueError("Report evaluation needs at least one batch on every rank.")
-                model.generate(**prompt_inputs, max_new_tokens=self.max_new_tokens)
+                model.generate(
+                    **prompt_inputs, max_new_tokens=self.max_new_tokens, **self.generation_kwargs
+                )
 
         if self.print_first_sample and results["preds"]:
             logger.info_main(f"First sample GROUNDTRUTH:\n{results['gts'][0]}")

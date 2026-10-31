@@ -175,6 +175,7 @@ class UnifiedVLMTrainer:
                 ReportEvaluationCallback(  # type: ignore[arg-type]
                     eval_dataloader=callback_eval_dataloader,
                     max_new_tokens=self.cfg.eval.max_new_tokens,
+                    generation_kwargs=self.cfg.eval.generation_kwargs(),
                     tokenizer=self.vlm_model.tokenizer,
                     is_distributed=self.is_distributed,
                     calculate_classifier_score=self.cfg.eval.calculate_classifier_score,

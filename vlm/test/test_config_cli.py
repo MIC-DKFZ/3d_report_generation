@@ -241,3 +241,14 @@ def test_validation_rejects_unknown_cli_overrides(monkeypatch, tmp_path):
         RunConfig.validate_with_cli_args(
             make_unnamed_run_config_dict(monkeypatch, tmp_path), ["--general.seeed", "3"]
         )
+
+
+def test_decoding_settings_override_the_model_generation_config_only_when_set():
+    from vlm.configs.evaluation_config import EvaluationConfig
+
+    assert EvaluationConfig().generation_kwargs() == {}
+    assert EvaluationConfig(do_sample=False).generation_kwargs() == {"do_sample": False}
+    sampled = EvaluationConfig(do_sample=True, temperature=0.7, top_p=0.8, top_k=20)
+    assert sampled.generation_kwargs() == {
+        "do_sample": True, "temperature": 0.7, "top_p": 0.8, "top_k": 20
+    }

@@ -42,6 +42,7 @@ class UnifiedVLMInference:
         num_dataloader_workers: int,
         max_new_tokens: int,
         ddp_setup: tuple[bool, int, int, int, int] | None = None,
+        generation_kwargs: dict | None = None,
     ):
         """
         Initialize the unified VLM inference.
@@ -60,6 +61,7 @@ class UnifiedVLMInference:
         self.per_device_batch_size = per_device_batch_size
         self.num_dataloader_workers = num_dataloader_workers
         self.max_new_tokens = max_new_tokens
+        self.generation_kwargs = generation_kwargs or {}
 
         (
             self.is_distributed,
@@ -123,11 +125,13 @@ class UnifiedVLMInference:
                     outputs = model.module.generate(
                         **inputs,
                         max_new_tokens=self.max_new_tokens,
+                        **self.generation_kwargs,
                     )
                 else:
                     outputs = model.generate(
                         **inputs,
                         max_new_tokens=self.max_new_tokens,
+                        **self.generation_kwargs,
                     )
 
                 decoded_output = decode_generated_answers(
@@ -315,6 +319,7 @@ def main(
         num_dataloader_workers=cfg.trainer.dataloader_num_workers,
         max_new_tokens=cfg.eval.max_new_tokens,
         ddp_setup=ddp_setup,
+        generation_kwargs=cfg.eval.generation_kwargs(),
     )
 
     inference.inference(inference_dataset)

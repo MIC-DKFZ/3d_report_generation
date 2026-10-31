@@ -21,6 +21,16 @@ class EvaluationConfig(ConfigBase):
     max_new_tokens: int = Field(1024, description="Maximum number of new tokens to generate.")
     per_device_batch_size: int = Field(32, description="Inference batch size per device.")
 
+    # Decoding of the callback and of inference. 'None' keeps the model's generation config, which
+    # differs between checkpoints: Qwen3-VL samples (temperature 0.7, top-p 0.8, top-k 20), Qwen3.5
+    # ships none and decodes greedily.
+    do_sample: bool | None = Field(
+        None, description="Sample instead of decoding greedily. 'None' keeps the model's setting."
+    )
+    temperature: float | None = Field(None, gt=0, description="Sampling temperature.")
+    top_p: float | None = Field(None, gt=0, le=1, description="Nucleus sampling probability mass.")
+    top_k: int | None = Field(None, ge=0, description="Number of most likely tokens to sample from.")
+
     # 'After Training' parameters
     run_inference: bool = Field(True, description="Run inference after training completes.")
     mode: Literal["best", "final"] = Field("best", description="Which checkpoint to load for inference.")
@@ -41,6 +51,16 @@ class EvaluationConfig(ConfigBase):
         False,
         description="Calculate dataset-specific classifier metrics during callback evaluation.",
     )
+
+    def generation_kwargs(self) -> dict:
+        """Decoding arguments for 'generate' that override the model's generation config."""
+        settings = {
+            "do_sample": self.do_sample,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+        }
+        return {name: value for name, value in settings.items() if value is not None}
 
     @model_validator(mode="after")
     def check_inference_eval(self):
