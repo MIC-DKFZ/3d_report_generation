@@ -208,3 +208,15 @@ def test_inference_runs_once_after_training(tmp_path, run_inference, already_com
     for marker in markers:
         (tmp_path / marker).touch()
     assert train_script.inference_is_pending(tmp_path, run_inference, already_complete) == expected
+
+
+def test_slurm_end_time_is_retried_after_a_timeout(monkeypatch):
+    monkeypatch.setenv("SLURM_JOB_ID", "123")
+    outputs = iter(["", "JobId=123 EndTime=2026-10-31T21:35:00"])
+    monkeypatch.setattr(
+        control_module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, stdout=next(outputs)),
+    )
+    expected = datetime.fromisoformat("2026-10-31T21:35:00").timestamp()
+    assert control_module.slurm_job_end_time(retry_seconds=0) == expected

@@ -116,23 +116,30 @@ class EveryNEpochsCallback(TrainerCallback):
         return self._disable_eval(control)
 
 
-def slurm_job_end_time() -> float | None:
-    """Return the Slurm end time of the current job as a Unix timestamp, or None outside Slurm."""
+def slurm_job_end_time(attempts: int = 5, retry_seconds: float = 30) -> float | None:
+    """
+    Return the Slurm end time of the current job as a Unix timestamp, or None outside Slurm.
+    Retried, because Slurm commands time out when the controller is busy.
+    """
     job_id = os.getenv("SLURM_JOB_ID")
     if not job_id:
         return None
-    try:
-        output = subprocess.run(
-            ["scontrol", "show", "job", job_id], capture_output=True, text=True, timeout=30
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    for field in output.split():
-        if field.startswith("EndTime="):
-            try:
-                return datetime.fromisoformat(field.removeprefix("EndTime=")).timestamp()
-            except ValueError:
-                return None
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(retry_seconds)
+        try:
+            output = subprocess.run(
+                ["scontrol", "show", "job", job_id], capture_output=True, text=True, timeout=60
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for field in output.split():
+            if field.startswith("EndTime="):
+                try:
+                    return datetime.fromisoformat(field.removeprefix("EndTime=")).timestamp()
+                except ValueError:
+                    return None
+    logger.warning_main(f"Could not read the end time of Slurm job {job_id}; no stop before it.")
     return None
 
 
@@ -166,9 +173,15 @@ class GracefulStopCallback(TrainerCallback):
     @classmethod
     def from_environment(cls, output_dir: str | Path) -> "GracefulStopCallback":
         """Use the Slurm end time and the 'VLM_STOP_*' minute settings of the environment."""
+        end_time = slurm_job_end_time() if is_main_process() else None
+        if end_time is not None:
+            logger.info_main(
+                f"The Slurm job ends at {datetime.fromtimestamp(end_time):%Y-%m-%d %H:%M}; "
+                "training saves and stops before it."
+            )
         return cls(
             Path(output_dir, STOP_FILENAME),
-            end_time=slurm_job_end_time() if is_main_process() else None,
+            end_time=end_time,
             margin_seconds=60 * float(os.getenv("VLM_STOP_MARGIN_MINUTES", "20")),
             evaluation_budget_seconds=60 * float(os.getenv("VLM_STOP_EVALUATION_MINUTES", "30")),
         )
