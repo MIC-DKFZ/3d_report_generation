@@ -14,7 +14,7 @@ from accelerate.state import AcceleratorState
 from test_training_phases import MAX_STEPS, flat_parameters, train, uninterrupted  # noqa: F401
 from transformers import TrainerCallback, TrainerControl
 
-from vlm.training.callbacks import STOP_FILENAME, GracefulStopCallback
+from vlm.training.callbacks import PENDING_EVALUATION_FILENAME, STOP_FILENAME, GracefulStopCallback
 from vlm.training.callbacks import control as control_module
 
 
@@ -109,6 +109,8 @@ def test_evaluation_that_might_not_finish_is_skipped(tmp_path):
     assert stop.stopped
     assert not control.should_evaluate
     assert control.should_save and control.should_training_stop
+    # The job that resumes runs it.
+    assert (tmp_path / PENDING_EVALUATION_FILENAME).read_text() == "8\n"
 
 
 def test_requested_stop_still_evaluates_when_there_is_time(tmp_path):
@@ -243,3 +245,37 @@ def test_slurm_end_time_is_retried_after_a_timeout(monkeypatch):
     )
     expected = datetime.fromisoformat("2026-10-31T21:35:00").timestamp()
     assert control_module.slurm_job_end_time(retry_seconds=0) == expected
+
+
+def step_end(stop, step):
+    control = TrainerControl()
+    stop.on_step_end(SimpleNamespace(device=torch.device("cpu")), SimpleNamespace(global_step=step), control)
+    return control
+
+
+def test_resumed_job_runs_the_skipped_evaluation_once(tmp_path):
+    (tmp_path / PENDING_EVALUATION_FILENAME).write_text("8\n")
+    stop = GracefulStopCallback(tmp_path / STOP_FILENAME, end_time=time.time() + 5 * 3600)
+    assert step_end(stop, 9).should_evaluate
+    stop.on_evaluate(None, None, TrainerControl())
+    assert not (tmp_path / PENDING_EVALUATION_FILENAME).exists()
+    assert not step_end(stop, 10).should_evaluate
+
+
+def test_resuming_before_the_skipped_evaluation_leaves_it_to_its_epoch_end(tmp_path):
+    (tmp_path / PENDING_EVALUATION_FILENAME).write_text("8\n")
+    stop = GracefulStopCallback(tmp_path / STOP_FILENAME, end_time=time.time() + 5 * 3600)
+    assert not step_end(stop, 5).should_evaluate
+    assert not (tmp_path / PENDING_EVALUATION_FILENAME).exists()
+
+
+def test_evaluation_that_fits_is_not_skipped_with_the_default_budget(tmp_path, monkeypatch):
+    # 41 minutes are left: enough for the 20-minute margin and the 20-minute evaluation budget.
+    monkeypatch.delenv("VLM_STOP_EVALUATION_MINUTES", raising=False)
+    monkeypatch.delenv("VLM_STOP_MARGIN_MINUTES", raising=False)
+    monkeypatch.setattr(control_module, "slurm_job_end_time", lambda: time.time() + 41 * 60)
+    stop = GracefulStopCallback.from_environment(tmp_path)
+    assert stop.evaluation_budget_seconds == 20 * 60
+    control = epoch_end(stop, should_evaluate=True)
+    assert control.should_evaluate and not stop.stopped
+    assert not (tmp_path / PENDING_EVALUATION_FILENAME).exists()

@@ -16,6 +16,8 @@ from vlm.utils.ddp import is_main_process
 
 # Creating this file in the run directory asks the running job to save and stop.
 STOP_FILENAME = "STOP_TRAINING"
+# Written when an evaluation is skipped before the time limit; the next job runs it after resuming.
+PENDING_EVALUATION_FILENAME = "PENDING_EVALUATION"
 
 
 class TerminateOnNaNLossCallback(TrainerCallback):
@@ -156,8 +158,9 @@ class GracefulStopCallback(TrainerCallback):
 
     Rank 0 decides every 'check_every_n_steps' steps and at every epoch end, and all ranks
     follow its decision. An evaluation is skipped instead of started when it might not finish
-    before the time limit. Add this callback after 'EveryNEpochsCallback', so it sees which
-    epochs evaluate.
+    before the time limit; 'PENDING_EVALUATION' in the run directory then records its step, and
+    the job that resumes runs it after its first step. Add this callback after
+    'EveryNEpochsCallback', so it sees which epochs evaluate.
     """
 
     def __init__(
@@ -165,16 +168,19 @@ class GracefulStopCallback(TrainerCallback):
         stop_file: str | Path,
         end_time: float | None = None,
         margin_seconds: float = 20 * 60,
-        evaluation_budget_seconds: float = 30 * 60,
+        evaluation_budget_seconds: float = 20 * 60,
         check_every_n_steps: int = 10,
     ):
         self.stop_file = Path(stop_file)
+        self.pending_file = self.stop_file.with_name(PENDING_EVALUATION_FILENAME)
         self.end_time = end_time
         self.margin_seconds = margin_seconds
         self.evaluation_budget_seconds = evaluation_budget_seconds
         self.check_every_n_steps = check_every_n_steps
         self.stopped = False
         self._evaluation_start = None
+        self._pending_checked = False
+        self._running_pending_evaluation = False
 
     @classmethod
     def from_environment(cls, output_dir: str | Path) -> "GracefulStopCallback":
@@ -189,7 +195,7 @@ class GracefulStopCallback(TrainerCallback):
             Path(output_dir, STOP_FILENAME),
             end_time=end_time,
             margin_seconds=60 * float(os.getenv("VLM_STOP_MARGIN_MINUTES", "20")),
-            evaluation_budget_seconds=60 * float(os.getenv("VLM_STOP_EVALUATION_MINUTES", "30")),
+            evaluation_budget_seconds=60 * float(os.getenv("VLM_STOP_EVALUATION_MINUTES", "20")),
         )
 
     def _seconds_left(self) -> float | None:
@@ -222,7 +228,33 @@ class GracefulStopCallback(TrainerCallback):
         control.should_training_stop = True
         return control
 
+    def _pending_step(self) -> int | None:
+        try:
+            return int(self.pending_file.read_text().strip())
+        except (FileNotFoundError, ValueError):
+            return None
+
+    def _run_pending_evaluation(self, args, state, control):
+        """After the first step of a resumed job, run the evaluation the previous job skipped."""
+        self._pending_checked = True
+        pending_step = self._pending_step() if is_main_process() else None
+        if pending_step is not None and pending_step >= state.global_step:
+            # Resumed from before the skipped evaluation: its epoch end evaluates as usual.
+            self.pending_file.unlink(missing_ok=True)
+            pending_step = None
+        if not self._agree(args, pending_step is not None):
+            return
+        if is_main_process():
+            logger.info_main(
+                f"Running the evaluation skipped at step {pending_step} before the time limit."
+            )
+        self._running_pending_evaluation = True
+        self._evaluation_start = time.time()
+        control.should_evaluate = True
+
     def on_step_end(self, args, state, control, **kwargs):
+        if not self._pending_checked:
+            self._run_pending_evaluation(args, state, control)
         if self.stopped or state.global_step % self.check_every_n_steps:
             return control
         reason = self._stop_reason(self.margin_seconds) if is_main_process() else None
@@ -245,6 +277,8 @@ class GracefulStopCallback(TrainerCallback):
                     "limit is too close."
                 )
                 control.should_evaluate = False
+                if is_main_process():
+                    self.pending_file.write_text(f"{state.global_step}\n")
                 if not self.stopped:
                     self._stop(args, state, control, "no time left to evaluate")
                 return control
@@ -256,6 +290,10 @@ class GracefulStopCallback(TrainerCallback):
         return control
 
     def on_evaluate(self, args, state, control, **kwargs):
+        if self._running_pending_evaluation:
+            self._running_pending_evaluation = False
+            if is_main_process():
+                self.pending_file.unlink(missing_ok=True)
         # Budget the next evaluation by the longest one so far.
         if self._evaluation_start is not None:
             duration = time.time() - self._evaluation_start
