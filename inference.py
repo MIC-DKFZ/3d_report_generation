@@ -338,6 +338,11 @@ def main(
         )
         eval_main(eval_args)
 
+    if dist.is_available() and dist.is_initialized():
+        # The other ranks wait for rank 0's evaluation here: at torchrun's exit barrier, which
+        # gives up after 300 s, a longer evaluation would be killed.
+        dist.barrier()
+
 
 if __name__ == "__main__":
     main_cli()

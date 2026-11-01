@@ -54,22 +54,23 @@ def evaluate_reports(preds: list, gts: list) -> tuple[dict, dict]:
 
     # === METEOR ===
     try:
-        meteor_score, meteor_per_image = meteor_scorer.compute_score(gts=in_gts, res=in_res)
+        # Align every report once; one EVAL over all statistics then gives the per-report and
+        # corpus scores, exactly as Meteor.compute_score does (which would align them again).
+        # The raw per-sentence statistics are kept so calc_statistics.py can bootstrap the
+        # *corpus-level* METEOR by resampling stats and re-running EVAL, rather than resampling
+        # per-sentence scores (which gives CI for a different quantity).
+        with meteor_scorer.lock:
+            meteor_stats = [meteor_scorer._stat(in_res[i][0], in_gts[i]) for i in range(n)]
+            eval_line = " ||| ".join(["EVAL", *meteor_stats])
+            meteor_scorer.meteor_p.stdin.write(f"{eval_line}\n".encode())
+            meteor_scorer.meteor_p.stdin.flush()
+            meteor_per_image = [float(meteor_scorer.meteor_p.stdout.readline().strip()) for _ in range(n)]
+            meteor_score = float(meteor_scorer.meteor_p.stdout.readline().strip())
         aggregate["meteor_score"] = meteor_score
-        per_case["meteor_score"] = list(meteor_per_image)
-        # Collect raw per-sentence statistics strings so calc_statistics.py can
-        # bootstrap the *corpus-level* METEOR by resampling stats and re-running EVAL,
-        # rather than resampling per-sentence scores (which gives CI for a different quantity).
-        meteor_scorer.lock.acquire()
-        meteor_stats = [
-            meteor_scorer._stat(in_res[i][0], in_gts[i])
-            for i in sorted(in_gts.keys())
-        ]
-        meteor_scorer.lock.release()
+        per_case["meteor_score"] = meteor_per_image
         per_case["meteor_stats"] = meteor_stats
     except Exception as e:
         logger.error(f"METEOR score calculation failed: {e}")
-        meteor_scorer.lock.release()
         aggregate["meteor_score"] = -1.0
         per_case["meteor_score"] = [-1.0] * n
         per_case["meteor_stats"] = [""] * n
