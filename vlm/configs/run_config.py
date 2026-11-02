@@ -227,12 +227,12 @@ class RunConfig(ConfigBase):
         if embedding_input:
             _str = "EMBEDDING"
             _dic[None].update(["model.vision_encoder", "model.trainable_params.vision_encoder"])
-            _dic[False].update(["data.do_resize", "data.do_transforms"])
+            _dic[False].update(["data.do_transforms"])
         if text_only:
             _str = "TEXT-ONLY"
             _dic[None].update(["model.vision_encoder", "model.trainable_params.vision_encoder",
                                "model.adapter", "model.trainable_params.adapter"])
-            _dic[False].update(["data.do_resize", "data.do_transforms"])
+            _dic[False].update(["data.do_transforms"])
 
         logger.info_main(f"[Vision Input Type] Resetting vision-encoder-specific arguments for {_str} input mode:")
 

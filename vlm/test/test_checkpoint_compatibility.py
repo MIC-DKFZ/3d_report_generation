@@ -26,6 +26,14 @@ def test_obsolete_eval_sample_limit_is_ignored_without_mutating_input():
 
 
 @pytest.mark.parametrize("value", [False, True])
+def test_obsolete_image_resize_flag_is_ignored(value):
+    original = {"data": {"dataset_name": "ctrate", "answer_types": "all", "do_resize": value}}
+    normalized, warnings = normalize_saved_config(original)
+    assert "do_resize" not in DataConfig.model_validate(normalized["data"]).model_dump()
+    assert any("data.do_resize" in warning for warning in warnings)
+
+
+@pytest.mark.parametrize("value", [False, True])
 def test_obsolete_optimizer_initialization_flag_is_ignored(value):
     original = {"general": {"init_optimizer_scheduler_from_checkpoint": value, "seed": 3}}
     normalized, warnings = normalize_saved_config(original)

@@ -26,8 +26,7 @@ class CTRATEDataset(MedicalImageDataset):
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of qa pairs to include
-        do_resize (bool, optional): If True, resize images to a fixed size
-        do_transforms (bool, optional): If True, apply data augmentations to images
+        do_transforms (bool, optional): If True, augment the images of the training split
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
 

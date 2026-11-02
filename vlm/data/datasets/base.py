@@ -33,8 +33,7 @@ class MedicalImageDataset(Dataset, ABC):
         vision_input_type (VisionInputType): Type of vision input (IMAGE or EMBEDDING)
         n_samples (int, optional): Number of samples to load (for debugging)
         answer_types (tuple, optional): Types of qa pairs to include
-        do_resize (bool, optional): If True, resize images to a fixed size
-        do_transforms (bool, optional): If True, apply data augmentations to images
+        do_transforms (bool, optional): If True, augment the images of the training split
         vision_encoder_patch_size (tuple, optional): Patch size of the vision encoder
     """
 
@@ -59,7 +58,6 @@ class MedicalImageDataset(Dataset, ABC):
         self.vision_input_type = cfg.data.vision_input_type
         self.split = split
         self.text_only = cfg.data.text_only
-        self.do_resize = cfg.data.do_resize
         self.do_transforms = cfg.data.do_transforms and self.split == "train"
         self.vision_encoder_patch_size = vision_encoder_patch_size
         self.is_stacked_2d_embedding = cfg.data.is_stacked_2d_embedding
@@ -178,13 +176,10 @@ class MedicalImageDataset(Dataset, ABC):
         return load_vision_input(
             vision_input_path,
             vision_input_type=self.vision_input_type,
-            do_resize=self.do_resize,
-            do_transforms=self.do_transforms,
-            patch_size=self.vision_encoder_patch_size,
-            split=self.split,
-            training_transforms=self.training_transforms,
             is_stacked_2d_embedding=self.is_stacked_2d_embedding,
             reduce_to_n_slices=self.reduce_to_n_slices,
+            patch_size=self.vision_encoder_patch_size,
+            image_transforms=self.training_transforms,
         )
 
     def __getitem__(self, index):

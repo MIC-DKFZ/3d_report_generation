@@ -66,10 +66,12 @@ class DataConfig(ConfigBase):
     )
     n_val_samples: int | None = Field(1, description="Number of validation samples to use.")
 
-    do_resize: bool = Field(
-        False, description="Resize images to 192x192x192 cubes (with lung crops)."
+    do_transforms: bool = Field(
+        False,
+        description="Augment the training images with nnU-Net transforms (image mode only). "
+        "Image-mode inputs are otherwise used as stored: preprocess them into encoder inputs "
+        "of the encoder's 'patch_size' before training.",
     )
-    do_transforms: bool = Field(False, description="Enable nnUNetv2 image augmentation.")
     embedding_transforms: list[EmbeddingTransformClassConfig] = Field(
         default_factory=list,
         description="Embedding-space augmentations to apply to precomputed embeddings during training.",

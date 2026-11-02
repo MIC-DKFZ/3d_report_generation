@@ -15,7 +15,6 @@ from .retrieval import (
     MerlinDatasetRetrievalWithImage,
 )
 from .toothfairy4 import ToothFairy4Dataset
-from .vision import convert_dtype, z_score_normalization
 
 __all__ = [
     "AMOSMMDataset",
@@ -33,6 +32,4 @@ __all__ = [
     "QUESTION",
     "SYSTEM_TEXT",
     "ToothFairy4Dataset",
-    "convert_dtype",
-    "z_score_normalization",
 ]

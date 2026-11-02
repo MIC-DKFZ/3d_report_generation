@@ -1,56 +1,33 @@
 """Loading and preprocessing of image volumes and precomputed embeddings."""
 
 import os
-from numbers import Number
 from pathlib import Path
-from typing import Type
+from typing import Callable
 
 import blosc2
 import nrrd
 import numpy as np
 import SimpleITK as sitk
+import torch
 from einops import rearrange
 
-from vlm.data.image_transforms import preprocess_3d_image
 from vlm.data.types import VisionInputType
-
-
-def convert_dtype(image: np.ndarray, target_dtype: Type[Number]) -> np.ndarray:
-    return image.astype(target_dtype)
-
-
-def z_score_normalization(
-    image: np.ndarray,
-    use_mask_for_norm: bool,
-    non_zero_mask: np.ndarray,
-    target_dtype: Type[Number],
-) -> np.ndarray:
-    image = convert_dtype(image, target_dtype)
-    if use_mask_for_norm:
-        mask = non_zero_mask >= 0
-        mean = image[mask].mean()
-        std = image[mask].std()
-        image[mask] = (image[mask] - mean) / max(std, 1e-8)
-    else:
-        mean = image.mean()
-        std = image.std()
-        image = (image - mean) / max(std, 1e-8)
-    return image
 
 
 def load_vision_input(
     vision_input_path: Path,
     *,
     vision_input_type: VisionInputType,
-    do_resize: bool,
-    do_transforms: bool,
-    patch_size: tuple[int, ...] | None,
-    split: str,
-    training_transforms,
     is_stacked_2d_embedding: bool,
     reduce_to_n_slices: int | None,
+    patch_size: tuple[int, int, int] | None = None,
+    image_transforms: Callable | None = None,
 ):
-    """Load vision input from file"""
+    """
+    Load a vision input from file: an embedding, or, in image mode, a preprocessed encoder input
+    of shape 'patch_size' (as made by 'preprocess_encoder_input'), augmented with
+    'image_transforms' if given.
+    """
     if str(vision_input_path).endswith(".npy"):
         vision_input = np.load(vision_input_path)
     elif str(vision_input_path).endswith(".npz"):
@@ -92,15 +69,7 @@ def load_vision_input(
         raise ValueError(f"Unsupported vision input file format: {vision_input_path}")
 
     if vision_input_type == VisionInputType.IMAGE:
-        vision_input = z_score_normalization(vision_input, False, None, np.float32)
-        vision_input = preprocess_3d_image(
-            image_array=vision_input,
-            do_resize=do_resize,
-            do_transforms=do_transforms,
-            patch_size=patch_size,
-            split=split,
-            training_transforms=training_transforms,
-        )
+        return prepare_image_input(vision_input, vision_input_path, patch_size, image_transforms)
 
     if is_stacked_2d_embedding:
         # remove class token
@@ -126,3 +95,28 @@ def load_vision_input(
         vision_input = vision_input[None, ...]
 
     return vision_input
+
+
+def prepare_image_input(
+    image: np.ndarray,
+    path: Path,
+    patch_size: tuple[int, int, int],
+    image_transforms: Callable | None,
+) -> np.ndarray:
+    """
+    The (1, *patch_size) float32 encoder input of a preprocessed image, augmented with
+    'image_transforms' if given. Images are not normalized, resized or cropped here.
+    """
+    image = np.asarray(image, dtype=np.float32)
+    if image.ndim == 3:
+        image = image[None]
+    if image.ndim != 4 or image.shape[0] != 1 or image.shape[1:] != tuple(patch_size):
+        raise ValueError(
+            f"Image {path} has shape {image.shape}, but image mode expects encoder inputs of "
+            f"shape {tuple(patch_size)} or (1, *{tuple(patch_size)}). Preprocess the images "
+            "into encoder inputs before training, with 'preprocess_encoder_input' "
+            "(vlm/data/preprocessing/encoder_input.py)."
+        )
+    if image_transforms is not None:
+        image = image_transforms(image=torch.from_numpy(image))["image"].numpy()
+    return image

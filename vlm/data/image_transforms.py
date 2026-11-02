@@ -1,9 +1,6 @@
-"""Image volume preprocessing and training augmentation."""
+"""Training augmentation of image-mode encoder inputs."""
 
 from __future__ import annotations
-
-import numpy as np
-import torch
 
 from batchgeneratorsv2.transforms.base.basic_transform import BasicTransform
 from batchgeneratorsv2.transforms.intensity.brightness import (
@@ -25,8 +22,8 @@ from batchgeneratorsv2.transforms.utils.random import RandomTransform
 
 
 # from nnUNetv2
-@staticmethod
 def get_training_image_transforms(patch_size) -> BasicTransform:
+    """nnU-Net augmentation of (C, *patch_size) inputs, with milder scaling and no elastic deformation."""
     transforms = []
     patch_size_spatial = patch_size
     ignore_axes = None
@@ -100,73 +97,3 @@ def get_training_image_transforms(patch_size) -> BasicTransform:
     ))
 
     return ComposeTransforms(transforms)
-
-
-def preprocess_3d_image(image_array, do_resize, do_transforms, patch_size, split, training_transforms=None):
-    """Preprocess 3D image: convert to float32, remove singleton dims, pad if needed, and random crop to final patch size"""
-    # Ensure float32 dtype
-    if not isinstance(image_array, np.ndarray):
-        image_array = np.array(image_array, dtype=np.float32)
-    else:
-        image_array = image_array if image_array.dtype == np.float32 else image_array.astype(np.float32)
-
-    # Remove singleton first dimension if present
-    if image_array.ndim == 4 and image_array.shape[0] == 1:
-        image_array = image_array.squeeze(0)
-
-    # Get image dimensions (assuming format: H, W, D)
-    h, w, d = image_array.shape
-
-    # Pad if image is smaller than patch_size
-    pad_h = max(0, patch_size[0] - h)
-    pad_w = max(0, patch_size[1] - w)
-    pad_d = max(0, patch_size[2] - d)
-
-    if pad_h > 0 or pad_w > 0 or pad_d > 0:
-        # Split padding evenly on both sides to center the image
-        pad_h_before = pad_h // 2
-        pad_h_after = pad_h - pad_h_before
-
-        pad_w_before = pad_w // 2
-        pad_w_after = pad_w - pad_w_before
-
-        pad_d_before = pad_d // 2
-        pad_d_after = pad_d - pad_d_before
-
-        # Pad the image
-        padding = ((pad_h_before, pad_h_after), (pad_w_before, pad_w_after), (pad_d_before, pad_d_after))
-        image_array = np.pad(image_array, padding, mode='constant', constant_values=0)
-
-    if do_resize:
-
-        # interpolate braucht 5D
-        image_array = torch.from_numpy(image_array).unsqueeze(0).unsqueeze(0)
-        image_array = torch.nn.functional.interpolate(image_array, size=patch_size, mode='trilinear', align_corners=False)
-
-        if do_transforms:
-            image_array = torch.squeeze(training_transforms(**{'image': image_array.squeeze(0)})['image'], dim=0)
-        else:
-            image_array = image_array.squeeze(0).squeeze(0)
-
-    else:
-        # Random crop to exact patch size (if larger than patch_size)
-        h, w, d = image_array.shape
-        if h > patch_size[0] or w > patch_size[1] or d > patch_size[2]:
-            if split != "train":
-                # Center crop
-                start_h = (h - patch_size[0]) // 2
-                start_w = (w - patch_size[1]) // 2
-                start_d = (d - patch_size[2]) // 2
-            else:
-                # Random patch
-                max_starts = [max(0, image_array.shape[i] - patch_size[i]) for i in range(3)]
-                start_h, start_w, start_d = [int(np.clip(np.random.normal(m/2, m*0.1), 0, m)) for m in max_starts]
-
-            # Extract patch
-            image_array = image_array[
-                start_h:start_h + patch_size[0],
-                start_w:start_w + patch_size[1],
-                start_d:start_d + patch_size[2]
-            ]
-
-    return image_array

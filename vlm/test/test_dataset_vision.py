@@ -11,13 +11,21 @@ from vlm.data.datasets import MedicalImageDataset
 def load_embedding(path, *, stacked=False, slices=None):
     dataset = SimpleNamespace(
         vision_input_type="embedding",
-        do_resize=False,
-        do_transforms=False,
         vision_encoder_patch_size=None,
-        split="test",
         training_transforms=None,
         is_stacked_2d_embedding=stacked,
         reduce_to_n_slices=slices,
+    )
+    return MedicalImageDataset._load_vision_input(dataset, path)
+
+
+def load_image(path, patch_size=(4, 6, 8), transforms=None):
+    dataset = SimpleNamespace(
+        vision_input_type="image",
+        vision_encoder_patch_size=patch_size,
+        training_transforms=transforms,
+        is_stacked_2d_embedding=False,
+        reduce_to_n_slices=None,
     )
     return MedicalImageDataset._load_vision_input(dataset, path)
 
@@ -63,3 +71,51 @@ def test_stacked_embeddings_drop_class_tokens_and_pool_slices(tmp_path):
     expected[1, 0] = 10.5
     expected[1, 1] = 12.5
     np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("shape", [(4, 6, 8), (1, 4, 6, 8)])
+def test_image_inputs_are_used_as_stored(tmp_path, shape):
+    # Image-mode inputs are preprocessed before training: no normalization, resizing or cropping.
+    array = np.arange(np.prod(shape), dtype=np.float64).reshape(shape) * 100
+    path = tmp_path / "image.npy"
+    np.save(path, array)
+
+    actual = load_image(path)
+
+    assert actual.dtype == np.float32
+    np.testing.assert_array_equal(actual, array.reshape(1, 4, 6, 8).astype(np.float32))
+
+
+@pytest.mark.parametrize("shape", [(4, 6, 9), (2, 4, 6, 8), (8, 12, 16)])
+def test_images_not_of_the_encoder_input_shape_are_rejected(tmp_path, shape):
+    path = tmp_path / "image.npy"
+    np.save(path, np.zeros(shape, dtype=np.float32))
+
+    with pytest.raises(ValueError, match="preprocess_encoder_input"):
+        load_image(path)
+
+
+def test_image_transforms_augment_the_input(tmp_path):
+    path = tmp_path / "image.npy"
+    np.save(path, np.ones((4, 6, 8), dtype=np.float32))
+    seen = []
+
+    def double(image):
+        seen.append(tuple(image.shape))
+        return {"image": image * 2}
+
+    actual = load_image(path, transforms=double)
+
+    assert seen == [(1, 4, 6, 8)]
+    np.testing.assert_array_equal(actual, np.full((1, 4, 6, 8), 2, dtype=np.float32))
+
+
+def test_nnunet_training_transforms_keep_the_input_shape(tmp_path):
+    from vlm.data.image_transforms import get_training_image_transforms
+
+    path = tmp_path / "image.npy"
+    np.save(path, np.random.default_rng(0).normal(size=(16, 16, 16)).astype(np.float32))
+
+    actual = load_image(path, (16, 16, 16), get_training_image_transforms((16, 16, 16)))
+
+    assert actual.shape == (1, 16, 16, 16) and actual.dtype == np.float32

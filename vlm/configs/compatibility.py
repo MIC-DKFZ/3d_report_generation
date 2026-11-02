@@ -16,6 +16,8 @@ DEPRECATED_FIELDS: set[str] = {
     "data.embedding_constant",
     "data.do_truncation",
     "data.truncate_after",
+    # Image-mode inputs are preprocessed before training.
+    "data.do_resize",
 }
 
 # Old dotted path -> current dotted path.
