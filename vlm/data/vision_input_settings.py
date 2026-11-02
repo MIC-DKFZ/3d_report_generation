@@ -4,6 +4,7 @@ The settings file of a dataset's vision inputs ('vision_input_preprocessing.yml'
 by training, so that new volumes can be preprocessed like the training inputs.
 """
 
+import os
 from pathlib import Path
 
 import yaml
@@ -38,7 +39,10 @@ def save_settings(vision_input_path: str | Path, settings: VisionInputSettings) 
             "must be preprocessed the same way; use another folder for other settings."
         )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(to_yaml(settings))
+    # Atomically, since parallel jobs (e.g. embedding shards) save the same settings.
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(to_yaml(settings))
+    os.replace(tmp_path, path)
     return path
 
 
