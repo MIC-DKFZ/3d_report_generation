@@ -29,6 +29,8 @@ from vlm.data.preprocessing.default_resampling import (
 )
 
 PROCESSING_MODES = ("resized", "center_crop")
+NORMALIZATIONS = ("z_score", "min_max", "vista3d_scale", "merlin_scale", "none")
+OUTLIER_METHODS = ("none", "connected_components")
 
 
 def remove_mask_outliers(

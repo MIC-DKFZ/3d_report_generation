@@ -47,6 +47,55 @@ def test_invalid_orientation_codes_are_rejected(orientation):
         DataConfig(dataset_name="ctrate", answer_types="all", vision_input_orientation=orientation)
 
 
+def test_vision_input_preprocessing_gives_the_preprocessing_kwargs():
+    data = DataConfig(
+        dataset_name="ctrate",
+        answer_types="all",
+        vision_input_preprocessing={
+            "processing_mode": "resized",
+            "roi_mask": "TotalSegmentator lungs",
+            "mask_label_ids": [10, 11],
+            "target_spacing": [1.5, 1.0, 1.0],
+        },
+    )
+    kwargs = data.vision_input_preprocessing.preprocessing_kwargs([8, 8, 8])
+
+    assert kwargs == {
+        "target_spacing": (1.5, 1.0, 1.0),
+        "normalization": "z_score",
+        "input_shape": (8, 8, 8),
+        "processing_mode": "resized",
+        "mask_label_ids": [10, 11],
+        "enforce_min_bbox": True,
+        "outlier_method": "none",
+        "outlier_min_voxels": 400,
+    }
+    # Saved and loaded again, as in 'final_config.yml'.
+    assert DataConfig.model_validate(data.model_dump()) == data
+
+
+def test_vision_input_preprocessing_is_optional():
+    assert DataConfig(dataset_name="ctrate", answer_types="all").vision_input_preprocessing is None
+
+
+@pytest.mark.parametrize(
+    "preprocessing, match",
+    [
+        ({}, "processing_mode"),
+        ({"processing_mode": "resize"}, "processing_mode"),
+        ({"processing_mode": "resized", "normalization": "zscore"}, "normalization"),
+        ({"processing_mode": "resized", "mask_label_ids": [1]}, "roi_mask"),
+        ({"processing_mode": "resized", "outlier_method": "connected_components"}, "roi_mask"),
+        ({"processing_mode": "resized", "unknown": 1}, "unknown"),
+    ],
+)
+def test_invalid_vision_input_preprocessing_is_rejected(preprocessing, match):
+    with pytest.raises(ValidationError, match=match):
+        DataConfig(
+            dataset_name="ctrate", answer_types="all", vision_input_preprocessing=preprocessing
+        )
+
+
 # A tiny ResEnc U-Net, in the plan format of nnssl's 'ResidualEncoderUNet'.
 TINY_RESENC_PLANS = {
     "arch_class_name": "dynamic_network_architectures.architectures.unet.ResidualEncoderUNet",

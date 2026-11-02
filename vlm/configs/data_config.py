@@ -1,13 +1,81 @@
+from typing import Literal
+
 from pydantic import Field, model_validator
 from torch.utils.data import Dataset
 
 from vlm.configs.base import ConfigBase, RecursiveFindClassConfigBase
 from vlm.configs.paths import ConfigPath
+from vlm.data.preprocessing.encoder_input import (
+    NORMALIZATIONS,
+    OUTLIER_METHODS,
+    PROCESSING_MODES,
+)
 from vlm.data.types import VisionInputType
 
 
 class EmbeddingTransformClassConfig(RecursiveFindClassConfigBase):
     folder_to_search = "vlm.data.embedding_transforms"
+
+
+class VisionInputPreprocessingConfig(ConfigBase):
+    """
+    How the vision inputs (images or the volumes of the embeddings) were made from the CT
+    volumes, as the arguments of 'preprocess_encoder_input'
+    (vlm/data/preprocessing/encoder_input.py), so that new volumes can be preprocessed the same
+    way at inference ('inference_nifti.py'). The encoder input shape is the vision encoder's.
+    """
+
+    target_spacing: tuple[float, float, float] | None = Field(
+        None,
+        description="Spacing (z, y, x) in mm the volumes were resampled to; None: not resampled.",
+    )
+    normalization: Literal[NORMALIZATIONS] = Field(
+        "z_score", description="Intensity normalization."
+    )
+    processing_mode: Literal[PROCESSING_MODES] = Field(
+        description="How the ROI was fit to the encoder input shape: resized, or center "
+        "cropped/padded."
+    )
+    roi_mask: str | None = Field(
+        None,
+        description="The mask the volumes were cropped to, e.g. 'TotalSegmentator lungs'; "
+        "None: the whole volume. Masks of new volumes are passed at inference.",
+    )
+    mask_label_ids: list[int] | None = Field(
+        None, description="Mask labels of the ROI; None: all non-zero labels."
+    )
+    enforce_min_bbox: bool = Field(
+        True, description="Enlarge the ROI to at least the encoder input shape."
+    )
+    outlier_method: Literal[OUTLIER_METHODS] = Field(
+        "none", description="Removal of small mask components before cropping."
+    )
+    outlier_min_voxels: int = Field(
+        400, description="Smallest mask component kept by 'connected_components'."
+    )
+
+    @model_validator(mode="after")
+    def validate_mask_settings_need_a_mask(self):
+        if self.roi_mask is None and (
+            self.mask_label_ids is not None or self.outlier_method != "none"
+        ):
+            raise ValueError(
+                "'mask_label_ids' and 'outlier_method' describe the ROI mask; set 'roi_mask' too."
+            )
+        return self
+
+    def preprocessing_kwargs(self, input_shape: tuple[int, int, int]) -> dict:
+        """The keyword arguments of 'preprocess_encoder_input'."""
+        return {
+            "target_spacing": self.target_spacing,
+            "normalization": self.normalization,
+            "input_shape": tuple(input_shape),
+            "processing_mode": self.processing_mode,
+            "mask_label_ids": self.mask_label_ids,
+            "enforce_min_bbox": self.enforce_min_bbox,
+            "outlier_method": self.outlier_method,
+            "outlier_min_voxels": self.outlier_min_voxels,
+        }
 
 
 class DataConfig(ConfigBase):
@@ -42,6 +110,11 @@ class DataConfig(ConfigBase):
         "SimpleITK/DICOM code of the directions the array axes x, y, z point to (e.g. 'LPS': "
         "x to the patient's left, y to posterior, z to superior). Set by hand, since the "
         "embedding files do not record it; new images are reoriented to it at inference.",
+    )
+    vision_input_preprocessing: VisionInputPreprocessingConfig | None = Field(
+        None,
+        description="How the vision inputs were preprocessed from the volumes; used to "
+        "preprocess new volumes the same way at inference.",
     )
     embed_dim: int | None = Field(
         None, description="Embedding dimension of the embeddings if using"
