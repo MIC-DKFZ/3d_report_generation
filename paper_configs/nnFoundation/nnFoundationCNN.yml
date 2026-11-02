@@ -12,5 +12,5 @@ model:
       - 1
 scheduler:
   class_kwargs:
-    adapter_lr: 0.001
+    adapter_lr: 0.004
     lm_lr: 0.0004

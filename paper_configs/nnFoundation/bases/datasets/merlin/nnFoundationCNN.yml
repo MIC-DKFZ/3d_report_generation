@@ -3,5 +3,5 @@ base_configs:
 
 data:
   vision_input_path: ${VLM_EMBEDS}/MERLIN_nnFoundationCNN
-  embed_dim: 640
+  embed_dim: 320
   embed_size: [6, 6, 6]
