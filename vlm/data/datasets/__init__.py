@@ -1,7 +1,7 @@
 """Dataset classes, retaining the public ``vlm.data.datasets`` imports."""
 
 from .amosmm import AMOSMMDataset
-from .base import SYSTEM_TEXT, MedicalImageDataset
+from .base import QUESTION, SYSTEM_TEXT, MedicalImageDataset
 from .bonn import BonnDataset
 from .ctrate import CTRATEDataset
 from .merlin import MerlinDataset
@@ -30,6 +30,7 @@ __all__ = [
     "MerlinDataset",
     "MerlinDatasetRetrieval",
     "MerlinDatasetRetrievalWithImage",
+    "QUESTION",
     "SYSTEM_TEXT",
     "ToothFairy4Dataset",
     "convert_dtype",

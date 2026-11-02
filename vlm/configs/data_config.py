@@ -36,6 +36,13 @@ class DataConfig(ConfigBase):
         description="Whether 'vision_input_path' points to split folders containing tar shards.",
     )
     vision_input_type: VisionInputType | None = Field(None, description="Vision input type.")
+    vision_input_orientation: str | None = Field(
+        None,
+        description="Orientation of the volumes the vision input was made from, as the "
+        "SimpleITK/DICOM code of the directions the array axes x, y, z point to (e.g. 'LPS': "
+        "x to the patient's left, y to posterior, z to superior). Set by hand, since the "
+        "embedding files do not record it; new images are reoriented to it at inference.",
+    )
     embed_dim: int | None = Field(
         None, description="Embedding dimension of the embeddings if using"
         " embeddings as input (e.g. 864.)"
@@ -108,6 +115,21 @@ class DataConfig(ConfigBase):
             normalized_path = self.val_dataset_json_path.expression.strip().lower()
             if normalized_path in {"none", "null"}:
                 self.val_dataset_json_path = None
+        return self
+
+    @model_validator(mode="after")
+    def validate_vision_input_orientation(self):
+        if self.vision_input_orientation is None:
+            return self
+        orientation = self.vision_input_orientation.upper()
+        if len(orientation) != 3 or any(
+            len(set(orientation) & set(pair)) != 1 for pair in ("LR", "AP", "SI")
+        ):
+            raise ValueError(
+                f"'vision_input_orientation' must name one of L/R, A/P and S/I each, e.g. 'LPS', "
+                f"not {orientation!r}."
+            )
+        self.vision_input_orientation = orientation
         return self
 
     @model_validator(mode="after")

@@ -17,6 +17,8 @@ from vlm.data.types import VisionInputType
 
 from .vision import load_vision_input
 
+# The prompt of all CT-RATE and Merlin dataset JSONs (vlm/public_scripts/datasets).
+QUESTION = "Generate a detailed report and diagnosis for this CT scan."
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 
 
@@ -246,15 +248,19 @@ class MedicalImageDataset(Dataset, ABC):
         return question, answer
 
     def format_into_message(self, question, answer, system_text=SYSTEM_TEXT):
-        """Build model-neutral messages; wrappers translate `vision` items for their model."""
-        system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
-        user_message = {
-            "role": "user",
-            "content": ([{"type": "vision"}] if not self.text_only else [])
-            + [{"type": "text", "text": question}],
-        }
-        answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
+        return format_into_message(question, answer, system_text, text_only=self.text_only)
 
-        full_conversation = [system_message, user_message, answer_message]
-        prompt_only_conversation = [system_message, user_message]
-        return full_conversation, prompt_only_conversation
+
+def format_into_message(question, answer, system_text=SYSTEM_TEXT, text_only=False):
+    """Build model-neutral messages; wrappers translate `vision` items for their model."""
+    system_message = {"role": "system", "content": [{"type": "text", "text": system_text}]}
+    user_message = {
+        "role": "user",
+        "content": ([{"type": "vision"}] if not text_only else [])
+        + [{"type": "text", "text": question}],
+    }
+    answer_message = {"role": "assistant", "content": [{"type": "text", "text": answer}]}
+
+    full_conversation = [system_message, user_message, answer_message]
+    prompt_only_conversation = [system_message, user_message]
+    return full_conversation, prompt_only_conversation
