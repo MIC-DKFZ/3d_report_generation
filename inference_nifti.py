@@ -10,9 +10,11 @@ The preprocessing comes from 'data.vision_input_preprocessing' of the run's conf
 override it, and runs without it need at least '--processing_mode' (spacing and normalization
 then default to those of the encoder's pre-training). Runs trained on images ('image' mode)
 encode with their own vision encoder, as in training; runs trained on precomputed embeddings
-need the encoder that made them ('--vision_encoder', '--vision_encoder_checkpoint'). Dotted
-config overrides are accepted as in 'inference.py', e.g. '--data.vision_input_orientation LPS'
-for runs whose config does not set it.
+encode with the encoder that made them, 'data.embedding_encoder' of the config (or
+'--vision_encoder' and '--vision_encoder_checkpoint'). Training fills these config fields from
+the dataset's 'vision_input_preprocessing.yml', if it has one. Dotted config overrides are
+accepted as in 'inference.py', e.g. '--data.vision_input_orientation LPS' for runs whose config
+does not set it.
 """
 
 import argparse
@@ -22,7 +24,10 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from vlm.configs.data_config import VisionInputPreprocessingConfig
+from vlm.configs.data_config import (
+    EmbeddingEncoderConfig,
+    VisionInputPreprocessingConfig,
+)
 from vlm.configs.model.vision_encoder_config import VisionEncoderClassConfig
 from vlm.data.batches import extract_batch_prompt_only
 from vlm.data.datasets.base import QUESTION, SYSTEM_TEXT, format_into_message
@@ -93,19 +98,20 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     )
 
     encoder = parser.add_argument_group(
-        "vision encoder of the training embeddings (runs trained on images use their own)"
+        "vision encoder of the training embeddings; overrides 'data.embedding_encoder' of the run's "
+        "config (runs trained on images use their own)"
     )
     encoder.add_argument(
         "--vision_encoder",
         default=None,
-        help="Class name in 'vlm/models/vision_encoders': 'PrimusEncoder' (nnFoundationViT, "
-        "the default) or 'ResEncEncoder' (nnFoundationCNN).",
+        help="Class name in 'vlm/models/vision_encoders': 'PrimusEncoder' (nnFoundationViT) or "
+        "'ResEncEncoder' (nnFoundationCNN).",
     )
     encoder.add_argument(
         "--vision_encoder_checkpoint",
         default=None,
         help="Checkpoint file or Hugging Face repository, e.g. 'MIC-DKFZ/nnFoundationViT' or "
-        "'MIC-DKFZ/nnFoundationCNN'.",
+        "'MIC-DKFZ/nnFoundationCNN', e.g. a local copy of the recorded one.",
     )
 
     parser.add_argument(
@@ -187,6 +193,22 @@ def resolve_preprocessing(
     return VisionInputPreprocessingConfig(roi_mask=roi_mask, **values), sources
 
 
+def resolve_embedding_encoder(
+    args: argparse.Namespace, recorded: EmbeddingEncoderConfig | None
+) -> tuple[str, str]:
+    """The class and checkpoint of the encoder that made the embeddings; arguments override the
+    run config's record."""
+    class_name = args.vision_encoder or (recorded and recorded.class_name)
+    checkpoint = args.vision_encoder_checkpoint or (recorded and recorded.checkpoint_path)
+    if not (class_name and checkpoint):
+        raise ValueError(
+            "The run's config does not record the encoder that made its embeddings "
+            "('data.embedding_encoder'); pass it with '--vision_encoder' and "
+            "'--vision_encoder_checkpoint'."
+        )
+    return class_name, checkpoint
+
+
 def main(args: argparse.Namespace, config_cli_args: list[str]):
     seed_everything(0)
     if args.run_dir:
@@ -220,19 +242,13 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
             )
         encoder = getattr_nested(vlm_model.model, vlm_model.module_attr_map["vision_encoder"])
         encoder_name = f"the run's {cfg.model.vision_encoder.class_name}"
+        checkpoint = None
         input_shape = cfg.model.vision_encoder.patch_size or encoder.patch_size
     else:
-        if args.vision_encoder_checkpoint is None:
-            raise ValueError(
-                "The run was trained on precomputed embeddings; pass the encoder that made them "
-                "with '--vision_encoder' and '--vision_encoder_checkpoint'."
-            )
-        encoder_name = args.vision_encoder or "PrimusEncoder"
+        encoder_name, checkpoint = resolve_embedding_encoder(args, cfg.data.embedding_encoder)
         # In float32: the embeddings of nnFoundationViT in bfloat16 differ by ~12% from float32.
         encoder = (
-            VisionEncoderClassConfig(
-                class_name=encoder_name, checkpoint_path=args.vision_encoder_checkpoint
-            )
+            VisionEncoderClassConfig(class_name=encoder_name, checkpoint_path=checkpoint)
             .to_instance()
             .cuda()
             .eval()
@@ -330,7 +346,7 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
             "input_dir": str(input_dir),
             "vision_input_orientation": orientation,
             "vision_encoder": encoder_name,
-            "vision_encoder_checkpoint": args.vision_encoder_checkpoint,
+            "vision_encoder_checkpoint": checkpoint,
             "mask_dir": None if args.mask_dir is None else str(args.mask_dir),
             "roi_mask": preprocessing.roi_mask,
             "preprocessing": preprocessing_kwargs,

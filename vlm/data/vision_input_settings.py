@@ -54,9 +54,9 @@ def to_yaml(settings: VisionInputSettings) -> str:
 
 def apply_saved_settings(data: DataConfig) -> None:
     """
-    Fill 'vision_input_orientation' and 'vision_input_preprocessing' of the run config from the
-    settings file in 'vision_input_path', so that they are saved with the run. Settings set in
-    the config must match the file.
+    Fill 'vision_input_orientation', 'vision_input_preprocessing' and (for embeddings)
+    'embedding_encoder' of the run config from the settings file in 'vision_input_path', so that
+    they are saved with the run. Settings set in the config must match the file.
     """
     if data.text_only or data.vision_input_path is None:
         return
@@ -70,8 +70,10 @@ def apply_saved_settings(data: DataConfig) -> None:
             "volumes)."
         )
         return
-    for field in ("vision_input_orientation", "vision_input_preprocessing"):
+    for field in ("vision_input_orientation", "vision_input_preprocessing", "embedding_encoder"):
         configured, saved = getattr(data, field), getattr(settings, field)
+        if saved is None:
+            continue
         if configured is None:
             setattr(data, field, saved)
             logger.info_main(f"Set 'data.{field}' from {settings_path(vision_input_path)}.")

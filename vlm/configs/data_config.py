@@ -89,6 +89,17 @@ class VisionInputPreprocessingConfig(ConfigBase):
         }
 
 
+class EmbeddingEncoderConfig(ConfigBase):
+    """The vision encoder that made precomputed embeddings, to encode new volumes the same way."""
+
+    class_name: str = Field(
+        description="Class in 'vlm/models/vision_encoders', e.g. 'ResEncEncoder'."
+    )
+    checkpoint_path: str = Field(
+        description="Checkpoint file or Hugging Face repository the embeddings were made with."
+    )
+
+
 class VisionInputSettings(ConfigBase):
     """
     How a dataset's vision inputs were made, saved once per dataset as
@@ -99,6 +110,9 @@ class VisionInputSettings(ConfigBase):
         description="Orientation the volumes were reoriented to, e.g. 'LPS'."
     )
     vision_input_preprocessing: VisionInputPreprocessingConfig
+    embedding_encoder: EmbeddingEncoderConfig | None = Field(
+        None, description="For embeddings: the vision encoder that made them."
+    )
 
     @model_validator(mode="after")
     def validate_vision_input_orientation(self):
@@ -143,6 +157,11 @@ class DataConfig(ConfigBase):
         None,
         description="How the vision inputs were preprocessed from the volumes; used to "
         "preprocess new volumes the same way at inference.",
+    )
+    embedding_encoder: EmbeddingEncoderConfig | None = Field(
+        None,
+        description="The vision encoder that made the embeddings ('embedding' mode); used to "
+        "encode new volumes the same way at inference.",
     )
     embed_dim: int | None = Field(
         None, description="Embedding dimension of the embeddings if using"
@@ -218,6 +237,15 @@ class DataConfig(ConfigBase):
             normalized_path = self.val_dataset_json_path.expression.strip().lower()
             if normalized_path in {"none", "null"}:
                 self.val_dataset_json_path = None
+        return self
+
+    @model_validator(mode="after")
+    def validate_embedding_encoder_is_for_embeddings(self):
+        if self.embedding_encoder is not None and self.vision_input_type == VisionInputType.IMAGE:
+            raise ValueError(
+                "'embedding_encoder' is for runs on embeddings; runs on images use "
+                "'model.vision_encoder'."
+            )
         return self
 
     @model_validator(mode="after")

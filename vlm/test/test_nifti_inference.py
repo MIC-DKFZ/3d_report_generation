@@ -11,7 +11,11 @@ from dynamic_network_architectures.architectures.primus import Primus
 from pydantic import ValidationError
 
 import inference_nifti
-from vlm.configs.data_config import DataConfig, VisionInputPreprocessingConfig
+from vlm.configs.data_config import (
+    DataConfig,
+    EmbeddingEncoderConfig,
+    VisionInputPreprocessingConfig,
+)
 from vlm.data.preprocessing import nifti_inputs
 from vlm.models.vision_encoders import nnssl, primus, resenc
 from vlm.models.vision_encoders.primus import PrimusEncoder
@@ -391,3 +395,34 @@ def test_runs_without_preprocessing_in_their_config_need_a_processing_mode():
 def test_runs_trained_on_mask_crops_need_the_masks():
     with pytest.raises(ValueError, match="--mask_dir"):
         inference_nifti.resolve_preprocessing(inference_args(), CONFIGURED, ENCODER)
+
+
+RECORDED_ENCODER = EmbeddingEncoderConfig(
+    class_name="ResEncEncoder", checkpoint_path="/models/small_resencL.pth"
+)
+
+
+def test_the_embedding_encoder_comes_from_the_run_config_and_arguments_override_it():
+    no_args = SimpleNamespace(vision_encoder=None, vision_encoder_checkpoint=None)
+    local_copy = SimpleNamespace(vision_encoder=None, vision_encoder_checkpoint="/local.pth")
+
+    assert inference_nifti.resolve_embedding_encoder(no_args, RECORDED_ENCODER) == (
+        "ResEncEncoder",
+        "/models/small_resencL.pth",
+    )
+    assert inference_nifti.resolve_embedding_encoder(local_copy, RECORDED_ENCODER) == (
+        "ResEncEncoder",
+        "/local.pth",
+    )
+    with pytest.raises(ValueError, match="--vision_encoder"):
+        inference_nifti.resolve_embedding_encoder(no_args, None)
+
+
+def test_image_runs_have_no_embedding_encoder():
+    with pytest.raises(ValidationError, match="embedding_encoder"):
+        DataConfig(
+            dataset_name="ctrate",
+            answer_types="all",
+            vision_input_type="image",
+            embedding_encoder=RECORDED_ENCODER.model_dump(),
+        )

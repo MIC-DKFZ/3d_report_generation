@@ -44,6 +44,8 @@ def script_args(**overrides):
         "enforce_min_bbox": True,
         "outlier_method": "connected_components",
         "outlier_min_voxels": 100,
+        "baseline_name": "small_resencL",
+        "checkpoint_path": "/models/small_resencL.pth",
     }
     return Namespace(**{**args, **overrides})
 
@@ -61,6 +63,8 @@ def test_single_block_embeddings_get_their_settings(embedding_script, tmp_path):
         preprocessing.roi_mask == "masks in /data/masks" and preprocessing.mask_label_ids is None
     )
     assert preprocessing.outlier_method == "connected_components"
+    assert settings.embedding_encoder.class_name == "ResEncEncoder"
+    assert settings.embedding_encoder.checkpoint_path == "/models/small_resencL.pth"
     embedding_script.save_settings(tmp_path, settings)
     assert load_settings(tmp_path) == settings
 
@@ -74,8 +78,9 @@ def test_whole_volume_embeddings_have_no_mask_settings(embedding_script):
 
     assert settings is None  # center_192crop of a 160x224x224 encoder
     settings, _ = embedding_script.vision_input_settings(
-        script_args(no_mask=True, mask_folder=None), config
+        script_args(no_mask=True, mask_folder=None, baseline_name="merlin"), config
     )
+    assert settings.embedding_encoder is None  # not an encoder of 'vlm/models/vision_encoders'
     assert settings.vision_input_preprocessing.roi_mask is None
     assert settings.vision_input_preprocessing.outlier_method == "none"
     assert settings.vision_input_preprocessing.normalization == "merlin_scale"

@@ -40,6 +40,24 @@ def test_the_run_config_is_filled_from_the_settings_file(tmp_path):
     assert data.vision_input_preprocessing == SETTINGS.vision_input_preprocessing
 
 
+def test_the_embedding_encoder_is_recorded_unless_the_file_has_none(tmp_path):
+    encoder = {"class_name": "ResEncEncoder", "checkpoint_path": "MIC-DKFZ/nnFoundationCNN"}
+    save_settings(tmp_path / "with", SETTINGS.model_copy(update={"embedding_encoder": encoder}))
+    save_settings(tmp_path / "without", SETTINGS)
+    filled = data_config(tmp_path / "with")
+    kept = data_config(tmp_path / "without", embedding_encoder=encoder)
+
+    apply_saved_settings(filled)
+    apply_saved_settings(kept)
+
+    assert filled.embedding_encoder.model_dump() == encoder
+    assert kept.embedding_encoder.model_dump() == encoder
+    with pytest.raises(ValueError, match="embedding_encoder"):
+        apply_saved_settings(
+            data_config(tmp_path / "with", embedding_encoder={**encoder, "class_name": "X"})
+        )
+
+
 def test_settings_in_the_config_must_match_the_file(tmp_path):
     save_settings(tmp_path, SETTINGS)
     matching = data_config(
