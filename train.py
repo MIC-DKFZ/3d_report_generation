@@ -38,6 +38,7 @@ from vlm.data.image_ids import collect_image_ids_from_config_dataset_jsons
 from vlm.training.parameters import count_parameters
 from vlm.training.wandb import finish_wandb, initialize_wandb
 from vlm.data.staging import stage_vision_input_to_local
+from vlm.data.vision_input_settings import apply_saved_settings
 from vlm.utils.serialization import load_config_file, save_json
 from vlm.utils.logging import setup_logger, log_banner
 from vlm.utils.memory import (
@@ -364,6 +365,8 @@ def setup_config_and_logging(
 
     cfg.apply_conditional_resets()
     cfg.resolve_dataloader_workers(is_distributed, local_world_size)
+    # Record how the vision inputs were made, before staging them changes their path.
+    apply_saved_settings(cfg.data)
 
     if is_main_process():
         save_final_config(cfg)

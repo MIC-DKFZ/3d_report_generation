@@ -9,7 +9,8 @@ from pathlib import Path
 
 import yaml
 
-from vlm.configs.data_config import VisionInputSettings
+from vlm.configs.data_config import DataConfig, VisionInputSettings
+from vlm.utils import logger
 
 SETTINGS_FILE = "vision_input_preprocessing.yml"
 
@@ -49,3 +50,34 @@ def save_settings(vision_input_path: str | Path, settings: VisionInputSettings) 
 def to_yaml(settings: VisionInputSettings) -> str:
     # JSON mode turns tuples into lists, which plain YAML can hold.
     return yaml.safe_dump(settings.model_dump(mode="json", exclude_none=False), sort_keys=False)
+
+
+def apply_saved_settings(data: DataConfig) -> None:
+    """
+    Fill 'vision_input_orientation' and 'vision_input_preprocessing' of the run config from the
+    settings file in 'vision_input_path', so that they are saved with the run. Settings set in
+    the config must match the file.
+    """
+    if data.text_only or data.vision_input_path is None:
+        return
+    vision_input_path = data.vision_input_path.get_resolved_path()
+    settings = load_settings(vision_input_path)
+    if settings is None:
+        logger.warning_main(
+            f"No {SETTINGS_FILE} in {vision_input_path}: the run config records how the vision "
+            "inputs were preprocessed only if 'data.vision_input_orientation' and "
+            "'data.vision_input_preprocessing' are set by hand (needed for inference on new "
+            "volumes)."
+        )
+        return
+    for field in ("vision_input_orientation", "vision_input_preprocessing"):
+        configured, saved = getattr(data, field), getattr(settings, field)
+        if configured is None:
+            setattr(data, field, saved)
+            logger.info_main(f"Set 'data.{field}' from {settings_path(vision_input_path)}.")
+        elif configured != saved:
+            raise ValueError(
+                f"'data.{field}' of the config ({configured}) differs from the one the vision "
+                f"inputs were made with, in {settings_path(vision_input_path)} ({saved}). Remove "
+                "it from the config to use the file."
+            )
