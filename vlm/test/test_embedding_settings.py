@@ -88,7 +88,7 @@ def test_whole_volume_embeddings_have_no_mask_settings(embedding_script):
 
 @pytest.mark.parametrize(
     "overrides, reason",
-    [({"orientation": None}, "--orientation"), ({"grid": [2, 2, 2]}, "multi-block")],
+    [({"grid": [2, 2, 2]}, "multi-block")],
 )
 def test_embeddings_without_settings_say_why(embedding_script, overrides, reason):
     config = embedding_script.get_model_config("big_primus")
@@ -96,3 +96,58 @@ def test_embeddings_without_settings_say_why(embedding_script, overrides, reason
     settings, why = embedding_script.vision_input_settings(script_args(**overrides), config)
 
     assert settings is None and reason in why
+
+
+def test_single_block_input_is_the_reoriented_encoder_input(embedding_script, tmp_path):
+    from dataclasses import replace
+
+    import numpy as np
+    import SimpleITK as sitk
+    import torch
+
+    from vlm.data.preprocessing.encoder_input import preprocess_encoder_input
+
+    rng = np.random.default_rng(0)
+    image = sitk.GetImageFromArray(rng.normal(size=(20, 24, 28)).astype(np.float32))
+    image.SetSpacing((1.5, 1.2, 2.0))
+    image.SetDirection((-1, 0, 0, 0, -1, 0, 0, 0, 1))  # RAS, so LPS flips two axes
+    mask_array = np.zeros((20, 24, 28), dtype=np.uint8)
+    mask_array[4:15, 3:12, 10:25] = 1
+    mask = sitk.GetImageFromArray(mask_array)
+    mask.CopyInformation(image)
+    sitk.WriteImage(image, str(tmp_path / "image.nii.gz"))
+    sitk.WriteImage(mask, str(tmp_path / "mask.nii.gz"))
+    config = replace(
+        embedding_script.BaselineConfig(), patch_size=(16, 16, 16), spacing=(1.0, 1.0, 1.0)
+    )
+
+    tensor, layout = embedding_script.preprocess_image(
+        str(tmp_path / "image.nii.gz"),
+        str(tmp_path / "mask.nii.gz"),
+        config,
+        orientation="LPS",
+        processing_mode="resized",
+        mask_label_ids=[],
+    )
+
+    expected = preprocess_encoder_input(
+        sitk.DICOMOrient(sitk.ReadImage(str(tmp_path / "image.nii.gz")), "LPS"),
+        sitk.DICOMOrient(sitk.ReadImage(str(tmp_path / "mask.nii.gz")), "LPS"),
+        target_spacing=(1.0, 1.0, 1.0),
+        normalization="z_score",
+        input_shape=(16, 16, 16),
+        processing_mode="resized",
+        outlier_min_voxels=100,
+    )
+    unoriented = preprocess_encoder_input(
+        image,
+        mask,
+        target_spacing=(1.0, 1.0, 1.0),
+        normalization="z_score",
+        input_shape=(16, 16, 16),
+        processing_mode="resized",
+        outlier_min_voxels=100,
+    )
+    assert layout is None
+    assert torch.equal(tensor, expected)
+    assert not torch.equal(tensor, unoriented)
