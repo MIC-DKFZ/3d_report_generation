@@ -161,6 +161,9 @@ class UnifiedVLMInference:
                 )
 
         if self.is_distributed:
+            # Generation can leave the GPU almost full in cached blocks, and the gather needs
+            # GPU memory: NCCL then fails with "unhandled cuda error".
+            torch.cuda.empty_cache()
             all_results = gather_inference_outputs(local_results=results, main_rank=0)
         else:
             all_results = results
