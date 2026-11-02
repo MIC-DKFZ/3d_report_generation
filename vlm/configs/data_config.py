@@ -89,6 +89,23 @@ class VisionInputPreprocessingConfig(ConfigBase):
         }
 
 
+class VisionInputSettings(ConfigBase):
+    """
+    How a dataset's vision inputs were made, saved once per dataset as
+    '<vision_input_path>/vision_input_preprocessing.yml' by the scripts that make them.
+    """
+
+    vision_input_orientation: str = Field(
+        description="Orientation the volumes were reoriented to, e.g. 'LPS'."
+    )
+    vision_input_preprocessing: VisionInputPreprocessingConfig
+
+    @model_validator(mode="after")
+    def validate_vision_input_orientation(self):
+        self.vision_input_orientation = validate_orientation(self.vision_input_orientation)
+        return self
+
+
 class DataConfig(ConfigBase):
     """
     Dataset configuration.
