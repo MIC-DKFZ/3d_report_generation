@@ -114,8 +114,8 @@ def prepare_image_input(
         raise ValueError(
             f"Image {path} has shape {image.shape}, but image mode expects encoder inputs of "
             f"shape {tuple(patch_size)} or (1, *{tuple(patch_size)}). Preprocess the images "
-            "into encoder inputs before training, with 'preprocess_encoder_input' "
-            "(vlm/data/preprocessing/encoder_input.py)."
+            "into encoder inputs before training, e.g. with "
+            "'python -m vlm.data.preprocessing.prepare_image_inputs'."
         )
     if image_transforms is not None:
         image = image_transforms(image=torch.from_numpy(image))["image"].numpy()

@@ -17,6 +17,17 @@ class EmbeddingTransformClassConfig(RecursiveFindClassConfigBase):
     folder_to_search = "vlm.data.embedding_transforms"
 
 
+def validate_orientation(orientation: str) -> str:
+    """The upper-cased orientation code, e.g. 'LPS', naming one of L/R, A/P and S/I each."""
+    code = orientation.upper()
+    if len(code) != 3 or any(len(set(code) & set(pair)) != 1 for pair in ("LR", "AP", "SI")):
+        raise ValueError(
+            f"'vision_input_orientation' must name one of L/R, A/P and S/I each, e.g. 'LPS', "
+            f"not {code!r}."
+        )
+    return code
+
+
 class VisionInputPreprocessingConfig(ConfigBase):
     """
     How the vision inputs (images or the volumes of the embeddings) were made from the CT
@@ -194,17 +205,8 @@ class DataConfig(ConfigBase):
 
     @model_validator(mode="after")
     def validate_vision_input_orientation(self):
-        if self.vision_input_orientation is None:
-            return self
-        orientation = self.vision_input_orientation.upper()
-        if len(orientation) != 3 or any(
-            len(set(orientation) & set(pair)) != 1 for pair in ("LR", "AP", "SI")
-        ):
-            raise ValueError(
-                f"'vision_input_orientation' must name one of L/R, A/P and S/I each, e.g. 'LPS', "
-                f"not {orientation!r}."
-            )
-        self.vision_input_orientation = orientation
+        if self.vision_input_orientation is not None:
+            self.vision_input_orientation = validate_orientation(self.vision_input_orientation)
         return self
 
     @model_validator(mode="after")

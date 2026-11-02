@@ -91,7 +91,7 @@ def test_images_not_of_the_encoder_input_shape_are_rejected(tmp_path, shape):
     path = tmp_path / "image.npy"
     np.save(path, np.zeros(shape, dtype=np.float32))
 
-    with pytest.raises(ValueError, match="preprocess_encoder_input"):
+    with pytest.raises(ValueError, match="prepare_image_inputs"):
         load_image(path)
 
 
