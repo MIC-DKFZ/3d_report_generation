@@ -3,13 +3,16 @@ Generate reports for a folder of NIfTI volumes with a trained run.
 
 Unlike 'inference.py', which runs on the dataset of the run's config, this script takes any
 folder of (nested) NIfTI files. Each volume is reoriented to 'data.vision_input_orientation',
-preprocessed like the volumes of the training embeddings, encoded by the frozen vision encoder and
-passed to the trained model, so the model receives the same kind of embedding as in training.
+preprocessed like the training inputs, encoded by the vision encoder and passed to the trained
+model, so the model receives the same kind of input as in training.
 
-The encoder and the dataset-specific preprocessing (ROI masks, processing mode) are not part of
-the run's config, since the run was trained on precomputed embeddings; pass them as arguments.
-Dotted config overrides are accepted as in 'inference.py', e.g.
-'--data.vision_input_orientation LPS' for runs whose config does not set it.
+The preprocessing comes from 'data.vision_input_preprocessing' of the run's config; arguments
+override it, and runs without it need at least '--processing_mode' (spacing and normalization
+then default to those of the encoder's pre-training). Runs trained on images ('image' mode)
+encode with their own vision encoder, as in training; runs trained on precomputed embeddings
+need the encoder that made them ('--vision_encoder', '--vision_encoder_checkpoint'). Dotted
+config overrides are accepted as in 'inference.py', e.g. '--data.vision_input_orientation LPS'
+for runs whose config does not set it.
 """
 
 import argparse
@@ -19,24 +22,43 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from vlm.configs.data_config import VisionInputPreprocessingConfig
 from vlm.configs.model.vision_encoder_config import VisionEncoderClassConfig
 from vlm.data.batches import extract_batch_prompt_only
 from vlm.data.datasets.base import QUESTION, SYSTEM_TEXT, format_into_message
-from vlm.data.preprocessing.encoder_input import PROCESSING_MODES
+from vlm.data.preprocessing.encoder_input import (
+    NORMALIZATIONS,
+    OUTLIER_METHODS,
+    PROCESSING_MODES,
+)
 from vlm.data.preprocessing.nifti_inputs import (
     NiftiEncoderInputDataset,
     collate_samples,
     find_nifti_files,
 )
+from vlm.data.types import VisionInputType
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
+from vlm.models.vision_encoders.base import VisionEncoderBase
 from vlm.training.checkpointing import save_final_config
 from vlm.utils import logger
+from vlm.utils.classes import getattr_nested
 from vlm.utils.decoding import decode_generated_answers, strip_thinking
 from vlm.utils.logging import log_banner, setup_logger
 from vlm.utils.paths import resolve_run_dir
 from vlm.utils.run_naming import add_datetime_tag
 from vlm.utils.seeding import seed_everything
 from vlm.utils.serialization import save_json
+
+# The settings of 'preprocess_encoder_input' besides the input shape.
+PREPROCESSING_FIELDS = (
+    "target_spacing",
+    "normalization",
+    "processing_mode",
+    "mask_label_ids",
+    "enforce_min_bbox",
+    "outlier_method",
+    "outlier_min_voxels",
+)
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -70,61 +92,48 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Output folder. Defaults to '<checkpoint_dir>/inference_nifti_<input_dir name>'.",
     )
 
-    encoder = parser.add_argument_group("vision encoder of the training embeddings")
+    encoder = parser.add_argument_group(
+        "vision encoder of the training embeddings (runs trained on images use their own)"
+    )
     encoder.add_argument(
         "--vision_encoder",
-        default="PrimusEncoder",
-        help="Class name in 'vlm/models/vision_encoders': 'PrimusEncoder' (nnFoundationViT) or "
-        "'ResEncEncoder' (nnFoundationCNN).",
+        default=None,
+        help="Class name in 'vlm/models/vision_encoders': 'PrimusEncoder' (nnFoundationViT, "
+        "the default) or 'ResEncEncoder' (nnFoundationCNN).",
     )
     encoder.add_argument(
         "--vision_encoder_checkpoint",
-        required=True,
+        default=None,
         help="Checkpoint file or Hugging Face repository, e.g. 'MIC-DKFZ/nnFoundationViT' or "
         "'MIC-DKFZ/nnFoundationCNN'.",
     )
 
-    preprocessing = parser.add_argument_group(
-        "preprocessing, as used for the training embeddings (see embedd_images_baselines.py)"
-    )
-    preprocessing.add_argument(
-        "--processing_mode",
-        choices=PROCESSING_MODES,
-        required=True,
-        help="Resize the ROI to the encoder input shape, or center crop/pad it.",
-    )
-    preprocessing.add_argument(
-        "--target_spacing",
-        type=float,
-        nargs=3,
-        default=None,
-        metavar=("Z", "Y", "X"),
-        help="Resample to this spacing in mm, for embeddings made with resampling. Defaults to "
-        "the spacing of the encoder's pre-training (none for nnFoundationViT).",
-    )
-    preprocessing.add_argument(
+    parser.add_argument(
         "--mask_dir",
         type=Path,
         default=None,
-        help="ROI masks with the same relative paths as the volumes. Without, the whole volume.",
+        help="ROI masks with the same relative paths as the volumes, needed if the run's inputs "
+        "were cropped to a mask ('data.vision_input_preprocessing.roi_mask').",
     )
+    preprocessing = parser.add_argument_group(
+        "preprocessing; overrides 'data.vision_input_preprocessing' of the run's config"
+    )
+    preprocessing.add_argument("--processing_mode", choices=PROCESSING_MODES, default=None)
     preprocessing.add_argument(
-        "--mask_label_ids",
-        type=int,
-        nargs="+",
-        default=None,
-        help="Mask labels of the ROI; all non-zero labels by default.",
+        "--target_spacing", type=float, nargs=3, default=None, metavar=("Z", "Y", "X")
     )
+    preprocessing.add_argument("--normalization", choices=NORMALIZATIONS, default=None)
+    preprocessing.add_argument("--mask_label_ids", type=int, nargs="+", default=None)
     preprocessing.add_argument(
         "--no_enforce_min_bbox",
         dest="enforce_min_bbox",
-        action="store_false",
+        action="store_const",
+        const=False,
+        default=None,
         help="Do not enlarge the ROI to at least the encoder input shape.",
     )
-    preprocessing.add_argument(
-        "--outlier_method", choices=["none", "connected_components"], default="none"
-    )
-    preprocessing.add_argument("--outlier_min_voxels", type=int, default=400)
+    preprocessing.add_argument("--outlier_method", choices=OUTLIER_METHODS, default=None)
+    preprocessing.add_argument("--outlier_min_voxels", type=int, default=None)
 
     prompt = parser.add_argument_group("prompt; defaults to the one of the dataset JSONs")
     prompt.add_argument("--question", default=QUESTION)
@@ -133,6 +142,49 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--batch_size", type=int, default=1, help="Volumes per batch.")
     parser.add_argument("--num_workers", type=int, default=2, help="Preprocessing workers.")
     return parser.parse_known_args()
+
+
+def resolve_preprocessing(
+    args: argparse.Namespace,
+    configured: VisionInputPreprocessingConfig | None,
+    encoder: VisionEncoderBase,
+) -> tuple[VisionInputPreprocessingConfig, dict[str, str]]:
+    """
+    The preprocessing and where each setting comes from: the arguments, else the run's config,
+    else (for runs without 'data.vision_input_preprocessing') the encoder's pre-training for the
+    spacing and normalization and the defaults for the mask settings.
+    """
+    values, sources = {}, {}
+    for name in PREPROCESSING_FIELDS:
+        if getattr(args, name) is not None:
+            values[name], sources[name] = getattr(args, name), "argument"
+        elif configured is not None:
+            values[name], sources[name] = getattr(configured, name), "run config"
+        elif name in ("target_spacing", "normalization"):
+            values[name], sources[name] = getattr(encoder, name), "encoder"
+        elif name == "processing_mode":
+            raise ValueError(
+                "The run's config does not set 'data.vision_input_preprocessing'; pass at least "
+                "'--processing_mode', as used for the training inputs."
+            )
+        else:
+            values[name] = VisionInputPreprocessingConfig.model_fields[name].default
+            sources[name] = "default"
+    if configured is not None:
+        roi_mask = configured.roi_mask
+    else:
+        roi_mask = None if args.mask_dir is None else f"masks in {args.mask_dir}"
+
+    if roi_mask is not None and args.mask_dir is None:
+        raise ValueError(
+            f"The run's inputs were cropped to an ROI mask ({roi_mask}); pass the masks of the "
+            "volumes with '--mask_dir'."
+        )
+    if configured is not None and roi_mask is None and args.mask_dir is not None:
+        logger.warning(
+            "The run's inputs were whole volumes, but '--mask_dir' crops the volumes to masks."
+        )
+    return VisionInputPreprocessingConfig(roi_mask=roi_mask, **values), sources
 
 
 def main(args: argparse.Namespace, config_cli_args: list[str]):
@@ -158,32 +210,45 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
         )
     question, system_text = args.question, args.system_text
 
-    # In float32: the embeddings of nnFoundationViT in bfloat16 differ by ~12% from float32.
-    encoder = (
-        VisionEncoderClassConfig(
-            class_name=args.vision_encoder, checkpoint_path=args.vision_encoder_checkpoint
+    image_mode = cfg.data.vision_input_type == VisionInputType.IMAGE
+    if image_mode:
+        # Encoded inside the model by the run's (possibly fine-tuned) encoder, as in training.
+        if args.vision_encoder or args.vision_encoder_checkpoint:
+            raise ValueError(
+                "The run was trained on images and encodes them with its own vision encoder; "
+                "do not pass '--vision_encoder' or '--vision_encoder_checkpoint'."
+            )
+        encoder = getattr_nested(vlm_model.model, vlm_model.module_attr_map["vision_encoder"])
+        encoder_name = f"the run's {cfg.model.vision_encoder.class_name}"
+        input_shape = cfg.model.vision_encoder.patch_size or encoder.patch_size
+    else:
+        if args.vision_encoder_checkpoint is None:
+            raise ValueError(
+                "The run was trained on precomputed embeddings; pass the encoder that made them "
+                "with '--vision_encoder' and '--vision_encoder_checkpoint'."
+            )
+        encoder_name = args.vision_encoder or "PrimusEncoder"
+        # In float32: the embeddings of nnFoundationViT in bfloat16 differ by ~12% from float32.
+        encoder = (
+            VisionEncoderClassConfig(
+                class_name=encoder_name, checkpoint_path=args.vision_encoder_checkpoint
+            )
+            .to_instance()
+            .cuda()
+            .eval()
         )
-        .to_instance()
-        .cuda()
-        .eval()
+        input_shape = encoder.patch_size
+    preprocessing, sources = resolve_preprocessing(
+        args, cfg.data.vision_input_preprocessing, encoder
     )
-    preprocessing_kwargs = {
-        "target_spacing": tuple(args.target_spacing or ()) or encoder.target_spacing,
-        "normalization": encoder.normalization,
-        "input_shape": encoder.patch_size,
-        "processing_mode": args.processing_mode,
-        "mask_label_ids": args.mask_label_ids,
-        "enforce_min_bbox": args.enforce_min_bbox,
-        "outlier_method": args.outlier_method,
-        "outlier_min_voxels": args.outlier_min_voxels,
-    }
+    preprocessing_kwargs = preprocessing.preprocessing_kwargs(input_shape)
     files = find_nifti_files(input_dir)
     if not files:
         raise FileNotFoundError(f"No NIfTI files found in {input_dir}")
     logger.info_main(
         f"Generating reports for {len(files)} volumes in {input_dir}: reoriented to "
-        f"{orientation}, preprocessed with {preprocessing_kwargs}, encoded by "
-        f"{args.vision_encoder}. Prompt: {question!r}"
+        f"{orientation}, preprocessed with {preprocessing_kwargs} (from: {sources}), encoded "
+        f"by {encoder_name}. Prompt: {question!r}"
     )
     loader = DataLoader(
         NiftiEncoderInputDataset(
@@ -195,7 +260,7 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
     )
 
     model = vlm_model.model.cuda().eval()
-    expected_shape = (cfg.data.embed_dim, *cfg.data.embed_size)
+    expected_shape = None if image_mode else (cfg.data.embed_dim, *cfg.data.embed_size)
     results, failed = [], []
     with torch.inference_mode():
         for samples in tqdm(loader):
@@ -207,16 +272,20 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
             if not samples:
                 continue
 
-            encoder_inputs = torch.stack([s["encoder_input"] for s in samples])
-            embeddings = encoder(encoder_inputs.cuda()).cpu()
-            if tuple(embeddings.shape[1:]) != expected_shape:
-                raise ValueError(
-                    f"{args.vision_encoder} gives embeddings of shape "
-                    f"{tuple(embeddings.shape[1:])}, but the run was trained on {expected_shape}."
-                )
+            if image_mode:
+                vision_inputs = [s["encoder_input"] for s in samples]
+            else:
+                encoder_inputs = torch.stack([s["encoder_input"] for s in samples])
+                vision_inputs = encoder(encoder_inputs.cuda()).cpu()
+                if tuple(vision_inputs.shape[1:]) != expected_shape:
+                    raise ValueError(
+                        f"{encoder_name} gives embeddings of shape "
+                        f"{tuple(vision_inputs.shape[1:])}, but the run was trained on "
+                        f"{expected_shape}."
+                    )
 
             examples = []
-            for sample, embedding in zip(samples, embeddings):
+            for sample, vision_input in zip(samples, vision_inputs):
                 formatted_qa, formatted_qa_prompt_only = format_into_message(
                     question, "", system_text
                 )
@@ -229,7 +298,7 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
                         "answer_subtype": None,
                         "formatted_qa": formatted_qa,
                         "formatted_qa_prompt_only": formatted_qa_prompt_only,
-                        "vision_input": embedding.numpy(),
+                        "vision_input": vision_input.numpy(),
                     }
                 )
             inputs = vlm_model.collate_fn(examples)
@@ -260,10 +329,12 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
             "checkpoint_dir": str(ckpt_dir),
             "input_dir": str(input_dir),
             "vision_input_orientation": orientation,
-            "vision_encoder": args.vision_encoder,
+            "vision_encoder": encoder_name,
             "vision_encoder_checkpoint": args.vision_encoder_checkpoint,
             "mask_dir": None if args.mask_dir is None else str(args.mask_dir),
+            "roi_mask": preprocessing.roi_mask,
             "preprocessing": preprocessing_kwargs,
+            "preprocessing_sources": sources,
             "question": question,
             "system_text": system_text,
             "failed": failed,

@@ -1,6 +1,7 @@
 """Reorientation, preprocessing and encoding of NIfTI volumes for inference on new images."""
 
 import contextlib
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -9,7 +10,8 @@ import torch
 from dynamic_network_architectures.architectures.primus import Primus
 from pydantic import ValidationError
 
-from vlm.configs.data_config import DataConfig
+import inference_nifti
+from vlm.configs.data_config import DataConfig, VisionInputPreprocessingConfig
 from vlm.data.preprocessing import nifti_inputs
 from vlm.models.vision_encoders import nnssl, primus, resenc
 from vlm.models.vision_encoders.primus import PrimusEncoder
@@ -344,3 +346,48 @@ def test_nested_volumes_use_their_masks_and_failures_are_reported(tmp_path):
     roi = torch.from_numpy(array[2:10, 2:10, 2:10])
     expected = ((roi - roi.mean()) / roi.std(correction=0))[None]
     torch.testing.assert_close(scan["encoder_input"], expected)
+
+
+def inference_args(**overrides):
+    args = dict.fromkeys(inference_nifti.PREPROCESSING_FIELDS)
+    return SimpleNamespace(**{**args, "mask_dir": None, **overrides})
+
+
+ENCODER = SimpleNamespace(target_spacing=(2.0, 1.0, 1.0), normalization="z_score")
+CONFIGURED = VisionInputPreprocessingConfig(
+    processing_mode="center_crop", roi_mask="lungs", mask_label_ids=[1], target_spacing=None
+)
+
+
+def test_preprocessing_comes_from_the_run_config_and_arguments_override_it(tmp_path):
+    args = inference_args(mask_dir=tmp_path, outlier_min_voxels=10)
+
+    preprocessing, sources = inference_nifti.resolve_preprocessing(args, CONFIGURED, ENCODER)
+
+    # The run config's 'target_spacing: null' means no resampling, not the encoder's spacing.
+    assert preprocessing.target_spacing is None and sources["target_spacing"] == "run config"
+    assert preprocessing.processing_mode == "center_crop"
+    assert preprocessing.mask_label_ids == [1] and preprocessing.roi_mask == "lungs"
+    assert preprocessing.outlier_min_voxels == 10 and sources["outlier_min_voxels"] == "argument"
+
+
+def test_runs_without_preprocessing_in_their_config_use_the_encoder_and_defaults():
+    args = inference_args(processing_mode="resized")
+
+    preprocessing, sources = inference_nifti.resolve_preprocessing(args, None, ENCODER)
+
+    assert (
+        preprocessing.target_spacing == (2.0, 1.0, 1.0) and sources["target_spacing"] == "encoder"
+    )
+    assert preprocessing.roi_mask is None and preprocessing.enforce_min_bbox
+    assert sources["processing_mode"] == "argument" and sources["enforce_min_bbox"] == "default"
+
+
+def test_runs_without_preprocessing_in_their_config_need_a_processing_mode():
+    with pytest.raises(ValueError, match="--processing_mode"):
+        inference_nifti.resolve_preprocessing(inference_args(), None, ENCODER)
+
+
+def test_runs_trained_on_mask_crops_need_the_masks():
+    with pytest.raises(ValueError, match="--mask_dir"):
+        inference_nifti.resolve_preprocessing(inference_args(), CONFIGURED, ENCODER)
