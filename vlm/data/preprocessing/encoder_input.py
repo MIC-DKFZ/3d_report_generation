@@ -1,6 +1,6 @@
 """
 Preprocessing of CT volumes into vision encoder inputs, shared by the embedding generation
-(vlm/public_scripts/embeddings/generate_embeddings.py) and the inference on NIfTI images.
+(vlm/scripts/embeddings/generate_embeddings.py) and the inference on NIfTI images.
 
 Single-block pipeline per volume: normalize → resample to the encoder spacing, if it has one →
 crop to the mask ROI (bounding box expanded by 4%) → normalize again → fit to the encoder input

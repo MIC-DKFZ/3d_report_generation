@@ -434,7 +434,7 @@ def test_image_runs_have_no_embedding_encoder():
 
 
 def load_embedding_script():
-    path = Path(__file__).resolve().parents[1] / "public_scripts/embeddings/generate_embeddings.py"
+    path = Path(__file__).resolve().parents[1] / "scripts/embeddings/generate_embeddings.py"
     spec = importlib.util.spec_from_file_location("generate_embeddings", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

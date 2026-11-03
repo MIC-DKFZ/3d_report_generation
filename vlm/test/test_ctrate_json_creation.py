@@ -2,7 +2,7 @@ import unittest
 
 from vlm.data.preprocessing.ctrate import format_report
 from vlm.data.preprocessing.datasets import CTRATEDatasetPreprocessor
-from vlm.public_scripts.datasets.ctrate.ctrate_utils import format_report_v1
+from vlm.scripts.datasets.ctrate.ctrate_utils import format_report_v1
 
 
 class TestCTRATEJSONCreation(unittest.TestCase):

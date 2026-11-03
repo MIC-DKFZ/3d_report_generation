@@ -1,6 +1,6 @@
 """Report formatting of the v1 Merlin dataset JSONs, against the v2 one."""
 
-from vlm.public_scripts.datasets.merlin.merlin_utils import (
+from vlm.scripts.datasets.merlin.merlin_utils import (
     standardize_entry_v1,
     standardize_entry_v2,
 )

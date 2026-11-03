@@ -11,7 +11,7 @@ import sys
 import pandas as pd
 import pytest
 
-PUBLIC_ROOT = Path(__file__).resolve().parents[1] / "public_scripts"
+PUBLIC_ROOT = Path(__file__).resolve().parents[1] / "scripts"
 RAW_REPORT = "  FINDINGS: normal   lungs .\n1. No change .\n2. Follow-up ; advised .  "
 FORMATTED = "FINDINGS: normal lungs.\nIMPRESSION:\nNo change.\nFollow-up; advised."
 
@@ -41,7 +41,7 @@ def read_json(path):
 USES_VLM = {"embeddings/generate_embeddings.py"}
 
 
-def test_public_scripts_have_no_vlm_imports_or_absolute_source_paths():
+def test_scripts_have_no_vlm_imports_or_absolute_source_paths():
     for path in PUBLIC_ROOT.rglob("*.py"):
         assert "/home/j385i" not in path.read_text()
         if path.relative_to(PUBLIC_ROOT).as_posix() in USES_VLM:

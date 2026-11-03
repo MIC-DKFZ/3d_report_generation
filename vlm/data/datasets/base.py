@@ -17,7 +17,7 @@ from vlm.data.types import VisionInputType
 
 from .vision import load_vision_input
 
-# The prompt of all CT-RATE and Merlin dataset JSONs (vlm/public_scripts/datasets).
+# The prompt of all CT-RATE and Merlin dataset JSONs (vlm/scripts/datasets).
 QUESTION = "Generate a detailed report and diagnosis for this CT scan."
 SYSTEM_TEXT = "You are a medical imaging AI trained to analyze CT scans."
 

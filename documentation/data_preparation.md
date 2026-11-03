@@ -17,9 +17,9 @@ For [CT-RATE](https://huggingface.co/datasets/ibrahimhamamci/CT-RATE), the datas
 `radiology_text_reports/validation_reports.csv` under the source dataset root.
 
 ```bash
-uv run vlm/public_scripts/datasets/ctrate/create_dataset_jsons_v1.py \
+uv run vlm/scripts/datasets/ctrate/create_dataset_jsons_v1.py \
   --dataset-path /path/to/CT-RATE/dataset --output-dir /path/to/dataset_jsons/CTRATE
-uv run vlm/public_scripts/datasets/ctrate/create_dataset_jsons_v2.py \
+uv run vlm/scripts/datasets/ctrate/create_dataset_jsons_v2.py \
   --dataset-path /path/to/CT-RATE/dataset --output-dir /path/to/dataset_jsons/CTRATE
 ```
 
@@ -27,9 +27,9 @@ For the [Merlin Abdominal CT Dataset](https://stanford.redivis.com/datasets/exfv
 the dataset JSON generators expect the original `reports_final.xlsx` spreadsheet.
 
 ```bash
-uv run vlm/public_scripts/datasets/merlin/create_dataset_jsons_v1.py \
+uv run vlm/scripts/datasets/merlin/create_dataset_jsons_v1.py \
   --reports-xlsx /path/to/reports_final.xlsx --output-dir /path/to/dataset_jsons/MERLIN
-uv run vlm/public_scripts/datasets/merlin/create_dataset_jsons_v2.py \
+uv run vlm/scripts/datasets/merlin/create_dataset_jsons_v2.py \
   --reports-xlsx /path/to/reports_final.xlsx --output-dir /path/to/dataset_jsons/MERLIN
 ```
 
@@ -46,7 +46,7 @@ and adds the remaining source validation studies to training.
 ## Embeddings and paths
 
 Training requires precomputed vision embeddings. Generate them with
-[`generate_embeddings.py`](../vlm/public_scripts/embeddings/generate_embeddings.py): the
+[`generate_embeddings.py`](../vlm/scripts/embeddings/generate_embeddings.py): the
 nnFoundationViT and nnFoundationCNN features of the nnFoundation configs, and the single-block
 Primus features of the RMR configs. See [RMR embeddings](rmr_embeddings.md) for all features the
 RMR configs expect.
@@ -60,15 +60,15 @@ for Merlin, run TotalSegmentator on the volumes. The encoders are downloaded fro
 (`--checkpoint` takes a local file instead).
 
 ```bash
-uv run python vlm/public_scripts/embeddings/generate_embeddings.py \
+uv run python vlm/scripts/embeddings/generate_embeddings.py \
   --embedding nnFoundationViT --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
   --mask_dir /path/to/CT-RATE/dataset/ts_seg/ts_total \
   --output_dir "${VLM_EMBEDS}/CTRATE_nnFoundationViT"
-uv run python vlm/public_scripts/embeddings/generate_embeddings.py \
+uv run python vlm/scripts/embeddings/generate_embeddings.py \
   --embedding nnFoundationViT --dataset merlin \
   --input_dir /path/to/merlin_data --mask_dir /path/to/totalsegmentator_masks \
   --output_dir "${VLM_EMBEDS}/MERLIN_nnFoundationViT"
-uv run python vlm/public_scripts/embeddings/generate_embeddings.py \
+uv run python vlm/scripts/embeddings/generate_embeddings.py \
   --embedding Primus-1B_Whole --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
   --output_dir "${VLM_EMBEDS}/CTRATE_Primus-1B_Whole"
 ```
