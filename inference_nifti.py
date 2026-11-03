@@ -15,12 +15,16 @@ encode with the encoder that made them, 'data.embedding_encoder' of the config (
 the dataset's 'vision_input_preprocessing.yml', if it has one. Dotted config overrides are
 accepted as in 'inference.py', e.g. '--data.vision_input_orientation LPS' for runs whose config
 does not set it.
+
+Launched with torchrun, e.g. 'torchrun --standalone --nproc_per_node=4 inference_nifti.py ...',
+the volumes are split across the GPUs and rank 0 saves the reports of all of them.
 """
 
 import argparse
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -47,6 +51,7 @@ from vlm.models.vision_encoders.base import VisionEncoderBase
 from vlm.training.checkpointing import save_final_config
 from vlm.utils import logger
 from vlm.utils.classes import getattr_nested
+from vlm.utils.ddp import gather_inference_outputs, is_main_process, setup_ddp
 from vlm.utils.decoding import decode_generated_answers, strip_thinking
 from vlm.utils.logging import log_banner, setup_logger
 from vlm.utils.paths import resolve_run_dir
@@ -210,6 +215,7 @@ def resolve_embedding_encoder(
 
 
 def main(args: argparse.Namespace, config_cli_args: list[str]):
+    is_distributed, rank, world_size, _, _ = setup_ddp()
     seed_everything(0)
     if args.run_dir:
         vlm_model, cfg, ckpt_dir = AbstractVLWrapper.load_from_run_dir(
@@ -222,7 +228,11 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
 
     input_dir = args.input_dir.resolve()
     output_dir = args.output_dir or Path(ckpt_dir, f"inference_nifti_{input_dir.name}")
-    setup_logger(Path(output_dir, add_datetime_tag("inference_nifti") + ".log"))
+    # All ranks log to the file named with rank 0's timestamp, as in 'inference.py'.
+    log_file_names = [add_datetime_tag("inference_nifti") + ".log" if is_main_process() else None]
+    if is_distributed:
+        dist.broadcast_object_list(log_file_names, src=0)
+    setup_logger(Path(output_dir, log_file_names[0]))
 
     orientation = cfg.data.vision_input_orientation
     if orientation is None:
@@ -262,13 +272,14 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
     if not files:
         raise FileNotFoundError(f"No NIfTI files found in {input_dir}")
     logger.info_main(
-        f"Generating reports for {len(files)} volumes in {input_dir}: reoriented to "
-        f"{orientation}, preprocessed with {preprocessing_kwargs} (from: {sources}), encoded "
-        f"by {encoder_name}. Prompt: {question!r}"
+        f"Generating reports for {len(files)} volumes in {input_dir} on {world_size} GPU(s): "
+        f"reoriented to {orientation}, preprocessed with {preprocessing_kwargs} (from: "
+        f"{sources}), encoded by {encoder_name}. Prompt: {question!r}"
     )
+    # Each rank takes every 'world_size'-th volume.
     loader = DataLoader(
         NiftiEncoderInputDataset(
-            input_dir, files, orientation, args.mask_dir, preprocessing_kwargs
+            input_dir, files[rank::world_size], orientation, args.mask_dir, preprocessing_kwargs
         ),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -279,7 +290,7 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
     expected_shape = None if image_mode else (cfg.data.embed_dim, *cfg.data.embed_size)
     results, failed = [], []
     with torch.inference_mode():
-        for samples in tqdm(loader):
+        for samples in tqdm(loader, disable=not is_main_process()):
             for sample in samples:
                 if sample["error"] is not None:
                     logger.error(f"Skipped {sample['path']}: {sample['error']}")
@@ -339,28 +350,43 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
             ]
             logger.info(f"{samples[0]['image_id']}:\n{reports[0]}")
 
-    save_json(results, Path(output_dir, "inference_results.json"))
-    save_json(
-        {
-            "checkpoint_dir": str(ckpt_dir),
-            "input_dir": str(input_dir),
-            "vision_input_orientation": orientation,
-            "vision_encoder": encoder_name,
-            "vision_encoder_checkpoint": checkpoint,
-            "mask_dir": None if args.mask_dir is None else str(args.mask_dir),
-            "roi_mask": preprocessing.roi_mask,
-            "preprocessing": preprocessing_kwargs,
-            "preprocessing_sources": sources,
-            "question": question,
-            "system_text": system_text,
-            "failed": failed,
-        },
-        Path(output_dir, "inference_nifti_settings.json"),
-    )
-    save_final_config(cfg, output_dir=output_dir)
-    if failed:
-        logger.warning(f"Skipped {len(failed)} of {len(files)} volumes, see the settings file.")
-    log_banner(f"Saved {len(results)} reports to {output_dir}")
+    if is_distributed:
+        # Generation can leave the GPU almost full in cached blocks, and the gather needs
+        # GPU memory: NCCL then fails with "unhandled cuda error".
+        torch.cuda.empty_cache()
+        gathered = gather_inference_outputs({"results": results, "failed": failed}, main_rank=0)
+        if is_main_process():
+            results, failed = gathered["results"], gathered["failed"]
+    if is_main_process():
+        results.sort(key=lambda r: r["image_id"])
+        failed.sort(key=lambda f: f["image_id"])
+        save_json(results, Path(output_dir, "inference_results.json"))
+        save_json(
+            {
+                "checkpoint_dir": str(ckpt_dir),
+                "input_dir": str(input_dir),
+                "vision_input_orientation": orientation,
+                "vision_encoder": encoder_name,
+                "vision_encoder_checkpoint": checkpoint,
+                "mask_dir": None if args.mask_dir is None else str(args.mask_dir),
+                "roi_mask": preprocessing.roi_mask,
+                "preprocessing": preprocessing_kwargs,
+                "preprocessing_sources": sources,
+                "question": question,
+                "system_text": system_text,
+                "failed": failed,
+            },
+            Path(output_dir, "inference_nifti_settings.json"),
+        )
+        save_final_config(cfg, output_dir=output_dir)
+        if failed:
+            logger.warning(
+                f"Skipped {len(failed)} of {len(files)} volumes, see the settings file."
+            )
+        log_banner(f"Saved {len(results)} reports to {output_dir}")
+    # The other ranks wait until rank 0 has saved the outputs.
+    if is_distributed:
+        dist.barrier()
 
 
 if __name__ == "__main__":
