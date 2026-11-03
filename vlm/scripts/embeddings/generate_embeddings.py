@@ -6,8 +6,7 @@ Generate the vision embeddings of the nnFoundation and RMR papers from CT volume
 - nnFoundation: nnFoundationViT and nnFoundationCNN, from the ROI. On CT-RATE, nnFoundationViT
   center crops the ROI and nnFoundationCNN resizes it; on Merlin, both resize it.
 - RMR: Primus-1B_ROI and Primus-1B_Whole, encoded by PrimusM-MAE as one input block, from the
-  ROI or the whole volume. On CT-RATE, Primus-1B_ROI center crops the ROI; otherwise the input
-  is resized.
+  ROI or the whole volume; both resize their input.
 
 '--dataset' selects the dataset's layout and ROI:
 - ctrate: split folders 'train_fixed' and 'valid_fixed'; the lungs (TotalSegmentator 'total'
@@ -74,7 +73,7 @@ EMBEDDINGS = {
         "encoder": PrimusEncoder,
         "checkpoint": "MIC-DKFZ/PrimusM-MAE",
         "roi": True,
-        "processing_modes": {"ctrate": "center_crop", "merlin": "resized"},
+        "processing_modes": {"ctrate": "resized", "merlin": "resized"},
     },
     "Primus-1B_Whole": {
         "encoder": PrimusEncoder,

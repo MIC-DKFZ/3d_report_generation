@@ -77,7 +77,7 @@ uv run python vlm/scripts/embeddings/generate_embeddings.py \
 | --- | --- | --- | --- | --- | --- |
 | nnFoundation | `nnFoundationViT` | [nnFoundationViT](https://huggingface.co/MIC-DKFZ/nnFoundationViT) | ROI | Center crop | Resized |
 | nnFoundation | `nnFoundationCNN` | [nnFoundationCNN](https://huggingface.co/MIC-DKFZ/nnFoundationCNN) | ROI | Resized | Resized |
-| RMR | `Primus-1B_ROI` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | ROI | Center crop | Resized |
+| RMR | `Primus-1B_ROI` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | ROI | Resized | Resized |
 | RMR | `Primus-1B_Whole` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | Whole volume | Resized | Resized |
 
 The ROI is the lungs (labels 10–14) for CT-RATE and the foreground of all labels, without
