@@ -40,7 +40,7 @@ and adds the remaining source validation studies to training.
 
 | Version | CT-RATE | Merlin |
 | --- | --- | --- |
-| v1 | Excludes scans identified as brain scans; retains impression-only reports and `Not given.` impressions; collapses repeated spaces and removes the space before periods | Excludes three duplicated study IDs (eight rows); removes an initial uppercase `FINDINGS:` header; preserves other headers, impression numbering, and line endings |
+| v1 | Excludes scans identified as brain scans; collapses repeated spaces and removes the space before periods | Excludes three duplicated study IDs (eight rows); removes an initial uppercase `FINDINGS:` header |
 | v2 | Same scan exclusions as v1, plus suspected brain scans with lung volume below 1 L measured using TotalSegmentator, and reports with missing findings | Same study exclusions as v1; normalizes line endings and places impression headers on separate lines; removes impression numbering across all splits |
 
 ## Embeddings and paths
@@ -50,6 +50,22 @@ Training requires precomputed vision embeddings. Generate them with
 nnFoundationViT and nnFoundationCNN features of the nnFoundation configs, and the single-block
 Primus features of the RMR configs. See [RMR embeddings](rmr_embeddings.md) for all features the
 RMR configs expect.
+
+The supplied configs use `${NAME}` placeholders to keep data paths portable.
+`VLM_EMBEDS`, `CTRATE_DATASET_JSONS`, and `MERLIN_DATASET_JSONS` are conventions
+used by these configs. Set whichever variables your selected config references, or replace their
+references in YAML with absolute paths or your own variable names.
+The two variables that training requires, `VLM_CONFIG_DIR` and `VLM_OUTPUT_DIR`,
+are explained in the [quick start](../README.md#quick-start).
+
+```bash
+export VLM_EMBEDS="/path/to/embeddings"
+export CTRATE_DATASET_JSONS="/path/to/dataset_jsons/CTRATE"
+export MERLIN_DATASET_JSONS="/path/to/dataset_jsons/MERLIN"
+```
+
+Set each JSON variable to the `--output-dir` used for that dataset's generator: the
+folder that contains the `<dataset>_<version>_*.json` files.
 
 `--embedding` names the features as the configs do (`${VLM_EMBEDS}/<DATASET>_<embedding>`), and
 `--dataset` selects the dataset's layout and region of interest (ROI), including CT-RATE's split
@@ -88,22 +104,6 @@ The script's docstring describes each step in detail.
 The settings are saved as `vision_input_preprocessing.yml` in the output folder. Training copies
 them into the run config, so that inference on new volumes
 ([`inference_nifti.py`](../inference_nifti.py)) preprocesses and encodes them the same way.
-
-The supplied configs use `${NAME}` placeholders to keep data paths portable.
-`VLM_EMBEDS`, `CTRATE_DATASET_JSONS`, and `MERLIN_DATASET_JSONS` are conventions
-used by these configs. Set whichever variables your selected config references, or replace their
-references in YAML with absolute paths or your own variable names.
-The two variables that training requires, `VLM_CONFIG_DIR` and `VLM_OUTPUT_DIR`,
-are explained in the [quick start](../README.md#quick-start).
-
-```bash
-export VLM_EMBEDS="/path/to/embeddings"
-export CTRATE_DATASET_JSONS="/path/to/dataset_jsons/CTRATE"
-export MERLIN_DATASET_JSONS="/path/to/dataset_jsons/MERLIN"
-```
-
-Set each JSON variable to the `--output-dir` used for that dataset's generator: the
-folder that contains the `<dataset>_<version>_*.json` files.
 
 ### Matching embedding folders to configs
 

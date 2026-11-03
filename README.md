@@ -31,7 +31,7 @@ methods, and language-model choice on CT-RATE and Merlin.
 ## Installation
 
 Use Python **3.12**, [uv](https://docs.astral.sh/uv/getting-started/installation/),
-and a CUDA-capable GPU. Standalone evaluation also requires Java for METEOR.
+and a CUDA-capable GPU. Evaluation, including the automatic evaluation after training, requires Java for METEOR.
 From the repository root:
 
 ```bash

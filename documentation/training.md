@@ -31,28 +31,30 @@ the nnFoundation evaluation on Merlin, so its Merlin recipes disable them; add
 
 First [prepare the RMR embeddings](rmr_embeddings.md).
 
-Train Qwen3-VL-2B with Curia features and AveragePool at compression ratio 4:
+Train Qwen3-VL-2B with Primus features and AveragePool at compression ratio 8; the
+[embedding script](data_preparation.md#embeddings-and-paths) generates these features:
 
 ```bash
 export VLM_CONFIG_DIR="$PWD/paper_configs/RMR"
 
 uv run python train.py \
-  --train_config Compression/AveragePool/Qwen3-VL-2B__Curia-8S__AveragePool__CR_4.yml \
-  --add_base_configs bases/datasets/ctrate/Curia-8S_ROI.yml \
+  --train_config Compression/AveragePool/Qwen3-VL-2B__Primus-1B__AveragePool__CR_8.yml \
+  --add_base_configs bases/datasets/ctrate/Primus-1B_ROI.yml \
   --trainer.per_device_train_batch_size 3 \
   --trainer.gradient_accumulation_steps 8
 ```
 
-For Merlin, use `bases/datasets/merlin/Curia-8S_ROI.yml`. Each recipe uses the
+For Merlin, use `bases/datasets/merlin/Primus-1B_ROI.yml`. Each recipe uses the
 `<encoder>_ROI` dataset base of either dataset, with these exceptions:
 
 - `FOV` recipes for `Curia-8S` and `Primus-1B` also use the `_Whole` bases.
-- `Primus-4B_2_1_2` is CT-RATE only and `Primus-4B_1_2_2` is Merlin only.
-- `LLM/AveragePool` recipes are CT-RATE only.
+- `Primus-4B_2_1_2` (High Res.) is CT-RATE only and `Primus-4B_1_2_2` (High Res.) is Merlin only.
 
 [`runs.csv`](../paper_configs/RMR/runs.csv) lists the `--train_config` and
 `--add_base_configs` pair of every paper run. Automatic post-training evaluation
 uses `val`; use `--eval.split test` for held-out test evaluation.
+
+The paper recipes first train only the adapter, then all configured parameters.
 
 ## Configuration overrides
 
@@ -61,17 +63,6 @@ Override config values with dotted flags, for example
 the run config overrides its bases, with earlier bases taking precedence.
 Use `${NAME}` in YAML paths to reference environment variables.
 See [vlm/configs](../vlm/configs/) for all fields and defaults.
-
-## Training phases
-
-The paper recipes train in two phases. During `warmup_1_duration`, only the
-adapter trains; afterwards, all configured parameters train with a fresh
-optimizer, a second warmup over `warmup_2_duration`, and a cosine decay. Durations
-are fractions of the whole training, so they scale with the number of epochs: 0.0625
-is 1 of 16 epochs and 2 of 32. The first phase is rounded to whole epochs, with
-halves rounded up (0.1 of 12 epochs is 1 epoch, 0.0625 of 40 is 3), and a warning
-is logged when the rounding changes it. It must leave at least one epoch for the
-second. A checkpoint is always saved at the end of the first phase.
 
 ## Resuming
 
@@ -86,7 +77,7 @@ ${VLM_OUTPUT_DIR}/ctrate/CTRATE_nnFoundationViT/
 ```
 
 Recipes in subfolders add them to the path, for example
-`${VLM_OUTPUT_DIR}/ctrate/CTRATE_Curia-8S_ROI/Compression/AveragePool/<run>/` for RMR.
+`${VLM_OUTPUT_DIR}/ctrate/CTRATE_Primus-1B_ROI/Compression/AveragePool/<run>/` for RMR.
 
 Resume from the latest saved checkpoint using the run folder's absolute path:
 
@@ -124,10 +115,11 @@ Report generation uses a separate dataloader owned by `ReportEvaluationCallback`
 | `trainer.per_device_eval_batch_size` | Batch size for the Trainer's validation-loss pass; defaults to `1` |
 | `data.n_val_samples` | Cases used for the Trainer's validation-loss pass; defaults to `1` |
 
-RMR selects checkpoints using the callback's classifier F1.
-The two Trainer loss-pass settings do not limit the callback's evaluation dataset
-or generation batch size. Configure `eval.per_device_batch_size` independently
-of the effective training batch size of 24; generation uses no gradient accumulation.
+RMR selects checkpoints using the callback's classifier F1, not the validation loss,
+so the Trainer's loss pass is kept to a single case by default. The two loss-pass settings
+do not limit the callback's evaluation dataset or generation batch size. Configure
+`eval.per_device_batch_size` independently of the effective training batch size of 24;
+generation uses no gradient accumulation.
 
 Weights & Biases logging is disabled by default. Set `export WANDB_MODE=online`
 to enable it, or `export WANDB_MODE=offline` to save logs locally for later syncing.
