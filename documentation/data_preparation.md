@@ -80,15 +80,10 @@ uv run python vlm/scripts/embeddings/generate_embeddings.py \
 | RMR | `Primus-1B_ROI` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | ROI | Resized | Resized |
 | RMR | `Primus-1B_Whole` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | Whole volume | Resized | Resized |
 
-The ROI is the lungs (labels 10–14) for CT-RATE and the foreground of all labels, without
-components below 100 voxels, for Merlin. All volumes are reoriented (CT-RATE: LPS, Merlin: LAS,
-the orientations the datasets are stored in), z-score normalized and resampled to 1 mm. The ROI
-is the mask's bounding box, enlarged by 4%; for Merlin, it is further enlarged to at least
-192 mm per axis where the volume allows it. The input is then fitted to the encoder input of
-192³: a center crop or pad keeps the 1 mm spacing, while resizing gives a spacing of the input's
-size divided by 192, per axis. Volumes without a mask are embedded whole, with a warning. The
-encoders run in float32 on a GPU if one is available; existing embeddings are skipped, so an
-interrupted run can be restarted.
+Each volume is reoriented, z-score normalized, resampled to 1 mm, cropped to its ROI (the lungs
+for CT-RATE, the foreground for Merlin) and center cropped or resized to the encoder input of
+192³, as listed above. Existing embeddings are skipped, so an interrupted run can be restarted.
+The script's docstring describes each step in detail.
 
 The settings are saved as `vision_input_preprocessing.yml` in the output folder. Training copies
 them into the run config, so that inference on new volumes

@@ -9,16 +9,18 @@ Generate the vision embeddings of the nnFoundation and RMR papers from CT volume
   ROI or the whole volume; both resize their input.
 
 '--dataset' selects the dataset's layout and ROI:
-- ctrate: split folders 'train_fixed' and 'valid_fixed'; the lungs (TotalSegmentator 'total'
-  labels 10-14).
-- merlin: no split folders; the foreground of all TotalSegmentator 'total' labels, without
-  components of fewer than 100 voxels. Before fitting, the ROI is enlarged to at least the
-  encoder input (192 mm at 1 mm) where the volume allows it.
+- ctrate: split folders 'train_fixed' and 'valid_fixed'; reoriented to LPS; the lungs
+  (TotalSegmentator 'total' labels 10-14).
+- merlin: no split folders; reoriented to LAS; the foreground of all TotalSegmentator 'total'
+  labels, without components of fewer than 100 voxels. Before fitting, the ROI is enlarged to at
+  least the encoder input (192 mm at 1 mm) where the volume allows it.
 
 Each volume '<name>.nii.gz' found (recursively) in the split folders of '--input_dir' is
-reoriented, z-score normalized, resampled to 1 mm, cropped to its ROI (from the mask with the same
-relative path in '--mask_dir'), fitted to the encoder input (192³) and encoded: a center crop or
-pad keeps 1 mm, while resizing gives a spacing of the input's size divided by 192. The embedding
+reoriented, z-score normalized, resampled to 1 mm, cropped to its ROI (the mask's bounding box,
+enlarged by 4%, from the mask with the same relative path in '--mask_dir'), fitted to the encoder
+input (192³) and encoded in float32, on a GPU if one is available: a center crop or pad keeps
+1 mm, while resizing gives a spacing of the input's size divided by 192. Volumes without a mask
+are embedded whole, with a warning. The embedding
 (C, D, H, W) is saved as '<output_dir>/<split folder>/<name>_embedding.bl2', where the paper
 configs expect it (see documentation/data_preparation.md). Existing embeddings are skipped, so an
 interrupted run can be restarted.
@@ -86,7 +88,7 @@ EMBEDDINGS = {
 # The papers' embeddings are at 1 mm, although the encoders were pre-trained without resampling.
 TARGET_SPACING = (1.0, 1.0, 1.0)
 
-# Orientations are those the datasets are stored in, so that their volumes stay unchanged.
+# Orientations are those the datasets are mostly stored in, so that most volumes stay unchanged.
 DATASETS = {
     "ctrate": {
         "orientation": "LPS",
