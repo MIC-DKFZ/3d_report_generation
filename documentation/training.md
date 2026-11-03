@@ -10,12 +10,22 @@ to `VLM_CONFIG_DIR`.
 
 ## nnFoundation
 
-Start with the nnFoundationViT CT-RATE command in the
-[quick start](../README.md#quick-start).
+The [quick start](../README.md#quick-start) trains nnFoundationViT on CT-RATE.
+All four recipes use the same command; only the `--train_config` and
+`--add_base_configs` pair changes:
 
-For nnFoundationCNN, use `nnFoundationCNN.yml` and its matching dataset base.
-For Merlin, select the base under `bases/datasets/merlin/`.
-These recipes train on `train_val`.
+| Encoder | Dataset | `--train_config` | `--add_base_configs` |
+| --- | --- | --- | --- |
+| nnFoundationViT | CT-RATE | `nnFoundationViT.yml` | `bases/datasets/ctrate/nnFoundationViT.yml` |
+| nnFoundationViT | Merlin | `nnFoundationViT.yml` | `bases/datasets/merlin/nnFoundationViT.yml` |
+| nnFoundationCNN | CT-RATE | `nnFoundationCNN.yml` | `bases/datasets/ctrate/nnFoundationCNN.yml` |
+| nnFoundationCNN | Merlin | `nnFoundationCNN.yml` | `bases/datasets/merlin/nnFoundationCNN.yml` |
+
+These recipes use the v1 dataset JSONs, train on `train_val` without validation,
+and evaluate the final checkpoint on test. Clinical finding scores were not part of
+the nnFoundation evaluation on Merlin, so its Merlin recipes disable them; add
+`--eval.calculate_classifier_score` to compute them with
+[ModernBERT-Merlin](https://huggingface.co/MIC-DKFZ/ModernBERT-Merlin).
 
 ## RMR
 

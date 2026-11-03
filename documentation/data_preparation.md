@@ -107,7 +107,8 @@ export CTRATE_DATASET_JSONS="/path/to/dataset_jsons/CTRATE"
 export MERLIN_DATASET_JSONS="/path/to/dataset_jsons/MERLIN"
 ```
 
-The JSON variables point directly to the generator output folders.
+Set each JSON variable to the `--output-dir` used for that dataset's generator: the
+folder that contains the `<dataset>_<version>_*.json` files.
 
 ### Matching embedding folders to configs
 
