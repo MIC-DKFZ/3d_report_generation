@@ -63,10 +63,11 @@ Recompute metrics from an existing `inference_results.json`:
 
 ```bash
 uv run python eval.py \
-  --inference_dir /path/to/run/checkpoint-1000/inference --dataset_name ctrate
+  --inference_dir /path/to/run/checkpoint-1000/inference
 ```
 
-Use `--dataset_name merlin` for Merlin. Records must contain `image_id`,
+The dataset is read from the folder's `final_config.yml`; pass `--dataset_name ctrate` or
+`merlin` for predictions without one. Records must contain `image_id`,
 `output_text_clean`, and `answer`.
 
 Scoring includes BLEU, METEOR, ROUGE-L, CIDEr, and clinical finding metrics using

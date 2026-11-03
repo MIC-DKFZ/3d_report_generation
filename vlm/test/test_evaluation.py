@@ -117,6 +117,31 @@ def test_evaluation_writes_metrics_and_optional_classifications(
         assert labels["gt_finding"].tolist() == [1, 1]
 
 
+def test_dataset_name_defaults_to_the_saved_inference_config(tmp_path, monkeypatch):
+    (tmp_path / "inference_results.json").write_text(
+        json.dumps([{"image_id": "0", "output_text_clean": "Report", "answer": "Reference"}])
+    )
+    (tmp_path / "final_config.yml").write_text("data:\n  dataset_name: merlin\n")
+    monkeypatch.setattr(evaluation, "setup_logger", lambda path: None)
+    monkeypatch.setattr(
+        evaluation.lexical_metrics, "evaluate_reports", lambda preds, gts: ({}, {})
+    )
+    used = []
+    monkeypatch.setattr(
+        evaluation,
+        "get_classifier_evaluator",
+        lambda name: used.append(name) or (lambda *args, **kwargs: ({}, None, None)),
+    )
+    evaluation.main(Namespace(inference_dir=tmp_path))
+    evaluation.main(Namespace(inference_dir=tmp_path, dataset_name="ctrate"))
+    assert used == ["merlin", "ctrate"]
+
+
+def test_missing_inference_config_asks_for_the_dataset_name(tmp_path):
+    with pytest.raises(FileNotFoundError, match="--dataset_name"):
+        evaluation.main(Namespace(inference_dir=tmp_path))
+
+
 def test_label_metrics_average_each_finding_and_compute_crg():
     predictions = pd.DataFrame({"a": [1, 1], "b": [0, 0]})
     references = pd.DataFrame({"a": [1, 0], "b": [0, 1]})
