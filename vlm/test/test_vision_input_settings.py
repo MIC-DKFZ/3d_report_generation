@@ -100,13 +100,11 @@ def test_text_only_runs_read_no_settings(tmp_path):
 
 def test_training_saves_the_settings_in_the_final_config(monkeypatch, tmp_path):
     import train
-    import vlm.configs.run_config as run_config
 
     dataset = tmp_path / "embeddings"
     save_settings(dataset, SETTINGS)
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
-    monkeypatch.setattr(train, "VLM_CONFIG_DIR", str(tmp_path))
-    monkeypatch.setattr(run_config, "VLM_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("VLM_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(train, "setup_logger", lambda path: None)
     save_yaml(
         {

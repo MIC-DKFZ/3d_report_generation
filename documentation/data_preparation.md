@@ -93,7 +93,7 @@ The supplied configs use `${NAME}` placeholders to keep data paths portable.
 `VLM_EMBEDS`, `CTRATE_DATASET_JSONS`, and `MERLIN_DATASET_JSONS` are conventions
 used by these configs. Set whichever variables your selected config references, or replace their
 references in YAML with absolute paths or your own variable names.
-The framework's two required variables, `VLM_CONFIG_DIR` and `VLM_OUTPUT_DIR`,
+The two variables that training requires, `VLM_CONFIG_DIR` and `VLM_OUTPUT_DIR`,
 are explained in the [quick start](../README.md#quick-start).
 
 ```bash

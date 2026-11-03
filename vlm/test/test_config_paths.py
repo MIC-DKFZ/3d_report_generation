@@ -1,6 +1,7 @@
 """Portable ConfigPath declarations, runtime expansion, and saved expressions."""
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -261,13 +262,10 @@ def test_training_setup_preserves_train_config_handling_and_portable_output(
     monkeypatch, cfg, tmp_path
 ):
     import train
-    import vlm.configs.run_config as run_config
 
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("VLM_CONFIG_DIR", str(tmp_path))
     monkeypatch.setenv("VLM_OUTPUT_DIR", str(tmp_path / "results"))
-    monkeypatch.setattr(train, "VLM_CONFIG_DIR", str(tmp_path))
-    monkeypatch.setattr(run_config, "VLM_CONFIG_DIR", str(tmp_path))
     raw = cfg.model_dump()
     raw["general"]["output_dir"] = None
     raw["general"]["run_name"] = None
@@ -310,3 +308,35 @@ def test_training_setup_preserves_train_config_handling_and_portable_output(
     assert saved["run"]["data"]["train_dataset_json_path"] == "${DATA_ROOT}/override.json"
     assert saved["run"]["data"]["test_dataset_json_path"] == "${UNUSED_TEST_ROOT}/test.json"
     assert loaded.general.output_dir.expression.startswith("${VLM_OUTPUT_DIR}/")
+
+
+def test_inference_and_evaluation_need_neither_root_variable(tmp_path):
+    # Both roots are read only where needed: inference finds the run by its path, and
+    # evaluation reads saved predictions.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("VLM_CONFIG_DIR", "VLM_OUTPUT_DIR")
+    }
+    code = (
+        "import eval, inference\n"
+        "from vlm.utils.paths import resolve_run_dir\n"
+        f"assert resolve_run_dir({str(tmp_path)!r}) == __import__('pathlib').Path({str(tmp_path)!r})\n"
+    )
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "variable, call",
+    [("VLM_CONFIG_DIR", "get_vlm_config_dir"), ("VLM_OUTPUT_DIR", "find_run_dir_in_output_dir")],
+)
+def test_missing_root_variable_is_named_where_it_is_needed(monkeypatch, variable, call):
+    from vlm.utils import paths
+
+    monkeypatch.delenv(variable)
+    with pytest.raises(EnvironmentError, match=variable):
+        getattr(paths, call)(*(["run"] if call == "find_run_dir_in_output_dir" else []))

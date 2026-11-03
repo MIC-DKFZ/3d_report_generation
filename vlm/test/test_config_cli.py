@@ -3,7 +3,6 @@
 import pytest
 
 from vlm.configs.data_config import DataConfig
-import vlm.configs.run_config as run_config
 from vlm.configs.run_config import RunConfig
 from vlm.data import datasets
 from vlm.training.checkpointing import load_run_config_from_run_dir, save_final_config
@@ -177,7 +176,7 @@ def test_cli_rejects_removed_dataset_class_override():
 
 def make_unnamed_run_config_dict(monkeypatch, tmp_path) -> dict:
     # The run directory contains the train config's folder relative to 'VLM_CONFIG_DIR'.
-    monkeypatch.setattr(run_config, "VLM_CONFIG_DIR", str(tmp_path / "configs"))
+    monkeypatch.setenv("VLM_CONFIG_DIR", str(tmp_path / "configs"))
     monkeypatch.setenv("VLM_OUTPUT_DIR", str(tmp_path))
     monkeypatch.setenv("SLURM_JOB_ID", "1234567")
     cfg_dict = make_run_config_dict()

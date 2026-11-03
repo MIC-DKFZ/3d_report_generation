@@ -45,7 +45,7 @@ The example below trains nnFoundationViT on CT-RATE. Before running it,
 and export the config's data-path variables, `CTRATE_DATASET_JSONS` and `VLM_EMBEDS`,
 as described there.
 
-The framework reads two environment variables directly:
+Training reads two environment variables:
 
 | Variable | Purpose |
 | --- | --- |

@@ -18,7 +18,7 @@ from vlm.utils.ddp import is_main_process
 from vlm.utils.run_naming import add_datetime_tag, get_random_uid
 from vlm.utils.classes import setattr_nested
 from vlm.utils.serialization import load_config_file
-from vlm.utils.paths import VLM_CONFIG_DIR
+from vlm.utils.paths import get_vlm_config_dir
 from vlm.data.types import VisionInputType
 from vlm.utils import logger
 
@@ -158,7 +158,7 @@ class RunConfig(ConfigBase):
                 "${VLM_OUTPUT_DIR}",
                 self.data.dataset_name,
                 os.path.basename(self.data.vision_input_path.get_resolved_path()),
-                os.path.dirname(os.path.relpath(self.general.train_config, VLM_CONFIG_DIR)),
+                os.path.dirname(os.path.relpath(self.general.train_config, get_vlm_config_dir())),
                 self.general.run_name
             )
         )

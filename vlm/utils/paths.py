@@ -1,20 +1,22 @@
 import os
 from pathlib import Path
-from vlm.utils import logger
 
 
-def get_env_var(name: str, required: bool = True, default: str | None = None) -> str | None:
-    value = os.getenv(name, default)
-    if value is None:
-        msg = f"[Environment Variables] {name} is not defined!"
-        if required:
-            raise EnvironmentError(msg)
-        logger.warning_main(msg)
+def _required_env_var(name: str, purpose: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise EnvironmentError(f"Set the environment variable {name}: it is the root {purpose}.")
     return value
 
 
-VLM_CONFIG_DIR = get_env_var("VLM_CONFIG_DIR")
-VLM_OUTPUT_DIR = get_env_var("VLM_OUTPUT_DIR")
+def get_vlm_config_dir() -> str:
+    """Root of the config paths given to training and to inference config overrides."""
+    return _required_env_var("VLM_CONFIG_DIR", "that config paths are relative to")
+
+
+def get_vlm_output_dir() -> str:
+    """Root of new runs and of the search for runs given by their folder name."""
+    return _required_env_var("VLM_OUTPUT_DIR", "for runs and for finding runs by folder name")
 
 
 def get_hf_hub_cache_dir() -> str:
@@ -28,11 +30,12 @@ def get_hf_hub_cache_dir() -> str:
 
 
 def find_run_dir_in_output_dir(run_dir: str):
-    matches = list(Path(VLM_OUTPUT_DIR).rglob(run_dir))
+    output_dir = get_vlm_output_dir()
+    matches = list(Path(output_dir).rglob(run_dir))
     if len(matches) > 1:
         raise ValueError(f"Multiple matches found for run_dir '{run_dir}': {matches}")
     elif not matches:
-        raise FileNotFoundError(f"No directory named '{run_dir}' found under {VLM_OUTPUT_DIR}")
+        raise FileNotFoundError(f"No directory named '{run_dir}' found under {output_dir}")
     return matches[0]
 
 

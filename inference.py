@@ -27,7 +27,7 @@ from vlm.configs.merging import recursive_dict_merge
 from vlm.utils.serialization import load_config_file, save_json
 from vlm.training.checkpointing import save_final_config
 from vlm.utils.logging import setup_logger, log_banner
-from vlm.utils.paths import VLM_CONFIG_DIR, resolve_run_dir
+from vlm.utils.paths import resolve_run_dir, get_vlm_config_dir
 from vlm.data.staging import get_local_vision_input_path
 from eval import main as eval_main
 
@@ -283,11 +283,12 @@ def main(
     if is_main:  # we don't want to merge args if this was called by train.py
         if getattr(args, "overwrite_config_from_files", None):
             cfg_dict = cfg.model_dump()
+            config_dir = get_vlm_config_dir()
             for override_file in args.overwrite_config_from_files:
-                override_path = Path(VLM_CONFIG_DIR, override_file)
+                override_path = Path(config_dir, override_file)
                 override_cfg_dict = load_config_file(override_path)
                 override_cfg_dict = RunConfig.apply_base_configs(
-                    cfg_dict=override_cfg_dict, config_dir=VLM_CONFIG_DIR
+                    cfg_dict=override_cfg_dict, config_dir=config_dir
                 )
                 cfg_dict = recursive_dict_merge(cfg_dict, override_cfg_dict)
 

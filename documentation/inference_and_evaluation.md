@@ -1,8 +1,8 @@
 # Inference and evaluation
 
-Run from the repository root with the [data paths](data_preparation.md#embeddings-and-paths)
-and `VLM_CONFIG_DIR` set for the run's paper. Inference requires its vision embeddings
-and trained checkpoint; evaluation of saved predictions requires neither.
+Run the commands from the repository root. Inference needs the run's trained checkpoint and
+vision embeddings; `VLM_OUTPUT_DIR` is only needed to pass a run by its folder name instead of
+its path. Evaluating saved predictions needs neither.
 
 ## Automatic evaluation after training
 

@@ -46,7 +46,7 @@ from vlm.utils.memory import (
     log_memory_usage,
     setup_memory_efficient_training,
 )
-from vlm.utils.paths import VLM_CONFIG_DIR, resolve_run_dir
+from vlm.utils.paths import resolve_run_dir, get_vlm_config_dir
 
 
 INPUT_CONFIG_FILENAME = "input_config.yml"
@@ -324,7 +324,8 @@ def setup_config_and_logging(
     if runtime_args.continue_training_run_dir is None:
         assert args.train_config is not None
 
-        train_config_path = Path(VLM_CONFIG_DIR, args.train_config)
+        config_dir = get_vlm_config_dir()
+        train_config_path = Path(config_dir, args.train_config)
         if not train_config_path.exists():
             raise ValueError(f"The provided config file does not exist: {train_config_path}")
 
@@ -335,7 +336,7 @@ def setup_config_and_logging(
             cfg_dict["base_configs"] = args.add_base_configs + (cfg_dict.get("base_configs") or [])
 
         # Merge base configs into cfg_dict
-        cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=VLM_CONFIG_DIR)
+        cfg_dict = RunConfig.apply_base_configs(cfg_dict=cfg_dict, config_dir=config_dir)
 
         cfg_dict.setdefault("general", {})["train_config"] = str(train_config_path)
 
