@@ -68,11 +68,6 @@ class PhaseEndCallback(TrainerCallback):
     def __init__(self, end_epoch: int):
         self.end_epoch = end_epoch
 
-    def _too_close_to_evaluate(self, args) -> bool:
-        seconds_left = self._seconds_left() if is_main_process() else None
-        needed = self.margin_seconds + self.evaluation_budget_seconds
-        return self._agree(args, seconds_left is not None and seconds_left < needed)
-
     def on_epoch_end(self, args, state, control, **kwargs):
         if round(state.epoch) >= self.end_epoch:
             control.should_training_stop = True
@@ -116,11 +111,6 @@ class EveryNEpochsCallback(TrainerCallback):
     def _disable_eval(control):
         control.should_evaluate = False
         return control
-
-    def _too_close_to_evaluate(self, args) -> bool:
-        seconds_left = self._seconds_left() if is_main_process() else None
-        needed = self.margin_seconds + self.evaluation_budget_seconds
-        return self._agree(args, seconds_left is not None and seconds_left < needed)
 
     def on_epoch_end(self, args, state, control, **kwargs):
         if self._should_run_on_epoch(args, state):
