@@ -71,22 +71,7 @@ are fractions of the whole training, so they scale with the number of epochs: 0.
 is 1 of 16 epochs and 2 of 32. The first phase is rounded to whole epochs, with
 halves rounded up (0.1 of 12 epochs is 1 epoch, 0.0625 of 40 is 3), and a warning
 is logged when the rounding changes it. It must leave at least one epoch for the
-second. A checkpoint is always saved at the end of the first phase. Phased
-training requires `trainer.num_train_epochs` instead of `trainer.max_steps`.
-
-## DeepSpeed
-
-Pass a DeepSpeed config to the usual `torchrun` command, for example
-`--trainer.deepspeed "$PWD/paper_configs/deepspeed/zero2.json"`. ZeRO-2
-([zero2.json](../paper_configs/deepspeed/zero2.json)) shards gradients and
-optimizer states across GPUs; ZeRO-3 ([zero3.json](../paper_configs/deepspeed/zero3.json))
-also shards the model weights. Batch size, gradient accumulation, clipping, and
-bf16 follow the trainer settings.
-
-With bf16, DeepSpeed casts the whole model to bf16, so checkpoints store the
-trained weights in bf16; inference casts them back. Checkpoints also contain
-DeepSpeed's optimizer state for resuming, but not the frozen weights, which come
-from the pretrained model.
+second. A checkpoint is always saved at the end of the first phase.
 
 ## Resuming
 
@@ -129,9 +114,6 @@ the best checkpoint by `eval_classifier_f1`.
 Clinical finding scores use [RadBERT-CT](https://huggingface.co/IAMJB/RadBERT-CT)
 for CT-RATE and [ModernBERT-Merlin](https://huggingface.co/MIC-DKFZ/ModernBERT-Merlin)
 for Merlin.
-
-For `trainer.eval_strategy: epoch`, set `eval.eval_every_n_epochs` to a positive
-integer; the final epoch is always evaluated. For `steps`, use `trainer.eval_steps`.
 
 Report generation uses a separate dataloader owned by `ReportEvaluationCallback`:
 

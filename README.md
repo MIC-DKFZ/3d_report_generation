@@ -5,6 +5,7 @@
 [![nnFoundationCNN models](https://img.shields.io/badge/Hugging%20Face-nnFoundationCNN-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/nnFoundationCNN)
 
 [![RMR paper](https://img.shields.io/badge/RMR-arXiv-b31b1b?logo=arxiv)](https://arxiv.org/abs/2608.08713)
+[![PrimusM-MAE model](https://img.shields.io/badge/Hugging%20Face-PrimusM--MAE-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/PrimusM-MAE)
 [![ModernBERT-Merlin model](https://img.shields.io/badge/Hugging%20Face-ModernBERT--Merlin-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/ModernBERT-Merlin)
 
 A framework for radiology report generation from 3D medical images, supporting
@@ -36,9 +37,6 @@ From the repository root:
 ```bash
 uv sync --locked --python 3.12
 ```
-
-For Qwen3.5 training on GPUs, add `--extra linear-attention` to install the
-flash-linear-attention kernels for its linear-attention layers.
 
 ## Quick start
 

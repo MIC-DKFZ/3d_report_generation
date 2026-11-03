@@ -66,7 +66,7 @@ class TrainerConfig(ConfigBase):
     deepspeed: ConfigPath | None = Field(
         None,
         description=(
-            "DeepSpeed config JSON (e.g. 'paper_configs/deepspeed/zero2.json'); 'None' trains with "
+            "DeepSpeed config JSON (e.g. '/path/to/zero2.json'); 'None' trains with "
             "DDP."
         ),
     )
