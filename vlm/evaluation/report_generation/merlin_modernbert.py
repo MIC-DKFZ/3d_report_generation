@@ -108,9 +108,14 @@ def load_label_columns(model_id: str | Path | None = None) -> list[str]:
     return labels
 
 
-@functools.cache
-def load_classifier(model_id: str = MODEL_ID) -> MerlinBertClassifier:
+def load_classifier(model_id: str | Path | None = None) -> MerlinBertClassifier:
     """Load the classifier once; training loads it before DeepSpeed ZeRO-3 could shard it."""
+    # The default and an explicit model ID must share one cache entry.
+    return _load_classifier(MODEL_ID if model_id is None else str(model_id))
+
+
+@functools.cache
+def _load_classifier(model_id: str) -> MerlinBertClassifier:
     n_classes = len(load_label_columns(model_id))
     return MerlinBertClassifier(n_classes=n_classes, hf_model_dir=model_id).cuda().eval()
 

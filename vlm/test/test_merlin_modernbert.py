@@ -15,7 +15,19 @@ from vlm.evaluation.report_generation import merlin_modernbert
 @pytest.fixture(autouse=True)
 def fresh_classifier():
     # Each test loads its own fake classifier.
-    merlin_modernbert.load_classifier.cache_clear()
+    merlin_modernbert._load_classifier.cache_clear()
+
+
+def test_preload_and_evaluation_share_one_classifier(monkeypatch):
+    monkeypatch.setattr(merlin_modernbert, "load_label_columns", lambda model_id: ["finding"])
+    classifier = Mock()
+    classifier.cuda.return_value.eval.return_value = classifier
+    constructor = Mock(return_value=classifier)
+    monkeypatch.setattr(merlin_modernbert, "MerlinBertClassifier", constructor)
+
+    preloaded = merlin_modernbert.load_classifier()
+    assert merlin_modernbert.load_classifier(merlin_modernbert.MODEL_ID) is preloaded
+    constructor.assert_called_once()
 
 
 def test_labels_come_from_config_in_numeric_output_order(tmp_path):
