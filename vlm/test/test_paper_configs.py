@@ -21,9 +21,6 @@ def launchable_configs():
     for encoder in ("nnFoundationViT", "nnFoundationCNN"):
         for dataset in ("ctrate", "merlin"):
             yield "nnFoundation", f"{encoder}.yml", [f"bases/datasets/{dataset}/{encoder}.yml"]
-    # MIRAGE recipes include their dataset and retrieval bases.
-    for path in sorted((PAPER_CONFIGS / "MIRAGE").glob("*.yml")):
-        yield "MIRAGE", path.name, []
 
 
 @pytest.fixture(autouse=True)

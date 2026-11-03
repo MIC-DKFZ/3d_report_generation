@@ -15,9 +15,8 @@ The checkpoint and split below are set by the supplied
 | --- | --- | --- |
 | nnFoundation | `final` | `test` |
 | RMR | `best` | `val` |
-| MIRAGE | `final` | `test` |
 
-nnFoundation and MIRAGE therefore already produce test results by default. RMR needs a
+nnFoundation therefore already produces test results by default. RMR needs a
 separate test run, or `--eval.split test` when launching training.
 
 ## Output structure
@@ -55,7 +54,7 @@ uv run python inference.py \
 `inference_results.json` and metrics in the run's inference output directory.
 The suffix saves this test run under `checkpoint-<step>/inference_test/`, keeping
 the default validation outputs in `inference/`.
-To repeat nnFoundation or MIRAGE inference, use `--mode final`, with an
+To repeat nnFoundation inference, use `--mode final`, with an
 `--suffix` to keep the existing results in `inference/`.
 
 ## Evaluate saved predictions

@@ -1,7 +1,6 @@
 """Validate public preparation scripts without the internal scripts or package."""
 
 import ast
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -9,8 +8,6 @@ import shutil
 import subprocess
 import sys
 
-import blosc2
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -214,96 +211,6 @@ def test_merlin_rejects_unlisted_duplicate_studies(exported, tmp_path, version):
     assert result.returncode != 0
     assert "Duplicate study IDs remain" in result.stderr
     assert not (tmp_path / "generated").exists()
-
-
-def load_retrieval_module():
-    pytest.importorskip("faiss")
-    path = PUBLIC_ROOT / "retrieval/create_retrieval_files.py"
-    spec = importlib.util.spec_from_file_location("public_retrieval", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_retrieval_excludes_all_same_patient_cases_and_matches_exact_cosine(tmp_path):
-    module = load_retrieval_module()
-    train_ids = [f"train_1_a_{i}" for i in range(4)] + [
-        "train_2_a_1",
-        "train_3_a_1",
-        "train_4_a_1",
-    ]
-    angles = np.array([0, 0.01, 0.02, 0.03, 0.2, 0.4, 0.6])
-    vectors = np.stack([np.cos(angles), np.sin(angles)], axis=1).astype(np.float32)
-    folder = tmp_path / "train_fixed"
-    folder.mkdir()
-    for image_id, vector in zip(train_ids, vectors):
-        blosc2.save_array(vector.reshape(1, 2, 1, 1, 1), str(folder / f"{image_id}_embedding.bl2"))
-    index = module.build_index(
-        train_ids, tmp_path, "ctrate", "_embedding.bl2", module.PoolingMethod.GAP
-    )
-    mapping = module.retrieve(
-        [train_ids[0]],
-        "train",
-        tmp_path,
-        "ctrate",
-        "_embedding.bl2",
-        module.PoolingMethod.GAP,
-        index,
-        train_ids,
-        top_k=2,
-        batch_size=1,
-    )
-    assert mapping[train_ids[0]]["k_nearest_neighbor"] == ["train_2_a_1", "train_3_a_1"]
-    np.testing.assert_allclose(
-        mapping[train_ids[0]]["similarity"], vectors[4:6] @ vectors[0], atol=1e-6
-    )
-
-
-def test_retrieval_cli_outputs_combined_mapping_consumable_by_dataset(exported, tmp_path):
-    pytest.importorskip("faiss")
-    embeddings = tmp_path / "embeddings"
-    embeddings.mkdir()
-    for image_id, vector in {"A": [1, 0], "B": [0.8, 0.6], "T": [1, 0.1]}.items():
-        blosc2.save_array(
-            np.array(vector, dtype=np.float32), str(embeddings / f"{image_id}_embedding.bl2")
-        )
-    train = tmp_path / "train.json"
-    test = tmp_path / "test.json"
-    train.write_text(json.dumps([{"image_id": "A"}, {"image_id": "B"}]))
-    test.write_text(json.dumps([{"image_id": "T"}]))
-    output = tmp_path / "neighbors"
-    result = run_script(
-        exported / "retrieval/create_retrieval_files.py",
-        "--dataset",
-        "merlin",
-        "--emb-root",
-        embeddings,
-        "--train-json",
-        train,
-        "--test-json",
-        test,
-        "--output-dir",
-        output,
-        "--top-k",
-        1,
-        cwd=tmp_path,
-    )
-    assert result.returncode == 0, result.stderr
-    mapping = read_json(output / "retrieval_all.json")
-    assert set(mapping) == {"A", "B", "T"}
-    assert mapping["A"]["k_nearest_neighbor"] == ["B"]
-    assert mapping["T"]["k_nearest_neighbor"] == ["A"]
-    assert (output / "train_index.faiss").is_file()
-    for query, values in mapping.items():
-        assert query not in values["k_nearest_neighbor"]
-        assert set(values["k_nearest_neighbor"]) <= {"A", "B"}
-        assert len(values["k_nearest_neighbor"]) == len(values["similarity"])
-
-
-def test_missing_retrieval_embedding_fails_instead_of_silently_dropping_query(tmp_path):
-    module = load_retrieval_module()
-    with pytest.raises(FileNotFoundError):
-        module.load_vector(tmp_path / "missing_embedding.bl2", module.PoolingMethod.GAP)
 
 
 def test_missing_bundled_selection_is_not_silently_ignored(exported, tmp_path):

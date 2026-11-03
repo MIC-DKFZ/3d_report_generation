@@ -8,7 +8,7 @@ locates its separately stored vision embeddings; the report provides the trainin
 target and evaluation reference. The scripts below convert the original report
 tables into this format, applying the splits and exclusions used in the papers.
 
-Use **v1 for nnFoundation** and **v2 for RMR and MIRAGE**. Both versions can share an output
+Use **v1 for nnFoundation** and **v2 for RMR**. Both versions can share an output
 folder because their filenames include the version. Their differences are listed
 in the table below.
 
@@ -96,8 +96,7 @@ them into the run config, so that inference on new volumes
 
 The supplied configs use `${NAME}` placeholders to keep data paths portable.
 `VLM_EMBEDS`, `CTRATE_DATASET_JSONS`, and `MERLIN_DATASET_JSONS` are conventions
-used by these configs; `VLM_RETRIEVAL` serves the same purpose for retrieval.
-Set whichever variables your selected config references, or replace their
+used by these configs. Set whichever variables your selected config references, or replace their
 references in YAML with absolute paths or your own variable names.
 The framework's two required variables, `VLM_CONFIG_DIR` and `VLM_OUTPUT_DIR`,
 are explained in the [quick start](../README.md#quick-start).
@@ -141,5 +140,3 @@ encoder, preprocessing, `embed_dim`, and `embed_size` must match the recipe.
 Files are named `<image_id>_embedding.bl2`. CT-RATE uses `train_fixed/` for train/val
 and `valid_fixed/` for test; Merlin stores files directly in the encoder folder.
 Features have shape `[C, D, H, W]`.
-
-For retrieval experiments, continue with [retrieval mappings](retrieval.md).

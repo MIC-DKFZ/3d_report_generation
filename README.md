@@ -14,7 +14,6 @@ training, inference, and evaluation of vision-language models.
 | --- | --- | --- |
 | **nnFoundation** | [nnFoundation: 3D Foundation Models for Radiology](https://arxiv.org/abs/2609.26924) | [paper_configs/nnFoundation](paper_configs/nnFoundation/) |
 | **RMR** | [Resolution Meets Reduction: Efficient Visual Context for 3D Radiology Report Generation](https://arxiv.org/abs/2608.08713) | [paper_configs/RMR](paper_configs/RMR/) |
-| **MIRAGE** | Coming soon | [paper_configs/MIRAGE](paper_configs/MIRAGE/) |
 
 **nnFoundation:** This repository provides the downstream report-generation
 experiments for nnFoundation. Frozen features from
@@ -27,11 +26,6 @@ adaptation of the language model.
 visual detail while reducing the token cost of 3D report generation. Its
 experiments compare input field of view and resolution, visual token compression
 methods, and language-model choice on CT-RATE and Merlin.
-
-**MIRAGE:** MIRAGE adds retrieval to report generation on CT-RATE. Reports, or
-an image and its report, from the nearest training cases in vision-embedding
-space are added to the prompt of Qwen3-VL-2B. See
-[retrieval mappings](documentation/retrieval.md#mirage-recipes) for the recipes.
 
 ## Installation
 
@@ -121,7 +115,6 @@ not affected.
 - [RMR embedding names and requirements](documentation/rmr_embeddings.md)
 - [Training recipes, overrides, and resuming](documentation/training.md)
 - [Inference and evaluation](documentation/inference_and_evaluation.md)
-- [Retrieval mappings](documentation/retrieval.md)
 
 ## Citation
 

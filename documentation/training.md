@@ -44,11 +44,6 @@ For Merlin, use `bases/datasets/merlin/Curia-8S_ROI.yml`. Each recipe uses the
 `--add_base_configs` pair of every paper run. Automatic post-training evaluation
 uses `val`; use `--eval.split test` for held-out test evaluation.
 
-## MIRAGE
-
-MIRAGE recipes use CT-RATE v2 and a retrieval mapping per encoder. Generate the
-mappings and train as described in [MIRAGE recipes](retrieval.md#mirage-recipes).
-
 ## Configuration overrides
 
 Override config values with dotted flags, for example
@@ -117,7 +112,7 @@ and training state; no `--train_config` is needed.
 
 ## Evaluation during training
 
-nnFoundation and MIRAGE disable validation during training and evaluate the final
+nnFoundation disables validation during training and evaluates the final
 model on test. RMR evaluates CT-RATE every epoch and Merlin every two epochs, selecting
 the best checkpoint by `eval_classifier_f1`.
 
