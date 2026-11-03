@@ -1,8 +1,11 @@
 """Reorientation, preprocessing and encoding of NIfTI volumes for inference on new images."""
 
 import contextlib
+import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
 
+import blosc2
 import numpy as np
 import pytest
 import SimpleITK as sitk
@@ -17,6 +20,8 @@ from vlm.configs.data_config import (
     VisionInputPreprocessingConfig,
 )
 from vlm.data.preprocessing import nifti_inputs
+from vlm.data.preprocessing.encoder_input import preprocess_encoder_input
+from vlm.data.vision_input_settings import load_settings
 from vlm.models.vision_encoders import nnssl, primus, resenc
 from vlm.models.vision_encoders.primus import PrimusEncoder
 from vlm.models.vision_encoders.resenc import ResEncEncoder
@@ -426,3 +431,92 @@ def test_image_runs_have_no_embedding_encoder():
             vision_input_type="image",
             embedding_encoder=RECORDED_ENCODER.model_dump(),
         )
+
+
+def load_embedding_script():
+    path = Path(__file__).resolve().parents[1] / "public_scripts/embeddings/generate_embeddings.py"
+    spec = importlib.util.spec_from_file_location("generate_embeddings", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    "embedding, roi_mask",
+    [
+        ("nnFoundationViT", "TotalSegmentator 'total', lungs (labels 10-14)"),
+        ("Primus-1B_Whole", None),
+    ],
+)
+def test_public_script_saves_the_paper_embeddings_with_their_settings(
+    tmp_path, monkeypatch, embedding, roi_mask
+):
+    script = load_embedding_script()
+    monkeypatch.setattr(script.torch.cuda, "is_available", lambda: False)
+    checkpoint, _ = tiny_checkpoint(tmp_path)
+    rng = np.random.default_rng(0)
+    mask = np.zeros((24, 22, 26), np.uint8)
+    mask[3:20, 4:18, 2:12] = 10  # a lung lobe
+    mask[3:20, 4:18, 14:24] = 1  # another organ
+    ras = (-1, 0, 0, 0, -1, 0, 0, 0, 1)
+    names = ("train_fixed/a/x_1", "valid_fixed/b/y_1")
+    for name in names:
+        volume = rng.normal(size=(24, 22, 26)).astype(np.float32)
+        write_volume(tmp_path / f"in/{name}.nii.gz", volume, ras, spacing=(1.2, 1.0, 1.5))
+        write_volume(tmp_path / f"masks/{name}.nii.gz", mask, ras, spacing=(1.2, 1.0, 1.5))
+    mask_args = ("--mask_dir", str(tmp_path / "masks")) if roi_mask else ()
+
+    script.main(
+        script.parse_args(
+            [
+                *("--embedding", embedding, "--dataset", "ctrate"),
+                *("--input_dir", str(tmp_path / "in"), *mask_args),
+                *("--output_dir", str(tmp_path / "out")),
+                *("--checkpoint", str(checkpoint), "--num_workers", "0"),
+            ]
+        )
+    )
+
+    settings = load_settings(tmp_path / "out")
+    data = DataConfig(dataset_name="ctrate", answer_types="all", **settings.model_dump())
+    assert data.vision_input_orientation == "LPS"
+    assert data.embedding_encoder.model_dump() == {
+        "class_name": "PrimusEncoder",
+        "checkpoint_path": str(checkpoint),
+    }
+    preprocessing = data.vision_input_preprocessing
+    assert preprocessing.roi_mask == roi_mask
+    encoder = PrimusEncoder.from_pretrained(checkpoint)
+    for name in names:
+        mask_image = None
+        if roi_mask:
+            mask_image = sitk.DICOMOrient(sitk.ReadImage(tmp_path / f"masks/{name}.nii.gz"), "LPS")
+        expected = encoder(
+            preprocess_encoder_input(
+                sitk.DICOMOrient(sitk.ReadImage(tmp_path / f"in/{name}.nii.gz"), "LPS"),
+                mask_image,
+                **preprocessing.preprocessing_kwargs(encoder.patch_size),
+            )
+        )[0].detach()
+        saved = blosc2.load_array(
+            str(tmp_path / "out" / Path(name).parts[0] / f"{Path(name).name}_embedding.bl2")
+        )
+        assert saved.shape == (24, 4, 4, 4)
+        torch.testing.assert_close(torch.from_numpy(saved), expected)
+
+
+@pytest.mark.parametrize(
+    "embedding, mask_args, match",
+    [
+        ("nnFoundationCNN", [], "needs '--mask_dir'"),
+        ("Primus-1B_Whole", ["--mask_dir", "masks"], "takes no '--mask_dir'"),
+    ],
+)
+def test_public_script_takes_masks_exactly_for_roi_embeddings(capsys, embedding, mask_args, match):
+    script = load_embedding_script()
+    with pytest.raises(SystemExit):
+        script.parse_args(
+            ["--embedding", embedding, "--dataset", "merlin", "--input_dir", "in"]
+            + ["--output_dir", "out", *mask_args]
+        )
+    assert match in capsys.readouterr().err

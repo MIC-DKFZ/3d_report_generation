@@ -45,10 +45,54 @@ and adds the remaining source validation studies to training.
 
 ## Embeddings and paths
 
-Training requires precomputed vision embeddings. Generate nnFoundationViT and
-nnFoundationCNN features with
-[`generate_nnfoundation_embeddings.py`](../vlm/public_scripts/embeddings/generate_nnfoundation_embeddings.py);
-see [RMR embeddings](rmr_embeddings.md) for the features the RMR configs expect.
+Training requires precomputed vision embeddings. Generate them with
+[`generate_embeddings.py`](../vlm/public_scripts/embeddings/generate_embeddings.py): the
+nnFoundationViT and nnFoundationCNN features of the nnFoundation configs, and the single-block
+Primus features of the RMR configs. See [RMR embeddings](rmr_embeddings.md) for all features the
+RMR configs expect.
+
+`--embedding` names the features as the configs do (`${VLM_EMBEDS}/<DATASET>_<embedding>`), and
+`--dataset` selects the dataset's layout and region of interest (ROI), including CT-RATE's split
+folders (`train_fixed` and `valid_fixed`, embedded into the same folders of the output). The ROI
+features need the [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) `total` masks
+of the volumes, stored with the same relative paths: CT-RATE provides them in `ts_seg/ts_total`;
+for Merlin, run TotalSegmentator on the volumes. The encoders are downloaded from Hugging Face
+(`--checkpoint` takes a local file instead).
+
+```bash
+uv run python vlm/public_scripts/embeddings/generate_embeddings.py \
+  --embedding nnFoundationViT --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
+  --mask_dir /path/to/CT-RATE/dataset/ts_seg/ts_total \
+  --output_dir "${VLM_EMBEDS}/CTRATE_nnFoundationViT"
+uv run python vlm/public_scripts/embeddings/generate_embeddings.py \
+  --embedding nnFoundationViT --dataset merlin \
+  --input_dir /path/to/merlin_data --mask_dir /path/to/totalsegmentator_masks \
+  --output_dir "${VLM_EMBEDS}/MERLIN_nnFoundationViT"
+uv run python vlm/public_scripts/embeddings/generate_embeddings.py \
+  --embedding Primus-1B_Whole --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
+  --output_dir "${VLM_EMBEDS}/CTRATE_Primus-1B_Whole"
+```
+
+| Paper | `--embedding` | Encoder | Input | CT-RATE | Merlin |
+| --- | --- | --- | --- | --- | --- |
+| nnFoundation | `nnFoundationViT` | [nnFoundationViT](https://huggingface.co/MIC-DKFZ/nnFoundationViT) | ROI | Center crop | Resized |
+| nnFoundation | `nnFoundationCNN` | [nnFoundationCNN](https://huggingface.co/MIC-DKFZ/nnFoundationCNN) | ROI | Resized | Resized |
+| RMR | `Primus-1B_ROI` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | ROI | Center crop | Resized |
+| RMR | `Primus-1B_Whole` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | Whole volume | Resized | Resized |
+
+The ROI is the lungs (labels 10–14) for CT-RATE and the foreground of all labels, without
+components below 100 voxels, for Merlin. All volumes are reoriented (CT-RATE: LPS, Merlin: LAS,
+the orientations the datasets are stored in), z-score normalized and resampled to 1 mm. The ROI
+is the mask's bounding box, enlarged by 4%; for Merlin, it is further enlarged to at least
+192 mm per axis where the volume allows it. The input is then fitted to the encoder input of
+192³: a center crop or pad keeps the 1 mm spacing, while resizing gives a spacing of the input's
+size divided by 192, per axis. Volumes without a mask are embedded whole, with a warning. The
+encoders run in float32 on a GPU if one is available; existing embeddings are skipped, so an
+interrupted run can be restarted.
+
+The settings are saved as `vision_input_preprocessing.yml` in the output folder. Training copies
+them into the run config, so that inference on new volumes
+([`inference_nifti.py`](../inference_nifti.py)) preprocesses and encodes them the same way.
 
 The supplied configs use `${NAME}` placeholders to keep data paths portable.
 `VLM_EMBEDS`, `CTRATE_DATASET_JSONS`, and `MERLIN_DATASET_JSONS` are conventions

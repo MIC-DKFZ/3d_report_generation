@@ -2,7 +2,10 @@
 
 The RMR configs use precomputed features from Curia, Primus, Merlin, and CT-FM.
 Extract them with the corresponding encoder and the preprocessing described in the
-[RMR paper](https://arxiv.org/abs/2608.08713) before training.
+[RMR paper](https://arxiv.org/abs/2608.08713) before training. The single-block Primus
+features (`Primus-1B_ROI`, `Primus-1B_Whole`) can be generated with
+[`generate_embeddings.py`](../vlm/public_scripts/embeddings/generate_embeddings.py), see
+[embeddings and paths](data_preparation.md#embeddings-and-paths).
 
 ## Folder names and feature shapes
 
