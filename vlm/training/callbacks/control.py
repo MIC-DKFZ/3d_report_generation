@@ -68,6 +68,11 @@ class PhaseEndCallback(TrainerCallback):
     def __init__(self, end_epoch: int):
         self.end_epoch = end_epoch
 
+    def _too_close_to_evaluate(self, args) -> bool:
+        seconds_left = self._seconds_left() if is_main_process() else None
+        needed = self.margin_seconds + self.evaluation_budget_seconds
+        return self._agree(args, seconds_left is not None and seconds_left < needed)
+
     def on_epoch_end(self, args, state, control, **kwargs):
         if round(state.epoch) >= self.end_epoch:
             control.should_training_stop = True
@@ -111,6 +116,11 @@ class EveryNEpochsCallback(TrainerCallback):
     def _disable_eval(control):
         control.should_evaluate = False
         return control
+
+    def _too_close_to_evaluate(self, args) -> bool:
+        seconds_left = self._seconds_left() if is_main_process() else None
+        needed = self.margin_seconds + self.evaluation_budget_seconds
+        return self._agree(args, seconds_left is not None and seconds_left < needed)
 
     def on_epoch_end(self, args, state, control, **kwargs):
         if self._should_run_on_epoch(args, state):
@@ -159,8 +169,9 @@ class GracefulStopCallback(TrainerCallback):
     Rank 0 decides every 'check_every_n_steps' steps and at every epoch end, and all ranks
     follow its decision. An evaluation is skipped instead of started when it might not finish
     before the time limit; 'PENDING_EVALUATION' in the run directory then records its step, and
-    the job that resumes runs and saves it after its first step. Add this callback after
-    'EveryNEpochsCallback', so it sees which epochs evaluate.
+    the job that resumes runs and saves it after its first step. The evaluation of the last epoch
+    always runs, as no later step could run it. Add this callback after 'EveryNEpochsCallback',
+    so it sees which epochs evaluate.
     """
 
     def __init__(
@@ -178,6 +189,7 @@ class GracefulStopCallback(TrainerCallback):
         self.evaluation_budget_seconds = evaluation_budget_seconds
         self.check_every_n_steps = check_every_n_steps
         self.stopped = False
+        self.training_finished = False
         self._evaluation_start = None
         self._pending_checked = False
         self._running_pending_evaluation = False
@@ -197,6 +209,11 @@ class GracefulStopCallback(TrainerCallback):
             margin_seconds=60 * float(os.getenv("VLM_STOP_MARGIN_MINUTES", "20")),
             evaluation_budget_seconds=60 * float(os.getenv("VLM_STOP_EVALUATION_MINUTES", "20")),
         )
+
+    @property
+    def stopped_before_end(self) -> bool:
+        """Whether training steps remain for a follow-up job, unlike after a stop at the last step."""
+        return self.stopped and not self.training_finished
 
     def _seconds_left(self) -> float | None:
         return None if self.end_time is None else self.end_time - time.time()
@@ -264,6 +281,11 @@ class GracefulStopCallback(TrainerCallback):
             return self._stop(args, state, control, reason)
         return control
 
+    def _too_close_to_evaluate(self, args) -> bool:
+        seconds_left = self._seconds_left() if is_main_process() else None
+        needed = self.margin_seconds + self.evaluation_budget_seconds
+        return self._agree(args, seconds_left is not None and seconds_left < needed)
+
     def on_epoch_end(self, args, state, control, **kwargs):
         # A stop inside an epoch also ends the epoch loop; its evaluation follows the resume.
         if self.stopped and not math.isclose(state.epoch, round(state.epoch), abs_tol=1e-6):
@@ -271,9 +293,8 @@ class GracefulStopCallback(TrainerCallback):
             return control
         # A requested stop still evaluates the epoch first, unless the time limit is too close.
         if control.should_evaluate:
-            seconds_left = self._seconds_left() if is_main_process() else None
-            needed = self.margin_seconds + self.evaluation_budget_seconds
-            if self._agree(args, seconds_left is not None and seconds_left < needed):
+            # No later step could run a skipped evaluation of the last epoch.
+            if state.global_step < state.max_steps and self._too_close_to_evaluate(args):
                 logger.warning_main(
                     f"Skipping the evaluation at epoch {round(state.epoch)}: the Slurm time "
                     "limit is too close."
@@ -289,6 +310,10 @@ class GracefulStopCallback(TrainerCallback):
             reason = self._stop_reason(self.margin_seconds) if is_main_process() else None
             if self._agree(args, reason is not None):
                 self._stop(args, state, control, reason)
+        return control
+
+    def on_train_end(self, args, state, control, **kwargs):
+        self.training_finished = state.global_step >= state.max_steps
         return control
 
     def on_evaluate(self, args, state, control, **kwargs):

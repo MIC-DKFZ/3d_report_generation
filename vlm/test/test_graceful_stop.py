@@ -63,8 +63,15 @@ def test_stop_file_saves_and_resuming_matches_uninterrupted_training(tmp_path, u
 
 def test_stop_at_the_last_step_of_a_phase_does_not_start_the_next_phase(tmp_path):
     stop, _, steps = stop_by_file(tmp_path, step=4)
-    assert stop.stopped
+    assert stop.stopped and stop.stopped_before_end
     assert sorted(steps) == list(range(4))
+
+
+def test_stop_at_the_last_step_of_the_run_finishes_it(tmp_path):
+    # The run then continues with inference instead of waiting for a follow-up job.
+    stop, _, steps = stop_by_file(tmp_path, step=MAX_STEPS)
+    assert stop.stopped and not stop.stopped_before_end
+    assert sorted(steps) == list(range(MAX_STEPS))
 
 
 def test_close_time_limit_stops_at_the_next_check(tmp_path):
@@ -84,10 +91,12 @@ def test_without_stop_file_or_time_limit_training_runs_to_the_end(tmp_path):
     assert sorted(steps) == list(range(MAX_STEPS))
 
 
-def epoch_end(stop, should_evaluate, epoch=2.0):
+def epoch_end(stop, should_evaluate, epoch=2.0, global_step=8, max_steps=16):
     control = TrainerControl(should_evaluate=should_evaluate)
     stop.on_epoch_end(
-        SimpleNamespace(device=torch.device("cpu")), SimpleNamespace(epoch=epoch, global_step=8), control
+        SimpleNamespace(device=torch.device("cpu")),
+        SimpleNamespace(epoch=epoch, global_step=global_step, max_steps=max_steps),
+        control,
     )
     return control
 
@@ -111,6 +120,16 @@ def test_evaluation_that_might_not_finish_is_skipped(tmp_path):
     assert control.should_save and control.should_training_stop
     # The job that resumes runs it.
     assert (tmp_path / PENDING_EVALUATION_FILENAME).read_text() == "8\n"
+
+
+def test_evaluation_of_the_last_epoch_runs_even_close_to_the_time_limit(tmp_path):
+    stop = GracefulStopCallback(
+        tmp_path / STOP_FILENAME, end_time=time.time() + 40 * 60,
+        margin_seconds=20 * 60, evaluation_budget_seconds=30 * 60,
+    )
+    control = epoch_end(stop, should_evaluate=True, epoch=4.0, global_step=16)
+    assert control.should_evaluate
+    assert not (tmp_path / PENDING_EVALUATION_FILENAME).exists()
 
 
 def test_requested_stop_still_evaluates_when_there_is_time(tmp_path):

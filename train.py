@@ -251,7 +251,7 @@ class UnifiedVLMTrainer:
             self.checkpoint_plan.trainer_state_checkpoint,
             stop_requested=lambda: stop_callback.stopped,
         )
-        self.stopped_early = stop_callback.stopped
+        self.stopped_early = stop_callback.stopped_before_end
         # Inference loads the model again and must not shard it as under DeepSpeed ZeRO-3.
         unset_hf_deepspeed_config()
 
