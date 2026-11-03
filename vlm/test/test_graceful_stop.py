@@ -256,7 +256,9 @@ def step_end(stop, step):
 def test_resumed_job_runs_the_skipped_evaluation_once(tmp_path):
     (tmp_path / PENDING_EVALUATION_FILENAME).write_text("8\n")
     stop = GracefulStopCallback(tmp_path / STOP_FILENAME, end_time=time.time() + 5 * 3600)
-    assert step_end(stop, 9).should_evaluate
+    control = step_end(stop, 9)
+    # Saved too, so the checkpoint selection can choose the evaluated weights.
+    assert control.should_evaluate and control.should_save
     stop.on_evaluate(None, None, TrainerControl())
     assert not (tmp_path / PENDING_EVALUATION_FILENAME).exists()
     assert not step_end(stop, 10).should_evaluate

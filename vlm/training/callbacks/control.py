@@ -159,7 +159,7 @@ class GracefulStopCallback(TrainerCallback):
     Rank 0 decides every 'check_every_n_steps' steps and at every epoch end, and all ranks
     follow its decision. An evaluation is skipped instead of started when it might not finish
     before the time limit; 'PENDING_EVALUATION' in the run directory then records its step, and
-    the job that resumes runs it after its first step. Add this callback after
+    the job that resumes runs and saves it after its first step. Add this callback after
     'EveryNEpochsCallback', so it sees which epochs evaluate.
     """
 
@@ -251,6 +251,8 @@ class GracefulStopCallback(TrainerCallback):
         self._running_pending_evaluation = True
         self._evaluation_start = time.time()
         control.should_evaluate = True
+        # Save the evaluated weights, so the checkpoint selection can choose them.
+        control.should_save = True
 
     def on_step_end(self, args, state, control, **kwargs):
         if not self._pending_checked:
