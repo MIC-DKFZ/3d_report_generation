@@ -5,7 +5,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from vlm.data.datasets import MedicalImageDataset
+from vlm.data.datasets import (
+    BonnDataset,
+    CTRATEDataset,
+    MedicalImageDataset,
+    MerlinDataset,
+)
 
 
 def load_embedding(path, *, stacked=False, slices=None):
@@ -119,3 +124,23 @@ def test_nnunet_training_transforms_keep_the_input_shape(tmp_path):
     actual = load_image(path, (16, 16, 16), get_training_image_transforms((16, 16, 16)))
 
     assert actual.shape == (1, 16, 16, 16) and actual.dtype == np.float32
+
+
+@pytest.mark.parametrize("dataset_class", [CTRATEDataset, MerlinDataset, BonnDataset])
+@pytest.mark.parametrize("split", ["train", "val", "test"])
+@pytest.mark.parametrize("input_type", ["image", "embedding"])
+def test_vision_input_paths_follow_the_dataset_layout(tmp_path, dataset_class, split, input_type):
+    dataset = dataset_class.__new__(dataset_class)
+    dataset.vision_input_path = tmp_path
+    dataset.vision_input_type = input_type
+    dataset.image_id_suffix = "_custom"
+    dataset.split = split
+    filename = "case_custom_embedding.bl2" if input_type == "embedding" else "case.b2nd"
+    query_directory = neighbor_directory = tmp_path
+    if dataset_class is not MerlinDataset:
+        query_directory /= "valid_fixed" if split == "test" else "train_fixed"
+        neighbor_directory /= "train_fixed"
+    assert dataset._get_vision_input_path("case") == query_directory / filename
+    assert (
+        dataset._get_vision_input_path("case", split_path="train") == neighbor_directory / filename
+    )

@@ -1,11 +1,10 @@
 """
 Preprocessing of CT volumes into vision encoder inputs, shared by the embedding generation
-(vlm/scripts/embeddings/embedd_images_baselines.py) and the inference on NIfTI images.
+(vlm/public_scripts/embeddings/generate_embeddings.py) and the inference on NIfTI images.
 
 Single-block pipeline per volume: normalize → resample to the encoder spacing, if it has one →
-crop to the
-mask ROI (bounding box expanded by 4%) → normalize again → fit to the encoder input shape by
-resizing ('resized') or center cropping/padding ('center_crop').
+crop to the mask ROI (bounding box expanded by 4%) → normalize again → fit to the encoder input
+shape by resizing ('resized') or center cropping/padding ('center_crop').
 """
 
 from typing import List, Optional, Tuple, Union

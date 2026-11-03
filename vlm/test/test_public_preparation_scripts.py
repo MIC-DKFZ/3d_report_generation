@@ -1,4 +1,4 @@
-"""Validate public preparation scripts without the internal scripts or package."""
+"""Run the public preparation scripts on their own, copied out of the repository."""
 
 import ast
 import json
