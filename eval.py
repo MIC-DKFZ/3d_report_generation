@@ -32,6 +32,14 @@ def parse_args() -> argparse.Namespace:
         help="Path to a specific directory where the inference results are located.",
     )
     parser.add_argument(
+        "--calculate_classifier_score",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Score findings with the dataset's classifier; defaults to "
+        "'eval.calculate_classifier_score' in the inference directory's final_config.yml, or to "
+        "scoring without one.",
+    )
+    parser.add_argument(
         "--gt_labels_path",
         type=Path,
         default=None,
@@ -54,12 +62,16 @@ def main_cli():
     main(args)
 
 
-def dataset_name_of_inference(inference_dir: Path) -> str:
-    """Read the dataset name from the config that inference saved with its results."""
+def load_inference_config(inference_dir: Path) -> dict | None:
+    """The config that inference saved with its results, if any."""
     config_path = inference_dir / "final_config.yml"
-    if not config_path.exists():
-        raise FileNotFoundError(f"{config_path} not found; pass --dataset_name.")
-    return load_yaml(config_path)["data"]["dataset_name"]
+    return load_yaml(config_path) if config_path.exists() else None
+
+
+def dataset_name_of_inference(inference_config: dict | None, inference_dir: Path) -> str:
+    if inference_config is None:
+        raise FileNotFoundError(f"{inference_dir / 'final_config.yml'} not found; pass --dataset_name.")
+    return inference_config["data"]["dataset_name"]
 
 
 def main(args):
@@ -68,7 +80,16 @@ def main(args):
     inference_dir = Path(args.inference_dir)
     if not inference_dir.exists():
         raise FileNotFoundError(f"Inference directory not found: {inference_dir}")
-    dataset_name = getattr(args, "dataset_name", None) or dataset_name_of_inference(inference_dir)
+    inference_config = load_inference_config(inference_dir)
+    dataset_name = getattr(args, "dataset_name", None) or dataset_name_of_inference(
+        inference_config, inference_dir
+    )
+    calculate_classifier_score = getattr(args, "calculate_classifier_score", None)
+    if calculate_classifier_score is None:
+        calculate_classifier_score = (
+            inference_config is None
+            or inference_config.get("eval", {}).get("calculate_classifier_score", True)
+        )
 
     log_file_name = add_datetime_tag("eval") + ".log"
     log_file_path = Path(inference_dir, log_file_name)
@@ -96,7 +117,7 @@ def main(args):
 
     radbert_metrics = {}
     radbert_pred_df = radbert_gt_df = None
-    evaluate_classifier = get_classifier_evaluator(dataset_name)
+    evaluate_classifier = get_classifier_evaluator(dataset_name) if calculate_classifier_score else None
     if evaluate_classifier is not None:
         classifier_options = {}
         if getattr(args, "gt_labels_path", None) is not None:

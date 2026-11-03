@@ -49,7 +49,8 @@ class EvaluationConfig(ConfigBase):
     )
     calculate_classifier_score: bool = Field(
         False,
-        description="Calculate dataset-specific classifier metrics during callback evaluation.",
+        description="Calculate dataset-specific classifier metrics, during callback evaluation and "
+        "after inference.",
     )
 
     def generation_kwargs(self) -> dict:

@@ -137,6 +137,35 @@ def test_dataset_name_defaults_to_the_saved_inference_config(tmp_path, monkeypat
     assert used == ["merlin", "ctrate"]
 
 
+
+@pytest.mark.parametrize(
+    "saved, flag, expected",
+    [(True, None, True), (False, None, False), (False, True, True), (True, False, False)],
+)
+def test_classifier_scoring_follows_the_saved_config_unless_overridden(
+    tmp_path, monkeypatch, saved, flag, expected
+):
+    (tmp_path / "inference_results.json").write_text(
+        json.dumps([{"image_id": "0", "output_text_clean": "Report", "answer": "Reference"}])
+    )
+    (tmp_path / "final_config.yml").write_text(
+        f"data:\n  dataset_name: merlin\neval:\n  calculate_classifier_score: {str(saved).lower()}\n"
+    )
+    monkeypatch.setattr(evaluation, "setup_logger", lambda path: None)
+    monkeypatch.setattr(
+        evaluation.lexical_metrics, "evaluate_reports", lambda preds, gts: ({}, {})
+    )
+    scored = []
+    monkeypatch.setattr(
+        evaluation,
+        "get_classifier_evaluator",
+        lambda name: lambda *args, **kwargs: scored.append(name) or ({"f1": 1.0}, None, None),
+    )
+    evaluation.main(Namespace(inference_dir=tmp_path, calculate_classifier_score=flag))
+    assert bool(scored) == expected
+    assert ("f1" in json.loads((tmp_path / "VLM_metrics.json").read_text())) == expected
+
+
 def test_missing_inference_config_asks_for_the_dataset_name(tmp_path):
     with pytest.raises(FileNotFoundError, match="--dataset_name"):
         evaluation.main(Namespace(inference_dir=tmp_path))

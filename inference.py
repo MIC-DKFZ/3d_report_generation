@@ -336,7 +336,8 @@ def main(
 
     if cfg.eval.run_eval and is_main_process():
         eval_args = argparse.Namespace(
-            dataset_name = cfg.data.dataset_name,
+            dataset_name=cfg.data.dataset_name,
+            calculate_classifier_score=cfg.eval.calculate_classifier_score,
             inference_dir=inference_output_dir,
             num_processes=cfg.eval.num_eval_processes
         )

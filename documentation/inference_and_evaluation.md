@@ -70,7 +70,9 @@ The dataset is read from the folder's `final_config.yml`; pass `--dataset_name c
 `merlin` for predictions without one. Records must contain `image_id`,
 `output_text_clean`, and `answer`.
 
-Scoring includes BLEU, METEOR, ROUGE-L, CIDEr, and clinical finding metrics using
+Scoring includes BLEU, METEOR, ROUGE-L, CIDEr, and, if the run config sets
+`eval.calculate_classifier_score` (or `--calculate_classifier_score` is passed), clinical
+finding metrics using
 [RadBERT-CT](https://huggingface.co/IAMJB/RadBERT-CT) for CT-RATE or
 [ModernBERT-Merlin](https://huggingface.co/MIC-DKFZ/ModernBERT-Merlin) for Merlin.
 Optionally pass `--gt_labels_path /path/to/gt_labels.csv` to override Merlin's
