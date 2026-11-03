@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from peft import PeftModel
 from transformers import PreTrainedModel
+from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
 
 from vlm.configs.model.model_config import ModelConfig
 from vlm.configs.model.trainable_params.trainable_linear_layer import TrainableLinearConfig
@@ -365,6 +366,7 @@ class AbstractVLWrapper(ABC):
             logger.warning_main(message)
         cfg = RunConfig(**cfg_dict)
         cfg.general.output_dir.set_runtime_path(ckpt_dir.parent)
+        fall_back_to_sdpa_if_flash_attention_is_missing(cfg.model)
 
         logger.info_main(f"Loading model from {str(ckpt_dir)}")
 
@@ -386,3 +388,25 @@ class AbstractVLWrapper(ABC):
         gc.collect()
         logger.info_main(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
         logger.info_main(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+
+
+FLASH_ATTENTION_AVAILABLE = {
+    "flash_attention_2": is_flash_attn_2_available,
+    "flash_attention_3": is_flash_attn_3_available,
+}
+
+
+def fall_back_to_sdpa_if_flash_attention_is_missing(model_cfg: ModelConfig) -> None:
+    """
+    Load runs trained with a FlashAttention kernel that is not installed with SDPA instead.
+
+    The attention kernel does not change the weights, so the checkpoint loads the same; the
+    outputs can differ slightly, within the numerics of the kernels.
+    """
+    is_available = FLASH_ATTENTION_AVAILABLE.get(model_cfg.attn_implementation)
+    if is_available is not None and not is_available():
+        logger.warning_main(
+            f"The run was trained with '{model_cfg.attn_implementation}', which is not "
+            "installed; loading it with 'sdpa' instead."
+        )
+        model_cfg.attn_implementation = "sdpa"
