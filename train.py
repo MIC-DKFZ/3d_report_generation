@@ -3,6 +3,7 @@ import os
 import shutil
 from pathlib import Path
 
+import torch
 import torch.distributed as dist
 from transformers import EarlyStoppingCallback, TrainerCallback, TrainingArguments
 from transformers.integrations.deepspeed import unset_hf_deepspeed_config
@@ -417,6 +418,25 @@ def inference_is_pending(run_dir: Path, run_inference: bool, already_complete_on
     ).exists()
 
 
+def disable_cudnn_attention_on_hopper_if_affected():
+    """
+    Disable the cuDNN backend of SDPA on Hopper GPUs with torch < 2.15, where its backward pass
+    returns NaN gradients for masked attention (pytorch#196678): with padded batches, training
+    then diverges from the first steps. SDPA falls back to its other backends.
+    """
+    if (
+        torch.cuda.is_available()
+        and torch.cuda.get_device_capability() >= (9, 0)
+        and torch.__version__ < (2, 15)
+        and torch.backends.cuda.cudnn_sdp_enabled()
+    ):
+        torch.backends.cuda.enable_cudnn_sdp(False)
+        logger.info_main(
+            f"Disabled the cuDNN backend of SDPA: torch {torch.__version__} can return NaN "
+            "gradients with it on Hopper GPUs (pytorch#196678)."
+        )
+
+
 @logger.catch(reraise=True)
 def main():
     # Set up DDP before config validation so generated run paths can be shared across ranks.
@@ -424,6 +444,7 @@ def main():
     cfg, runtime_args = setup_config_and_logging(
         is_distributed=ddp_setup[0], local_world_size=ddp_setup[4]
     )
+    disable_cudnn_attention_on_hopper_if_affected()
     checkpoint_plan = create_checkpoint_plan(cfg, runtime_args)
 
     # Pass the actual run directory to the submission script for subsequent (test-set) inference.
