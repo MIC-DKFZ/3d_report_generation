@@ -5,8 +5,14 @@ Preprocessing of CT volumes into vision encoder inputs, shared by the embedding 
 Single-block pipeline per volume: normalize → resample to the encoder spacing, if it has one →
 crop to the mask ROI (bounding box expanded by 4%) → normalize again → fit to the encoder input
 shape by resizing ('resized') or center cropping/padding ('center_crop').
+
+'resized_direct' skips the resampling to the target spacing: the ROI is cropped at the volume's
+own spacing and resized to the encoder input shape in one step, with a Gaussian anti-aliasing
+filter along the axes it shrinks. The target spacing then only sets the smallest ROI extent of
+'enforce_min_bbox' (the input shape at that spacing, in mm), as in 'resized'.
 """
 
+import math
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
@@ -27,7 +33,7 @@ from vlm.data.preprocessing.default_resampling import (
     resample_data_or_seg,
 )
 
-PROCESSING_MODES = ("resized", "center_crop")
+PROCESSING_MODES = ("resized", "center_crop", "resized_direct")
 NORMALIZATIONS = ("z_score", "min_max", "vista3d_scale", "merlin_scale", "none")
 OUTLIER_METHODS = ("none", "connected_components")
 
@@ -212,6 +218,50 @@ def crop_to_mask_roi(
     return data[:, z0:z1, y0:y1, x0:x1]
 
 
+def anti_aliasing_sigmas(
+    input_size: tuple[int, ...], output_size: tuple[int, ...]
+) -> tuple[float, ...]:
+    """
+    Gaussian sigmas (in input voxels) per axis that remove the detail finer than the output
+    voxels before resizing, as 'skimage.transform.resize(anti_aliasing=True)': (factor - 1) / 2
+    for the axes that shrink by 'factor', 0 for those that keep their size or grow.
+    """
+    return tuple(max(0.0, (i / o - 1) / 2) for i, o in zip(input_size, output_size))
+
+
+def resize_with_anti_aliasing(
+    image: torch.Tensor, output_size: tuple[int, int, int]
+) -> torch.Tensor:
+    """Resize (b, c, z, y, x) trilinearly, after a Gaussian filter along the shrinking axes."""
+    sigmas = anti_aliasing_sigmas(tuple(image.shape[-3:]), tuple(output_size))
+    if any(sigma > 0 for sigma in sigmas):
+        filtered = ndi.gaussian_filter(
+            image.numpy(), sigma=(0, 0, *sigmas), mode="nearest", truncate=4.0
+        )
+        image = torch.from_numpy(filtered)
+    if tuple(image.shape[-3:]) == tuple(output_size):
+        return image
+    return F.interpolate(image, size=output_size, mode="trilinear", align_corners=False)
+
+
+def min_roi_voxels(
+    input_shape: tuple[int, int, int],
+    spacing: tuple[float, float, float],
+    target_spacing: tuple[float, float, float] | None,
+) -> tuple[int, int, int]:
+    """
+    The smallest ROI (z, y, x) in voxels of 'spacing' for 'enforce_min_bbox' of
+    'resized_direct': the input shape at the target spacing, in mm (at the volume's own spacing
+    without one), the extent 'resized' enforces after resampling.
+    """
+    if target_spacing is None:
+        return tuple(input_shape)
+    return tuple(
+        math.ceil(size * target / current - 1e-6)
+        for size, target, current in zip(input_shape, target_spacing, spacing)
+    )
+
+
 def fit_to_input_shape(
     roi: np.ndarray,
     normalization: str,
@@ -226,6 +276,8 @@ def fit_to_input_shape(
         if image.shape[-3:] == tuple(input_shape):
             return image
         return F.interpolate(image, size=input_shape, mode="trilinear", align_corners=False)
+    if processing_mode == "resized_direct":
+        return resize_with_anti_aliasing(image, input_shape)
     raise ValueError(f"Unknown processing mode: {processing_mode}")
 
 
@@ -249,6 +301,27 @@ def preprocess_encoder_input(
     """
     data = sitk.GetArrayFromImage(image)[np.newaxis]
     data = apply_normalization(data, normalization)
+    if processing_mode == "resized_direct":
+        # Cropped at the volume's own spacing and resized once, in 'fit_to_input_shape'.
+        if mask is not None:
+            mask_data = binarize_mask(
+                sitk.GetArrayFromImage(mask)[np.newaxis],
+                mask_label_ids,
+                outlier_method,
+                outlier_min_voxels,
+            )
+            if mask_data.shape != data.shape:
+                raise ValueError(
+                    f"The mask has shape {mask_data.shape[1:]}, the volume {data.shape[1:]}; "
+                    "'resized_direct' needs masks on the grid of their volumes."
+                )
+            min_size_zyx = min_roi_voxels(
+                input_shape, image.GetSpacing()[::-1], target_spacing
+            )
+            data = crop_to_mask_roi(
+                data, mask_data, min_size_zyx[::-1] if enforce_min_bbox else None
+            )
+        return fit_to_input_shape(data, normalization, processing_mode, input_shape)
     if target_spacing is not None:
         data = resample_to_spacing_if_needed(data, image.GetSpacing()[::-1], target_spacing)
     if mask is not None:

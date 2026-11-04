@@ -20,7 +20,12 @@ from vlm.configs.data_config import (
     VisionInputPreprocessingConfig,
 )
 from vlm.data.preprocessing import nifti_inputs
-from vlm.data.preprocessing.encoder_input import preprocess_encoder_input
+from vlm.data.preprocessing.encoder_input import (
+    anti_aliasing_sigmas,
+    min_roi_voxels,
+    preprocess_encoder_input,
+    resize_with_anti_aliasing,
+)
 from vlm.data.vision_input_settings import load_settings
 from vlm.models.vision_encoders import nnssl, primus, resenc
 from vlm.models.vision_encoders.primus import PrimusEncoder
@@ -510,6 +515,7 @@ def test_public_script_saves_the_paper_embeddings_with_their_settings(
     [
         ("nnFoundationCNN", [], "needs '--mask_dir'"),
         ("Primus-1B_Whole", ["--mask_dir", "masks"], "takes no '--mask_dir'"),
+        ("Primus-1B_Whole", ["--roi", "foreground"], "takes no '--roi'"),
     ],
 )
 def test_public_script_takes_masks_exactly_for_roi_embeddings(capsys, embedding, mask_args, match):
@@ -520,3 +526,108 @@ def test_public_script_takes_masks_exactly_for_roi_embeddings(capsys, embedding,
             + ["--output_dir", "out", *mask_args]
         )
     assert match in capsys.readouterr().err
+
+
+def test_anti_aliasing_filters_only_the_shrinking_axes():
+    assert anti_aliasing_sigmas((96, 470, 470), (192, 100, 100)) == pytest.approx((0, 1.85, 1.85))
+    assert anti_aliasing_sigmas((50, 100, 100), (50, 100, 100)) == (0, 0, 0)
+
+
+def test_resizing_with_anti_aliasing_averages_detail_finer_than_the_output():
+    # Stripes one voxel wide along x, shrunk by 64 / 15 (about CT-RATE's in-plane factor): they
+    # should average to grey; trilinear resizing alone turns them into a coarser false pattern.
+    stripes = torch.zeros(1, 1, 8, 8, 64)
+    stripes[..., ::2] = 1.0
+    plain = torch.nn.functional.interpolate(
+        stripes, size=(8, 8, 15), mode="trilinear", align_corners=False
+    )
+    filtered = resize_with_anti_aliasing(stripes, (8, 8, 15))
+    assert filtered.shape == (1, 1, 8, 8, 15)
+    # Away from the borders, where the filter repeats the edge voxels.
+    inner, plain_inner = filtered[..., 1:-1], plain[..., 1:-1]
+    assert inner.std() < 0.01 and plain_inner.std() > 0.2
+    torch.testing.assert_close(inner.mean(), torch.tensor(0.5), atol=0.01, rtol=0)
+
+
+def test_growing_axes_are_resized_without_filtering():
+    image = torch.randn(1, 1, 6, 16, 16)
+    plain = torch.nn.functional.interpolate(
+        image, size=(12, 16, 16), mode="trilinear", align_corners=False
+    )
+    torch.testing.assert_close(resize_with_anti_aliasing(image, (12, 16, 16)), plain)
+
+
+def test_the_smallest_direct_roi_has_the_extent_of_the_resampled_one():
+    assert min_roi_voxels((192, 192, 192), (2.0, 0.5, 0.8), (1.0, 1.0, 1.0)) == (96, 384, 240)
+    assert min_roi_voxels((192, 192, 192), (2.0, 0.5, 0.8), None) == (192, 192, 192)
+
+
+def test_direct_resizing_crops_the_same_roi_as_resampling_first():
+    spacing_xyz = (0.5, 0.5, 2.0)  # SimpleITK order (x, y, z)
+    array = np.zeros((20, 80, 80), np.float32)
+    array[5:15, 20:60, 30:50] = 1.0  # the bright ROI, 20 x 20 x 10 mm
+    mask = (array > 0).astype(np.uint8)
+    image, mask_image = sitk.GetImageFromArray(array), sitk.GetImageFromArray(mask)
+    for item in (image, mask_image):
+        item.SetSpacing(spacing_xyz)
+    kwargs = {
+        "target_spacing": (1.0, 1.0, 1.0),
+        "normalization": "none",
+        "input_shape": (8, 8, 8),
+        "enforce_min_bbox": False,
+    }
+    direct = preprocess_encoder_input(
+        image, mask_image, processing_mode="resized_direct", **kwargs
+    )
+    resampled = preprocess_encoder_input(image, mask_image, processing_mode="resized", **kwargs)
+    assert direct.shape == resampled.shape == (1, 1, 8, 8, 8)
+    # Both crops hold mostly the ROI; its intensity fills the centre of the input.
+    assert direct[..., 2:6, 2:6, 2:6].mean() > 0.9
+    assert resampled[..., 2:6, 2:6, 2:6].mean() > 0.9
+
+
+def test_direct_resizing_needs_masks_on_the_grid_of_their_volumes():
+    image = sitk.GetImageFromArray(np.zeros((10, 12, 12), np.float32))
+    mask = sitk.GetImageFromArray(np.ones((10, 6, 6), np.uint8))
+    with pytest.raises(ValueError, match="grid of their volumes"):
+        preprocess_encoder_input(
+            image,
+            mask,
+            target_spacing=(1.0, 1.0, 1.0),
+            normalization="none",
+            input_shape=(8, 8, 8),
+            processing_mode="resized_direct",
+        )
+
+
+def test_public_script_records_the_processing_mode_and_foreground_roi(tmp_path, monkeypatch):
+    script = load_embedding_script()
+    monkeypatch.setattr(script.torch.cuda, "is_available", lambda: False)
+    checkpoint, _ = tiny_checkpoint(tmp_path)
+    rng = np.random.default_rng(0)
+    mask = np.zeros((24, 22, 26), np.uint8)
+    mask[3:20, 4:18, 2:24] = 1
+    ras = (-1, 0, 0, 0, -1, 0, 0, 0, 1)
+    for name in ("train_fixed/x_1", "valid_fixed/y_1"):
+        volume = rng.normal(size=(24, 22, 26)).astype(np.float32)
+        write_volume(tmp_path / f"in/{name}.nii.gz", volume, ras, spacing=(1.2, 1.0, 1.5))
+        write_volume(tmp_path / f"masks/{name}.nii.gz", mask, ras, spacing=(1.2, 1.0, 1.5))
+
+    script.main(
+        script.parse_args(
+            [
+                *("--embedding", "nnFoundationViT", "--dataset", "ctrate"),
+                *("--input_dir", str(tmp_path / "in"), "--mask_dir", str(tmp_path / "masks")),
+                *("--output_dir", str(tmp_path / "out"), "--checkpoint", str(checkpoint)),
+                *("--processing_mode", "resized_direct", "--roi", "foreground"),
+                *("--num_workers", "0"),
+            ]
+        )
+    )
+
+    preprocessing = load_settings(tmp_path / "out").vision_input_preprocessing
+    assert preprocessing.processing_mode == "resized_direct"
+    assert preprocessing.roi_mask == "TotalSegmentator 'total', foreground of all labels"
+    assert preprocessing.mask_label_ids is None
+    for name in ("train_fixed/x_1", "valid_fixed/y_1"):
+        assert (tmp_path / "out" / f"{name}_embedding.bl2").is_file()

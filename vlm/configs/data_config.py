@@ -38,14 +38,18 @@ class VisionInputPreprocessingConfig(ConfigBase):
 
     target_spacing: tuple[float, float, float] | None = Field(
         None,
-        description="Spacing (z, y, x) in mm the volumes were resampled to; None: not resampled.",
+        description="Spacing (z, y, x) in mm the encoder input shape corresponds to; None: "
+        "the volumes keep their own spacing. 'resized' and 'center_crop' resample the volumes to "
+        "it. 'resized_direct' does not, and only uses it for the minimum ROI size of "
+        "'enforce_min_bbox'.",
     )
     normalization: Literal[NORMALIZATIONS] = Field(
         "z_score", description="Intensity normalization."
     )
     processing_mode: Literal[PROCESSING_MODES] = Field(
-        description="How the ROI was fit to the encoder input shape: resized, or center "
-        "cropped/padded."
+        description="How the ROI was fit to the encoder input shape: resized, center "
+        "cropped/padded, or resized in one step from the volume's own spacing with "
+        "anti-aliasing ('resized_direct')."
     )
     roi_mask: str | None = Field(
         None,
@@ -56,7 +60,9 @@ class VisionInputPreprocessingConfig(ConfigBase):
         None, description="Mask labels of the ROI; None: all non-zero labels."
     )
     enforce_min_bbox: bool = Field(
-        True, description="Enlarge the ROI to at least the encoder input shape."
+        True,
+        description="Enlarge the ROI to at least the encoder input shape at 'target_spacing' "
+        "(in voxels of the volume's own spacing without one).",
     )
     outlier_method: Literal[OUTLIER_METHODS] = Field(
         "none", description="Removal of small mask components before cropping."

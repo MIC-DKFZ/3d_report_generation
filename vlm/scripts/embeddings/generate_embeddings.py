@@ -25,6 +25,11 @@ are embedded whole, with a warning. The embedding
 configs expect it (see documentation/data_preparation.md). Existing embeddings are skipped, so an
 interrupted run can be restarted.
 
+Options beyond the papers: '--processing_mode' replaces the embedding's mode, e.g.
+'resized_direct' (the ROI cropped at the volume's own spacing and resized once, with
+anti-aliasing; see vlm/data/preprocessing/encoder_input.py), and '--roi foreground' crops
+CT-RATE to the foreground of all labels, as Merlin.
+
 The settings are saved once per embedding folder, as '<output_dir>/vision_input_preprocessing.yml';
 training copies them into the run config, so that 'inference_nifti.py' embeds new volumes the same
 way.
@@ -46,6 +51,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from vlm.configs.data_config import VisionInputPreprocessingConfig, VisionInputSettings
+from vlm.data.preprocessing.encoder_input import PROCESSING_MODES
 from vlm.data.preprocessing.nifti_inputs import (
     NiftiEncoderInputDataset,
     collate_samples,
@@ -85,8 +91,17 @@ EMBEDDINGS = {
     },
 }
 
-# The papers' embeddings are at 1 mm, although the encoders were pre-trained without resampling.
+# Default target spacing in millimetres (z, y, x).
 TARGET_SPACING = (1.0, 1.0, 1.0)
+
+# Shared by Merlin's default ROI and '--roi foreground' for either dataset.
+FOREGROUND_ROI = {
+    "roi_mask": "TotalSegmentator 'total', foreground of all labels",
+    "mask_label_ids": None,
+    "enforce_min_bbox": True,
+    "outlier_method": "connected_components",
+    "outlier_min_voxels": 100,
+}
 
 # Orientations are those the datasets are mostly stored in, so that most volumes stay unchanged.
 DATASETS = {
@@ -103,13 +118,7 @@ DATASETS = {
     "merlin": {
         "orientation": "LAS",
         "split_folders": [""],
-        "roi": {
-            "roi_mask": "TotalSegmentator 'total', foreground of all labels",
-            "mask_label_ids": None,
-            "enforce_min_bbox": True,
-            "outlier_method": "connected_components",
-            "outlier_min_voxels": 100,
-        },
+        "roi": FOREGROUND_ROI,
     },
 }
 
@@ -145,6 +154,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Encoder checkpoint file or Hugging Face repository; by default the encoder's "
         "repository, e.g. 'MIC-DKFZ/nnFoundationViT'.",
     )
+    parser.add_argument(
+        "--processing_mode",
+        choices=PROCESSING_MODES,
+        default=None,
+        help="Replaces the embedding's processing mode, e.g. 'resized_direct'.",
+    )
+    parser.add_argument(
+        "--roi",
+        choices=["dataset", "foreground"],
+        default="dataset",
+        help="The dataset's ROI, or the foreground of all TotalSegmentator labels (Merlin's ROI) "
+        "for both datasets.",
+    )
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument(
         "--overwrite", action="store_true", help="Embed volumes already saved again."
@@ -155,18 +177,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error(f"{args.embedding} embeds the ROI and needs '--mask_dir'.")
     if not uses_roi and args.mask_dir is not None:
         parser.error(f"{args.embedding} embeds the whole volume and takes no '--mask_dir'.")
+    if not uses_roi and args.roi != "dataset":
+        parser.error(f"{args.embedding} embeds the whole volume and takes no '--roi'.")
     return args
 
 
-def paper_settings(embedding: str, dataset: str, checkpoint: str) -> VisionInputSettings:
+def paper_settings(
+    embedding: str,
+    dataset: str,
+    checkpoint: str,
+    processing_mode: str | None = None,
+    roi: str = "dataset",
+) -> VisionInputSettings:
     preset = EMBEDDINGS[embedding]
+    roi_settings = FOREGROUND_ROI if roi == "foreground" else DATASETS[dataset]["roi"]
     return VisionInputSettings(
         vision_input_orientation=DATASETS[dataset]["orientation"],
         vision_input_preprocessing=VisionInputPreprocessingConfig(
             target_spacing=TARGET_SPACING,
             normalization="z_score",
-            processing_mode=preset["processing_modes"][dataset],
-            **(DATASETS[dataset]["roi"] if preset["roi"] else {}),
+            processing_mode=processing_mode or preset["processing_modes"][dataset],
+            **(roi_settings if preset["roi"] else {}),
         ),
         embedding_encoder={
             "class_name": preset["encoder"].__name__,
@@ -206,7 +237,9 @@ def split_files(input_dir: Path, output_dir: Path, overwrite: bool) -> dict[Path
 def main(args: argparse.Namespace):
     preset = EMBEDDINGS[args.embedding]
     checkpoint = args.checkpoint or preset["checkpoint"]
-    settings = paper_settings(args.embedding, args.dataset, checkpoint)
+    settings = paper_settings(
+        args.embedding, args.dataset, checkpoint, args.processing_mode, args.roi
+    )
     input_dir = args.input_dir.resolve()
     # All splits are listed first, so that a missing one fails before hours of embedding.
     splits = {
