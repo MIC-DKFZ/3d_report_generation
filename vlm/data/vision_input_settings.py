@@ -6,6 +6,7 @@ by training, so that new volumes can be preprocessed like the training inputs.
 
 import os
 from pathlib import Path
+from uuid import uuid4
 
 import yaml
 
@@ -41,7 +42,7 @@ def save_settings(vision_input_path: str | Path, settings: VisionInputSettings) 
         )
     path.parent.mkdir(parents=True, exist_ok=True)
     # Atomically, since parallel jobs (e.g. embedding shards) save the same settings.
-    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
     tmp_path.write_text(to_yaml(settings))
     os.replace(tmp_path, path)
     return path

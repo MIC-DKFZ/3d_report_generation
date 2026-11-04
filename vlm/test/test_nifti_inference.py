@@ -631,3 +631,20 @@ def test_public_script_records_the_processing_mode_and_foreground_roi(tmp_path, 
     assert preprocessing.mask_label_ids is None
     for name in ("train_fixed/x_1", "valid_fixed/y_1"):
         assert (tmp_path / "out" / f"{name}_embedding.bl2").is_file()
+
+
+@pytest.mark.parametrize("world_size", [2, 3])
+def test_public_script_shards_split_every_volume_exactly_once(tmp_path, world_size):
+    script = load_embedding_script()
+    for i in range(7):
+        (tmp_path / "in").mkdir(exist_ok=True)
+        (tmp_path / f"in/case_{i}.nii.gz").write_bytes(b"")
+    # One volume already embedded: the shards still split all volumes the same way.
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out/case_0_embedding.bl2").write_bytes(b"")
+    shards = [
+        script.split_files(tmp_path / "in", tmp_path / "out", False, rank, world_size)
+        for rank in range(world_size)
+    ]
+    names = sorted(path.name for shard in shards for path in shard)
+    assert names == [f"case_{i}.nii.gz" for i in range(1, 7)]

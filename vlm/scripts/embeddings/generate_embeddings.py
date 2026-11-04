@@ -28,7 +28,8 @@ interrupted run can be restarted.
 Options beyond the papers: '--processing_mode' replaces the embedding's mode, e.g.
 'resized_direct' (the ROI cropped at the volume's own spacing and resized once, with
 anti-aliasing; see vlm/data/preprocessing/encoder_input.py), and '--roi foreground' crops
-CT-RATE to the foreground of all labels, as Merlin.
+CT-RATE to the foreground of all labels, as Merlin. Launched with torchrun, the volumes are split
+across the processes (on all nodes), each on its own GPU.
 
 The settings are saved once per embedding folder, as '<output_dir>/vision_input_preprocessing.yml';
 training copies them into the run config, so that 'inference_nifti.py' embeds new volumes the same
@@ -46,6 +47,7 @@ from pathlib import Path
 
 import blosc2
 import numpy as np
+import SimpleITK as sitk
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -218,8 +220,14 @@ def save_embedding(embedding: np.ndarray, path: Path):
     os.replace(tmp_path, path)
 
 
-def split_files(input_dir: Path, output_dir: Path, overwrite: bool) -> dict[Path, Path]:
-    """The volumes of a split folder still to embed, mapped to their embedding files."""
+def split_files(
+    input_dir: Path, output_dir: Path, overwrite: bool, rank: int = 0, world_size: int = 1
+) -> dict[Path, Path]:
+    """
+    The volumes of a split folder still to embed, mapped to their embedding files: of all its
+    volumes, every 'world_size'-th from 'rank' on, so that the processes split them the same way
+    however many each has already saved.
+    """
     if not input_dir.is_dir():
         raise FileNotFoundError(f"Split folder {input_dir} not found.")
     files = find_nifti_files(input_dir)
@@ -231,7 +239,13 @@ def split_files(input_dir: Path, output_dir: Path, overwrite: bool) -> dict[Path
     duplicates = len(files) - len(set(output_paths.values()))
     if duplicates:
         raise ValueError(f"{duplicates} volumes in {input_dir} share a file name with another.")
-    return {file: path for file, path in output_paths.items() if overwrite or not path.exists()}
+    shard = list(output_paths.items())[rank::world_size]
+    return {file: path for file, path in shard if overwrite or not path.exists()}
+
+
+def init_preprocessing_worker(worker_id: int):
+    # DataLoader already limits PyTorch threads; limit SimpleITK's separate pool too.
+    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(1)
 
 
 def main(args: argparse.Namespace):
@@ -240,16 +254,21 @@ def main(args: argparse.Namespace):
     settings = paper_settings(
         args.embedding, args.dataset, checkpoint, args.processing_mode, args.roi
     )
+    # Under torchrun, each process embeds every 'world_size'-th volume of each split.
+    rank = int(os.environ.get("RANK", "0"))
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
     input_dir = args.input_dir.resolve()
     # All splits are listed first, so that a missing one fails before hours of embedding.
     splits = {
-        split: split_files(input_dir / split, args.output_dir / split, args.overwrite)
+        split: split_files(
+            input_dir / split, args.output_dir / split, args.overwrite, rank, world_size
+        )
         for split in DATASETS[args.dataset]["split_folders"]
     }
     # Before embedding, so that settings differing from the folder's fail early.
     settings_file = save_settings(args.output_dir, settings)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = f"cuda:{os.environ.get('LOCAL_RANK', '0')}" if torch.cuda.is_available() else "cpu"
     encoder = preset["encoder"].from_pretrained(checkpoint).to(device).eval()
     preprocessing_kwargs = settings.vision_input_preprocessing.preprocessing_kwargs(
         encoder.patch_size
@@ -268,10 +287,13 @@ def main(args: argparse.Namespace):
             batch_size=1,
             num_workers=args.num_workers,
             collate_fn=collate_samples,
+            worker_init_fn=init_preprocessing_worker,
         )
         failed = []
         with torch.inference_mode():
-            for (sample,) in tqdm(loader, desc=f"Embedding {split or args.dataset}"):
+            for (sample,) in tqdm(
+                loader, desc=f"Embedding {split or args.dataset}", disable=rank != 0
+            ):
                 if sample["error"] is not None:
                     print(f"Skipped {sample['path']}: {sample['error']}")
                     failed.append({key: sample[key] for key in ("path", "error")})
@@ -280,11 +302,11 @@ def main(args: argparse.Namespace):
                 embedding = encoder(sample["encoder_input"][None].to(device).float())[0]
                 save_embedding(embedding.cpu().numpy(), output_paths[Path(sample["path"])])
         if failed:
-            save_json(failed, output_dir / "failed.json")
-            print(
-                f"Skipped {len(failed)} of {len(output_paths)} volumes, see "
-                f"{output_dir}/failed.json"
+            failed_file = output_dir / (
+                "failed.json" if world_size == 1 else f"failed_rank{rank}.json"
             )
+            save_json(failed, failed_file)
+            print(f"Skipped {len(failed)} of {len(output_paths)} volumes, see {failed_file}")
         print(f"Saved {len(output_paths) - len(failed)} embeddings to {output_dir}")
     print(f"Settings in {settings_file}")
 
