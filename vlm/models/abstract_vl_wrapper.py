@@ -353,14 +353,18 @@ class AbstractVLWrapper(ABC):
 
         Args:
             ckpt_dir: Path to the checkpoint directory.
-                Must contain 'model.safetensors'. Architecture configuration comes
-                from the parent run directory's 'final_config.yml'.
+                Must contain 'model.safetensors'. Architecture configuration comes from
+                its 'final_config.yml', as in exported checkpoints, else from the parent run
+                directory's.
 
         Returns:
             An instance of the model with weights restored.
         """
         ckpt_dir = Path(ckpt_dir)
-        cfg_dict = load_yaml(ckpt_dir.parent / "final_config.yml")["run"]
+        config_path = ckpt_dir / "final_config.yml"
+        if not config_path.is_file():
+            config_path = ckpt_dir.parent / "final_config.yml"
+        cfg_dict = load_yaml(config_path)["run"]
         cfg_dict, config_warnings = normalize_saved_config(cfg_dict)
         for message in config_warnings:
             logger.warning_main(message)

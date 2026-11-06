@@ -52,7 +52,8 @@ class nnsslEncoderBase(VisionEncoderBase):
     def from_pretrained(cls, checkpoint_path: str | Path | None, **kwargs) -> Self:
         """
         Load the encoder from an nnssl checkpoint file, or from a Hugging Face hub repository
-        (ID or URL) holding one as 'checkpoint_final.pth'.
+        (ID or URL) holding one as 'checkpoint_final.pth', at a revision if given as
+        '<repository>@<revision>' (e.g. a commit hash, as exported checkpoints record it).
 
         The encoder input is the plan's 'recommended_downstream_patchsize', as in nnU-Net and
         image_classification; a learned positional embedding ('key_to_lpe') is resized from
@@ -62,8 +63,12 @@ class nnsslEncoderBase(VisionEncoderBase):
             raise ValueError(f"{cls.__name__} needs a checkpoint file or Hugging Face repository.")
         if not Path(checkpoint_path).is_file():
             repo_id = str(checkpoint_path).removeprefix("https://huggingface.co/").strip("/")
+            repo_id, _, revision = repo_id.partition("@")
             checkpoint_path = hf_hub_download(
-                repo_id, cls.checkpoint_file, cache_dir=get_hf_hub_cache_dir()
+                repo_id,
+                cls.checkpoint_file,
+                revision=revision or None,
+                cache_dir=get_hf_hub_cache_dir(),
             )
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         plan = checkpoint["nnssl_adaptation_plan"]

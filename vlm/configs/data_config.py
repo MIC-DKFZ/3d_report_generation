@@ -102,7 +102,10 @@ class EmbeddingEncoderConfig(ConfigBase):
         description="Class in 'vlm/models/vision_encoders', e.g. 'ResEncEncoder'."
     )
     checkpoint_path: str = Field(
-        description="Checkpoint file or Hugging Face repository the embeddings were made with."
+        description=(
+            "Checkpoint file or Hugging Face repository (optionally '<repository>@<revision>') "
+            "the embeddings were made with."
+        )
     )
 
 
