@@ -16,11 +16,13 @@ the dataset's 'vision_input_preprocessing.yml', if it has one. Dotted config ove
 accepted as in 'inference.py', e.g. '--data.vision_input_orientation LPS' for runs whose config
 does not set it.
 
-Runs whose inputs were cropped to TotalSegmentator 'total' masks, as all nnFoundation runs,
-crop the volumes to the masks in '--mask_dir' (same relative paths as the volumes); masks missing
-there are made with TotalSegmentator, as the training masks, and saved there for later runs
-(see 'vlm/data/preprocessing/totalsegmentator_masks.py'). Without '--mask_dir', all masks are
-made, in '<output_dir>/totalsegmentator_masks'. Volumes without a usable mask are skipped (listed under
+Runs whose inputs were cropped to an ROI mask ('data.vision_input_preprocessing.roi_mask') crop
+the volumes to the masks in '--mask_dir' (same relative paths as the volumes). For TotalSegmentator
+'total' masks, as in the nnFoundationViT foreground ('FG') runs, masks missing there are made with
+TotalSegmentator, as the training masks, and saved there for later runs (see
+'vlm/data/preprocessing/totalsegmentator_masks.py'); without '--mask_dir', all masks are made, in
+'<output_dir>/totalsegmentator_masks'. Other masks, e.g. the lung crops of earlier CT-RATE runs,
+are not made here and must be passed. Volumes without a usable mask are skipped (listed under
 'failed'), or used whole with '--allow_missing_masks'.
 
 Launched with torchrun, e.g. 'torchrun --standalone --nproc_per_node=4 inference_nifti.py ...',
