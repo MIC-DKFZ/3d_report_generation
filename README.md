@@ -9,8 +9,7 @@ checkpoints of Qwen3-VL-2B trained on nnFoundationViT embeddings:
 | Merlin | abdominal CT (Merlin) | [`jonathan-suprijadi/ct-report-merlin`](https://huggingface.co/jonathan-suprijadi/ct-report-merlin) (revision `4ff8739b`) |
 
 Each volume is reoriented, cropped to its TotalSegmentator mask, preprocessed and encoded as
-the training volumes were, so that no settings have to be passed. The checkpoints are
-preliminary.
+the training volumes were, so that no settings have to be passed.
 
 ## Installation
 
@@ -29,13 +28,18 @@ FlashAttention 3 of training is not needed (without it, loading warns about it).
 
 ## Downloads
 
-The checkpoints, the Qwen3-VL base model, the vision encoder and the TotalSegmentator weights
-are downloaded on first use. On machines without internet access (e.g. cluster compute nodes),
-download them beforehand on a machine with access to the same file system:
+Download the two checkpoints into `models/` (`--checkpoint_dir` takes a local folder):
 
 ```bash
 hf download jonathan-suprijadi/ct-report-ctrate --revision 5136213031163fd34cceabd15362efdffc11c9b4 --local-dir models/ctrate
 hf download jonathan-suprijadi/ct-report-merlin --revision 4ff8739b6be208abcfe1fe98c670931addd8897d --local-dir models/merlin
+```
+
+The Qwen3-VL base model, the vision encoder and the TotalSegmentator weights are downloaded on
+first use. On machines without internet access (e.g. cluster compute nodes), download them
+beforehand on a machine with access to the same file system:
+
+```bash
 hf download Qwen/Qwen3-VL-2B-Instruct
 hf download MIC-DKFZ/nnFoundationViT
 totalseg_download_weights -t total
