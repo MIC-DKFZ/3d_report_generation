@@ -1,155 +1,85 @@
-# VLM: 3D Radiology Report Generation
+# Generating CT reports with the evaluation checkpoints
 
-[![nnFoundation paper](https://img.shields.io/badge/nnFoundation-arXiv-b31b1b?logo=arxiv)](https://arxiv.org/abs/2609.26924)
-[![nnFoundationViT models](https://img.shields.io/badge/Hugging%20Face-nnFoundationViT-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/nnFoundationViT)
-[![nnFoundationCNN models](https://img.shields.io/badge/Hugging%20Face-nnFoundationCNN-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/nnFoundationCNN)
+This archive holds only the code to generate radiology reports from CT volumes (NIfTI) with two
+checkpoints of Qwen3-VL-2B trained on nnFoundationViT embeddings:
 
-[![RMR paper](https://img.shields.io/badge/RMR-arXiv-b31b1b?logo=arxiv)](https://arxiv.org/abs/2608.08713)
-[![PrimusM-MAE model](https://img.shields.io/badge/Hugging%20Face-PrimusM--MAE-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/PrimusM-MAE)
-[![ModernBERT-Merlin model](https://img.shields.io/badge/Hugging%20Face-ModernBERT--Merlin-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/ModernBERT-Merlin)
+| Checkpoint | Trained on | Hugging Face repository |
+|---|---|---|
+| CT-RATE | chest CT (CT-RATE v2) | `<user>/<ctrate repository>` (revision `<hash>`) |
+| Merlin | abdominal CT (Merlin) | `<user>/<merlin repository>` (revision `<hash>`) |
 
-A framework for radiology report generation from 3D medical images, supporting
-training, inference, and evaluation of vision-language models.
-
-| Project | Paper | Training configurations |
-| --- | --- | --- |
-| **nnFoundation** | [nnFoundation: 3D Foundation Models for Radiology](https://arxiv.org/abs/2609.26924) | [paper_configs/nnFoundation](paper_configs/nnFoundation/) |
-| **RMR** | [Resolution Meets Reduction: Efficient Visual Context for 3D Radiology Report Generation](https://arxiv.org/abs/2608.08713) | [paper_configs/RMR](paper_configs/RMR/) |
-
-**nnFoundation:** This repository provides the downstream report-generation
-experiments for nnFoundation. Frozen features from
-[nnFoundationViT](https://huggingface.co/MIC-DKFZ/nnFoundationViT) or
-[nnFoundationCNN](https://huggingface.co/MIC-DKFZ/nnFoundationCNN) are connected
-to Qwen2.5-VL-3B through a trainable vision-to-language adapter, with LoRA
-adaptation of the language model.
-
-**RMR (Resolution Meets Reduction):** RMR investigates how to preserve useful
-visual detail while reducing the token cost of 3D report generation. Its
-experiments compare input field of view and resolution, visual token compression
-methods, and language-model choice on CT-RATE and Merlin.
+Each volume is reoriented, cropped to its TotalSegmentator mask, preprocessed and encoded as
+the training volumes were, so that no settings have to be passed. The checkpoints are
+preliminary; please do not share them further.
 
 ## Installation
 
-Use Python **3.12**, [uv](https://docs.astral.sh/uv/getting-started/installation/),
-and a CUDA-capable GPU. Evaluation, including the automatic evaluation after training, requires Java for METEOR.
-From the repository root:
+Python 3.12 and a CUDA GPU are needed. With [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv sync --locked --python 3.12
+uv sync --extra totalsegmentator
 ```
 
-## Quick start
+or with pip in a new environment: `pip install -e ".[totalsegmentator]"`.
 
-The example below trains nnFoundationViT on CT-RATE. Before running it,
-[prepare the dataset JSONs and vision embeddings](documentation/data_preparation.md)
-and export the config's data-path variables, `CTRATE_DATASET_JSONS` and `VLM_EMBEDS`,
-as described there.
+The checkpoints were trained with FlashAttention 3. It is optional: without it, the models are
+loaded with PyTorch's SDPA attention (with a warning), which gives the same reports up to small
+numerical differences.
 
-Training reads two environment variables:
+## Downloads
 
-| Variable | Purpose |
-| --- | --- |
-| `VLM_CONFIG_DIR` | Root for resolving configuration files |
-| `VLM_OUTPUT_DIR` | Root for saving runs and finding existing runs by folder name |
-
-The experiments use an **effective batch size of 24**. Set the per-GPU batch size
-and gradient accumulation for your available GPU memory and GPU count:
-
-```text
-effective batch size = number of GPUs × per-GPU batch size × gradient accumulation steps
-```
-
-For example, train nnFoundationViT on CT-RATE with one GPU (`1 × 3 × 8 = 24`):
+The checkpoints, the Qwen3-VL base model, the vision encoder and the TotalSegmentator weights
+are downloaded on first use. On machines without internet access (e.g. cluster compute nodes),
+download them beforehand on a machine with access to the same file system:
 
 ```bash
-export VLM_CONFIG_DIR="$PWD/paper_configs/nnFoundation"
-export VLM_OUTPUT_DIR="$PWD/output"
-
-uv run python train.py \
-  --train_config nnFoundationViT.yml \
-  --add_base_configs bases/datasets/ctrate/nnFoundationViT.yml \
-  --trainer.per_device_train_batch_size 3 \
-  --trainer.gradient_accumulation_steps 8
+hf download <user>/<ctrate repository> --revision <hash> --local-dir models/ctrate
+hf download <user>/<merlin repository> --revision <hash> --local-dir models/merlin
+hf download Qwen/Qwen3-VL-2B-Instruct
+hf download MIC-DKFZ/nnFoundationViT
+totalseg_download_weights -t total
 ```
 
-The example uses `$PWD/output`. You can set `VLM_OUTPUT_DIR` to any writable
-location, including outside the repository, with enough space for checkpoints.
+and set `HF_HUB_OFFLINE=1` for the runs. On Slurm or LSF clusters, set `HF_HUB_CACHE` to the
+Hugging Face cache the downloads went to (outside clusters, `~/.cache/huggingface/hub` is used).
+`TOTALSEG_HOME_DIR` sets where TotalSegmentator keeps its weights (default
+`~/.totalsegmentator`). TotalSegmentator sends anonymous usage statistics unless
+`"send_usage_stats": false` is set in `<TOTALSEG_HOME_DIR>/config.json`.
 
-Multi-GPU training uses **Distributed Data Parallel (DDP)** through `torchrun`.
-For four GPUs (`4 × 3 × 2 = 24`):
+## Generating reports
 
 ```bash
-uv run torchrun --standalone --nproc_per_node=4 train.py \
-  --train_config nnFoundationViT.yml \
-  --add_base_configs bases/datasets/ctrate/nnFoundationViT.yml \
-  --trainer.per_device_train_batch_size 3 \
-  --trainer.gradient_accumulation_steps 2
+torchrun --standalone --nproc_per_node=<number of GPUs> inference_nifti.py \
+    --checkpoint_dir models/ctrate --input_dir <folder of chest CT volumes> \
+    --mask_dir <folder for the masks> --output_dir <output folder>
 ```
 
-Set `--eval.per_device_batch_size` separately to fit report generation in GPU memory.
-See [evaluation settings](documentation/training.md#evaluation-during-training) for
-the callback and Trainer batch-size distinction.
+and likewise with `models/merlin` for abdominal CT. One GPU works too
+(`python inference_nifti.py ...`).
 
-This nnFoundation recipe saves its configuration and checkpoints under
-`VLM_OUTPUT_DIR`, then automatically generates reports and evaluates the final
-checkpoint on the test set. See [inference and evaluation](documentation/inference_and_evaluation.md)
-for the output files and directory structure.
+- `--input_dir` is searched recursively for `.nii.gz` and `.nii` files. The report ID of a
+  volume is its path relative to `--input_dir`, without the suffix.
+- The volumes are cropped to TotalSegmentator `total` masks (v2, foreground of all labels).
+  Masks that already exist in `--mask_dir`, with the same relative path as the volume, are
+  used; missing ones are made with TotalSegmentator 2.18.0 and saved there, so that later runs
+  reuse them. Without `--mask_dir`, they are made in `<output folder>/totalsegmentator_masks`.
+  Own masks must be TotalSegmentator v2 `total` segmentations on the grid of their volume.
+- TotalSegmentator takes about 2 to 4 minutes per volume and GPU (on an H100-class GPU), much
+  longer than the report itself; the volumes are split across the GPUs of a `torchrun` run.
+- Volumes that cannot be read, or without a usable mask (missing, empty, or not on the grid of
+  the volume), are skipped and listed under `failed` in `inference_nifti_settings.json`. With
+  `--allow_missing_masks`, volumes without a mask or with an empty one are used whole instead;
+  the models saw almost no whole volumes in training, so these reports are less reliable. They
+  are marked with `"mask": "missing, whole volume"`.
 
-## Reproducing nnFoundation and RMR experiments
+## Outputs to send back
 
-The nnFoundation and RMR experiments initialized the adapter's linear layers with
-`self.model.post_init()` (zero-mean normal weights with Qwen's `initializer_range`,
-zero biases). The default PyTorch initialization performs better, so the call is
-disabled by default.
+From each output folder:
 
-**To reproduce the paper results, uncomment `# self.model.post_init()`** in
-the [Qwen25VL](vlm/models/qwen25vl/wrapper.py) or
-[Qwen3VL](vlm/models/qwen3vl/wrapper.py) wrapper used by your configuration. Configurations with other language models are
-not affected.
+- `inference_results.json`: one report per volume (`output_text_clean`), with whether its mask
+  was read, made, or missing (`mask`).
+- `inference_nifti_settings.json`: the preprocessing, encoder and mask settings used, and the
+  skipped volumes.
+- `final_config.yml`: the checkpoint's config as used.
 
-## Documentation
-
-- [Data preparation and paths](documentation/data_preparation.md)
-- [RMR embedding names and requirements](documentation/rmr_embeddings.md)
-- [Training recipes, overrides, and resuming](documentation/training.md)
-- [Inference and evaluation](documentation/inference_and_evaluation.md)
-
-## Citation
-
-Please cite the paper corresponding to the configurations or methods you use.
-
-```bibtex
-@misc{harsy2026nnfoundation3dfoundationmodels,
-  title         = {nnFoundation: 3D Foundation Models for Radiology},
-  author        = {Ulrich Harsy, Constantin and Wald, Tassilo and Gotkowski, Karol and others},
-  year          = {2026},
-  eprint        = {2609.26924},
-  archivePrefix = {arXiv},
-  primaryClass  = {cs.CV},
-  url           = {https://arxiv.org/abs/2609.26924}
-}
-
-@misc{suprijadi2026resolutionmeetsreduction,
-  title         = {Resolution Meets Reduction: Efficient Visual Context for 3D Radiology Report Generation},
-  author        = {Suprijadi, Jonathan and Stock, Raphael and Langenberg, Moritz
-                   and Zimmerer, David and Kahl, Kim-Celine and Denner, Stefan
-                   and Kirchhoff, Yannick and Gotkowski, Karol and Rokuss, Maximilian
-                   and Traub, Jeremias and Wald, Tassilo and Ulrich, Constantin
-                   and Maier-Hein, Klaus},
-  year          = {2026},
-  eprint        = {2608.08713},
-  archivePrefix = {arXiv},
-  primaryClass  = {cs.CV},
-  url           = {https://arxiv.org/abs/2608.08713}
-}
-```
-
-The nnFoundation model cards provide the full citation and additional references
-for the vision encoders and pretraining framework.
-
-## License
-
-Project code, documentation, and configurations are licensed under
-[Apache 2.0](LICENSE.md). See [NOTICE.md](NOTICE.md) for upstream attribution.
-External publications, datasets, pretrained models, and dependencies retain their
-respective licenses.
+Please also tell us the version of this archive (the contents of `VERSION`).
