@@ -1,0 +1,8 @@
+# Left out of 'git archive' of the evaluation handoff (branch 'eval-handoff'); the files stay in
+# the repository. Training code that inference imports stays in.
+paper_configs/RMR/ export-ignore
+documentation/rmr_embeddings.md export-ignore
+vlm/test/ export-ignore
+.gitattributes export-ignore
+# git archive fills in the commit and its date.
+VERSION export-subst
