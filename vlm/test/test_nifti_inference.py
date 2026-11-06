@@ -309,7 +309,7 @@ def write_volume(path, array, direction, spacing=(1.0, 1.0, 1.0)):
     sitk.WriteImage(image, str(path))
 
 
-def make_dataset(input_dir, mask_dir=None, orientation="LPS"):
+def make_dataset(input_dir, mask_dir=None, orientation="LPS", **kwargs):
     preprocessing = {
         "target_spacing": (1.0, 1.0, 1.0),
         "normalization": "z_score",
@@ -318,7 +318,7 @@ def make_dataset(input_dir, mask_dir=None, orientation="LPS"):
     }
     files = nifti_inputs.find_nifti_files(input_dir)
     return nifti_inputs.NiftiEncoderInputDataset(
-        input_dir, files, orientation, mask_dir, preprocessing
+        input_dir, files, orientation, mask_dir, preprocessing, **kwargs
     )
 
 
@@ -361,6 +361,37 @@ def test_nested_volumes_use_their_masks_and_failures_are_reported(tmp_path):
     expected = ((roi - roi.mean()) / roi.std(correction=0))[None]
     torch.testing.assert_close(scan["encoder_input"], expected)
 
+
+
+def test_strict_masks_skip_volumes_without_a_usable_mask_unless_allowed(tmp_path):
+    identity = (1, 0, 0, 0, 1, 0, 0, 0, 1)
+    array = np.random.default_rng(0).normal(size=(16, 16, 16)).astype(np.float32)
+    for name in ("masked", "empty", "missing", "off_grid"):
+        write_volume(tmp_path / f"in/{name}.nii.gz", array, identity)
+    mask = np.zeros((16, 16, 16), np.uint8)
+    mask[4:8, 4:8, 4:8] = 1
+    write_volume(tmp_path / "masks/masked.nii.gz", mask, identity)
+    write_volume(tmp_path / "masks/empty.nii.gz", np.zeros_like(mask), identity)
+    write_volume(tmp_path / "masks/off_grid.nii.gz", mask, identity, spacing=(2.0, 1.0, 1.0))
+
+    strict = make_dataset(tmp_path / "in", tmp_path / "masks", strict_masks=True)
+    allowed = make_dataset(
+        tmp_path / "in", tmp_path / "masks", strict_masks=True, allow_missing_masks=True
+    )
+    strict = {s["image_id"]: s for s in strict}
+    allowed = {s["image_id"]: s for s in allowed}
+
+    assert strict["masked"]["error"] is None and not strict["masked"]["whole_volume"]
+    assert "no voxel of the ROI" in strict["empty"]["error"]
+    assert "not found" in strict["missing"]["error"]
+    assert "spacing" in strict["off_grid"]["error"]
+    torch.testing.assert_close(allowed["masked"]["encoder_input"], strict["masked"]["encoder_input"])
+    whole = make_dataset(tmp_path / "in")[0]["encoder_input"]
+    for name in ("empty", "missing"):
+        assert allowed[name]["error"] is None and allowed[name]["whole_volume"]
+        torch.testing.assert_close(allowed[name]["encoder_input"], whole)
+    # A mask off the grid of its volume is a wrong mask, not a missing one.
+    assert "spacing" in allowed["off_grid"]["error"]
 
 def inference_args(**overrides):
     args = dict.fromkeys(inference_nifti.PREPROCESSING_FIELDS)

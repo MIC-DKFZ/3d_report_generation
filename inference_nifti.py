@@ -16,6 +16,13 @@ the dataset's 'vision_input_preprocessing.yml', if it has one. Dotted config ove
 accepted as in 'inference.py', e.g. '--data.vision_input_orientation LPS' for runs whose config
 does not set it.
 
+Runs whose inputs were cropped to TotalSegmentator 'total' masks, as all nnFoundation runs,
+crop the volumes to the masks in '--mask_dir' (same relative paths as the volumes); masks missing
+there are made with TotalSegmentator, as the training masks, and saved there for later runs
+(see 'vlm/data/preprocessing/totalsegmentator_masks.py'). Without '--mask_dir', all masks are
+made, in '<output_dir>/totalsegmentator_masks'. Volumes without a usable mask are skipped (listed under
+'failed'), or used whole with '--allow_missing_masks'.
+
 Launched with torchrun, e.g. 'torchrun --standalone --nproc_per_node=4 inference_nifti.py ...',
 the volumes are split across the GPUs and rank 0 saves the reports of all of them.
 """
@@ -40,10 +47,12 @@ from vlm.data.preprocessing.encoder_input import (
     OUTLIER_METHODS,
     PROCESSING_MODES,
 )
+from vlm.data.preprocessing import totalsegmentator_masks
 from vlm.data.preprocessing.nifti_inputs import (
     NiftiEncoderInputDataset,
     collate_samples,
     find_nifti_files,
+    strip_nifti_suffix,
 )
 from vlm.data.types import VisionInputType
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
@@ -115,16 +124,33 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     encoder.add_argument(
         "--vision_encoder_checkpoint",
         default=None,
-        help="Checkpoint file or Hugging Face repository, e.g. 'MIC-DKFZ/nnFoundationViT' or "
-        "'MIC-DKFZ/nnFoundationCNN', e.g. a local copy of the recorded one.",
+        help="Checkpoint file or Hugging Face repository, '<repository>@<revision>' for a "
+        "revision, e.g. 'MIC-DKFZ/nnFoundationViT' or 'MIC-DKFZ/nnFoundationCNN', e.g. a local "
+        "copy of the recorded one.",
     )
 
     parser.add_argument(
         "--mask_dir",
         type=Path,
         default=None,
-        help="ROI masks with the same relative paths as the volumes, needed if the run's inputs "
-        "were cropped to a mask ('data.vision_input_preprocessing.roi_mask').",
+        help="ROI masks with the same relative paths as the volumes, for runs whose inputs were "
+        "cropped to a mask ('data.vision_input_preprocessing.roi_mask'). For TotalSegmentator "
+        "'total' masks, missing ones are made and saved here; defaults to "
+        "'<output_dir>/totalsegmentator_masks'.",
+    )
+    parser.add_argument(
+        "--no_generate_masks",
+        action="store_true",
+        help="Do not make missing masks with TotalSegmentator; volumes without a mask are "
+        "skipped.",
+    )
+    parser.add_argument(
+        "--allow_missing_masks",
+        action="store_true",
+        help="Use volumes without a mask, or with an empty one (e.g. where TotalSegmentator "
+        "failed), whole instead of skipping them. The model saw almost no whole volumes in "
+        "training, so their reports are less reliable; they are marked with "
+        "'\"mask\": \"missing, whole volume\"' in the results.",
     )
     preprocessing = parser.add_argument_group(
         "preprocessing; overrides 'data.vision_input_preprocessing' of the run's config"
@@ -264,9 +290,15 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
             .eval()
         )
         input_shape = encoder.patch_size
-    preprocessing, sources = resolve_preprocessing(
-        args, cfg.data.vision_input_preprocessing, encoder
+    configured = cfg.data.vision_input_preprocessing
+    generate_masks = (
+        not args.no_generate_masks
+        and configured is not None
+        and totalsegmentator_masks.can_generate(configured.roi_mask)
     )
+    if generate_masks and args.mask_dir is None:
+        args.mask_dir = Path(output_dir, "totalsegmentator_masks")
+    preprocessing, sources = resolve_preprocessing(args, configured, encoder)
     preprocessing_kwargs = preprocessing.preprocessing_kwargs(input_shape)
     files = find_nifti_files(input_dir)
     if not files:
@@ -277,9 +309,27 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
         f"{sources}), encoded by {encoder_name}. Prompt: {question!r}"
     )
     # Each rank takes every 'world_size'-th volume.
+    rank_files = files[rank::world_size]
+    mask_sources = {}
+    if generate_masks:
+        mask_sources = totalsegmentator_masks.generate_missing_masks(
+            input_dir, rank_files, args.mask_dir, device=f"gpu:{torch.cuda.current_device()}"
+        )
+        # Free TotalSegmentator's GPU memory for the model.
+        torch.cuda.empty_cache()
+    elif args.mask_dir is not None:
+        mask_sources = {
+            strip_nifti_suffix(path.relative_to(input_dir)): "read" for path in rank_files
+        }
     loader = DataLoader(
         NiftiEncoderInputDataset(
-            input_dir, files[rank::world_size], orientation, args.mask_dir, preprocessing_kwargs
+            input_dir,
+            rank_files,
+            orientation,
+            args.mask_dir,
+            preprocessing_kwargs,
+            strict_masks=True,
+            allow_missing_masks=args.allow_missing_masks,
         ),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -345,6 +395,11 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
                     "path": sample["path"],
                     "output_text": report,
                     "output_text_clean": strip_thinking(report),
+                    "mask": (
+                        "missing, whole volume"
+                        if sample["whole_volume"]
+                        else mask_sources.get(sample["image_id"])
+                    ),
                 }
                 for sample, report in zip(samples, reports)
             ]
@@ -369,6 +424,10 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
                 "vision_encoder": encoder_name,
                 "vision_encoder_checkpoint": checkpoint,
                 "mask_dir": None if args.mask_dir is None else str(args.mask_dir),
+                "generated_masks": sum(r["mask"] == "generated" for r in results),
+                "allow_missing_masks": args.allow_missing_masks,
+                "whole_volumes": sum(r["mask"] == "missing, whole volume" for r in results),
+                "totalsegmentator": totalsegmentator_masks.settings() if generate_masks else None,
                 "roi_mask": preprocessing.roi_mask,
                 "preprocessing": preprocessing_kwargs,
                 "preprocessing_sources": sources,

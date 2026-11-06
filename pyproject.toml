@@ -73,6 +73,16 @@ dev = [
 linear-attention = [
   "flash-linear-attention>=0.6.0",
 ]
+# Masks of new volumes for 'inference_nifti.py', made as the training masks (TotalSegmentator
+# v2 'total'). nnunetv2 2.6.4 is the newest release compatible with batchgeneratorsv2 0.3.0;
+# numpy<2 keeps the locked numpy of the base environment, which the resolver would otherwise
+# raise for vtk; vtk 9.7.2 has aarch64 wheels and needs numpy 2 only for its 'numpy' extra.
+totalsegmentator = [
+  "TotalSegmentator==2.18.0",
+  "nnunetv2==2.6.4",
+  "numpy<2",
+  "vtk==9.7.2",
+]
 
 [tool.isort]
 profile = "black"
