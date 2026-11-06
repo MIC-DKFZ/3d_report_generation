@@ -5,12 +5,12 @@ checkpoints of Qwen3-VL-2B trained on nnFoundationViT embeddings:
 
 | Checkpoint | Trained on | Hugging Face repository |
 |---|---|---|
-| CT-RATE | chest CT (CT-RATE v2) | `<user>/<ctrate repository>` (revision `<hash>`) |
-| Merlin | abdominal CT (Merlin) | `<user>/<merlin repository>` (revision `<hash>`) |
+| CT-RATE | chest CT (CT-RATE v2) | [`jonathan-suprijadi/ct-report-ctrate`](https://huggingface.co/jonathan-suprijadi/ct-report-ctrate) (revision `51362130`) |
+| Merlin | abdominal CT (Merlin) | [`jonathan-suprijadi/ct-report-merlin`](https://huggingface.co/jonathan-suprijadi/ct-report-merlin) (revision `4ff8739b`) |
 
 Each volume is reoriented, cropped to its TotalSegmentator mask, preprocessed and encoded as
 the training volumes were, so that no settings have to be passed. The checkpoints are
-preliminary; please do not share them further.
+preliminary.
 
 ## Installation
 
@@ -22,9 +22,10 @@ uv sync --extra totalsegmentator
 
 or with pip in a new environment: `pip install -e ".[totalsegmentator]"`.
 
-The checkpoints were trained with FlashAttention 3. It is optional: without it, the models are
-loaded with PyTorch's SDPA attention (with a warning), which gives the same reports up to small
-numerical differences.
+Reports are generated in float32, as the checkpoints' config sets it
+(`eval.inference_precision: fp32`), so that with greedy decoding they hardly depend on the batch
+size, the number of GPUs or the GPU type. Float32 uses PyTorch's SDPA attention, so the
+FlashAttention 3 of training is not needed (without it, loading warns about it).
 
 ## Downloads
 
@@ -33,8 +34,8 @@ are downloaded on first use. On machines without internet access (e.g. cluster c
 download them beforehand on a machine with access to the same file system:
 
 ```bash
-hf download <user>/<ctrate repository> --revision <hash> --local-dir models/ctrate
-hf download <user>/<merlin repository> --revision <hash> --local-dir models/merlin
+hf download jonathan-suprijadi/ct-report-ctrate --revision 5136213031163fd34cceabd15362efdffc11c9b4 --local-dir models/ctrate
+hf download jonathan-suprijadi/ct-report-merlin --revision 4ff8739b6be208abcfe1fe98c670931addd8897d --local-dir models/merlin
 hf download Qwen/Qwen3-VL-2B-Instruct
 hf download MIC-DKFZ/nnFoundationViT
 totalseg_download_weights -t total
@@ -55,7 +56,9 @@ torchrun --standalone --nproc_per_node=<number of GPUs> inference_nifti.py \
 ```
 
 and likewise with `models/merlin` for abdominal CT. One GPU works too
-(`python inference_nifti.py ...`).
+(`python inference_nifti.py ...`). `--batch_size <n>` generates `n` reports at once per GPU
+(default 1); for batches above 1, set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, without
+which the GPU memory fragments and runs out.
 
 - `--input_dir` is searched recursively for `.nii.gz` and `.nii` files. The report ID of a
   volume is its path relative to `--input_dir`, without the suffix.
@@ -72,14 +75,12 @@ and likewise with `models/merlin` for abdominal CT. One GPU works too
   the models saw almost no whole volumes in training, so these reports are less reliable. They
   are marked with `"mask": "missing, whole volume"`.
 
-## Outputs to send back
+## Outputs
 
-From each output folder:
+Each output folder holds:
 
 - `inference_results.json`: one report per volume (`output_text_clean`), with whether its mask
   was read, made, or missing (`mask`).
 - `inference_nifti_settings.json`: the preprocessing, encoder and mask settings used, and the
   skipped volumes.
 - `final_config.yml`: the checkpoint's config as used.
-
-Please also tell us the version of this archive (the contents of `VERSION`).

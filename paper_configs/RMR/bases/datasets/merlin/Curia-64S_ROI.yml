@@ -1,7 +1,0 @@
-base_configs:
-  - bases/datasets/merlin/Embedding.yml
-
-data:
-  vision_input_path: ${VLM_EMBEDS}/MERLIN_Curia-64S_ROI
-  embed_dim: 768
-  embed_size: [64, 32, 32]

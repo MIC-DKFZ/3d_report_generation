@@ -1,15 +1,4 @@
-# Left out of 'git archive' of the evaluation handoff (branch 'eval-handoff'): everything but
-# inference on NIfTI volumes ('inference_nifti.py', described in README.md). Modules of 'vlm'
-# that inference imports stay in, even if they belong to training.
-train.py export-ignore
-inference.py export-ignore
-eval.py export-ignore
-documentation/ export-ignore
-paper_configs/ export-ignore
-vlm/scripts/ export-ignore
-vlm/evaluation/ export-ignore
-vlm/registries/evaluation_registry.py export-ignore
-vlm/test/ export-ignore
+# Left out of 'git archive' of the evaluation handoff (branch 'eval-handoff'): this file.
 .gitattributes export-ignore
 # git archive fills in the commit and its date.
 VERSION export-subst
