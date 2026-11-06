@@ -22,6 +22,10 @@ from vlm.utils.decoding import (
 from vlm.utils.ddp import setup_ddp, gather_inference_outputs, is_main_process
 from vlm.data.batches import extract_batch_prompt_only
 from vlm.utils.run_naming import add_datetime_tag
+from vlm.utils.precision import (
+    inference_precision_context,
+    prepare_model_for_inference_precision,
+)
 from vlm.utils.seeding import seed_everything
 from vlm.configs.merging import recursive_dict_merge
 from vlm.utils.serialization import load_config_file, save_json
@@ -79,6 +83,8 @@ class UnifiedVLMInference:
         """
         model = self.vlm_model.model
         model.cuda().eval()
+        precision = self.cfg.eval.inference_precision
+        prepare_model_for_inference_precision(model, precision)
 
         if self.is_distributed:
             # Wrap the model with DDP
@@ -109,8 +115,7 @@ class UnifiedVLMInference:
         logger.info_main("Running inference...")
 
         results = []
-        # Use the mixed precision of training and its evaluation callback.
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.inference_mode(), inference_precision_context(precision):
             # Iterate over the test dataset
             for i, inputs in tqdm(enumerate(test_loader), total=len(test_loader)):
                 raw_samples = inputs["raw_samples"]

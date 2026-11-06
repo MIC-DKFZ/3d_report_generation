@@ -65,6 +65,10 @@ from vlm.utils.decoding import decode_generated_answers, strip_thinking
 from vlm.utils.logging import log_banner, setup_logger
 from vlm.utils.paths import resolve_run_dir
 from vlm.utils.run_naming import add_datetime_tag
+from vlm.utils.precision import (
+    inference_precision_context,
+    prepare_model_for_inference_precision,
+)
 from vlm.utils.seeding import seed_everything
 from vlm.utils.serialization import save_json
 
@@ -337,6 +341,8 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
     )
 
     model = vlm_model.model.cuda().eval()
+    precision = cfg.eval.inference_precision
+    prepare_model_for_inference_precision(model, precision)
     expected_shape = None if image_mode else (cfg.data.embed_dim, *cfg.data.embed_size)
     results, failed = [], []
     with torch.inference_mode():
@@ -381,8 +387,7 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
             inputs = vlm_model.collate_fn(examples)
             del inputs["raw_samples"], inputs["batch_count"]
             inputs = extract_batch_prompt_only(inputs).to("cuda")
-            # Use the mixed precision of training, as 'inference.py'.
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with inference_precision_context(precision):
                 outputs = model.generate(
                     **inputs,
                     max_new_tokens=cfg.eval.max_new_tokens,
@@ -431,6 +436,7 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
                 "roi_mask": preprocessing.roi_mask,
                 "preprocessing": preprocessing_kwargs,
                 "preprocessing_sources": sources,
+                "inference_precision": precision,
                 "question": question,
                 "system_text": system_text,
                 "failed": failed,

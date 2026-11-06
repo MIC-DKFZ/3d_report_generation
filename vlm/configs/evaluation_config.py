@@ -31,6 +31,16 @@ class EvaluationConfig(ConfigBase):
     top_p: float | None = Field(None, gt=0, le=1, description="Nucleus sampling probability mass.")
     top_k: int | None = Field(None, ge=0, description="Number of most likely tokens to sample from.")
 
+    inference_precision: Literal["bf16", "fp32"] = Field(
+        "bf16",
+        description=(
+            "Precision of inference ('inference.py', 'inference_nifti.py'): 'bf16' computes in "
+            "bfloat16 autocast as training; 'fp32' computes in float32 (SDPA attention, no TF32 "
+            "matrix multiplications; convolutions keep TF32), so that greedy decoding is much "
+            "less sensitive to batch size, GPU count and GPU type."
+        ),
+    )
+
     # 'After Training' parameters
     run_inference: bool = Field(True, description="Run inference after training completes.")
     mode: Literal["best", "final"] = Field("best", description="Which checkpoint to load for inference.")
