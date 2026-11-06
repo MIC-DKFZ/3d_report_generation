@@ -96,8 +96,43 @@ def _get_git_state() -> dict | None:
             "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
             "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
         }
+    except FileNotFoundError:
+        # No git executable, e.g. on cluster compute nodes: read the commit from the repository.
+        state = _read_git_head(repo_dir)
+        if state is None:
+            logger.warning_main(
+                f"Could not determine git state for '{FINAL_CONFIG_FILENAME}': no git executable "
+                "and no readable git repository."
+            )
+        return state
     except (OSError, subprocess.SubprocessError) as e:
         logger.warning_main(f"Could not determine git state for '{FINAL_CONFIG_FILENAME}': {e}")
+        return None
+
+
+def _read_git_head(start_dir: Path) -> dict | None:
+    """
+    The commit and branch of the repository containing 'start_dir', read from its '.git' folder
+    without a git executable. Whether the working tree has changes needs git ('dirty': None).
+    """
+    git_dir = next(
+        (d / ".git" for d in (start_dir, *start_dir.parents) if (d / ".git").is_dir()), None
+    )
+    if git_dir is None:
+        return None
+    try:
+        head = (git_dir / "HEAD").read_text().strip()
+        if not head.startswith("ref: "):
+            return {"commit": head, "branch": "HEAD", "dirty": None}  # detached HEAD
+        ref = head.removeprefix("ref: ")
+        ref_file = git_dir / ref
+        if ref_file.is_file():
+            commit = ref_file.read_text().strip()
+        else:  # packed refs: lines of '<commit> <ref>'
+            packed = (git_dir / "packed-refs").read_text().splitlines()
+            commit = next(line.split()[0] for line in packed if line.endswith(f" {ref}"))
+        return {"commit": commit, "branch": ref.removeprefix("refs/heads/"), "dirty": None}
+    except (OSError, StopIteration):
         return None
 
 
