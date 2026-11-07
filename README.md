@@ -6,7 +6,7 @@ checkpoints of Qwen3-VL-2B trained on nnFoundationViT embeddings:
 | Checkpoint | Trained on | Hugging Face repository |
 |---|---|---|
 | CT-RATE | chest CT (CT-RATE v2) | [`jonathan-suprijadi/ct-report-ctrate`](https://huggingface.co/jonathan-suprijadi/ct-report-ctrate) (revision `51362130`) |
-| Merlin | abdominal CT (Merlin) | [`jonathan-suprijadi/ct-report-merlin`](https://huggingface.co/jonathan-suprijadi/ct-report-merlin) (revision `4ff8739b`) |
+| Merlin | abdominal CT (Merlin) | [`jonathan-suprijadi/ct-report-merlin`](https://huggingface.co/jonathan-suprijadi/ct-report-merlin) (revision `9cdb8cf5`) |
 
 Each volume is reoriented, cropped to its TotalSegmentator mask, preprocessed and encoded as
 the training volumes were, so that no settings have to be passed.
@@ -32,7 +32,7 @@ Download the two checkpoints into `models/` (`--checkpoint_dir` takes a local fo
 
 ```bash
 hf download jonathan-suprijadi/ct-report-ctrate --revision 5136213031163fd34cceabd15362efdffc11c9b4 --local-dir models/ctrate
-hf download jonathan-suprijadi/ct-report-merlin --revision 4ff8739b6be208abcfe1fe98c670931addd8897d --local-dir models/merlin
+hf download jonathan-suprijadi/ct-report-merlin --revision 9cdb8cf5ef03c747b702f6a58550041c3f749ecd --local-dir models/merlin
 ```
 
 The Qwen3-VL base model, the vision encoder and the TotalSegmentator weights are downloaded on
@@ -71,8 +71,6 @@ which the GPU memory fragments and runs out.
   used; missing ones are made with TotalSegmentator 2.18.0 and saved there, so that later runs
   reuse them. Without `--mask_dir`, they are made in `<output folder>/totalsegmentator_masks`.
   Own masks must be TotalSegmentator v2 `total` segmentations on the grid of their volume.
-- TotalSegmentator takes about 2 to 4 minutes per volume and GPU (on an H100-class GPU), much
-  longer than the report itself; the volumes are split across the GPUs of a `torchrun` run.
 - Volumes that cannot be read, or without a usable mask (missing, empty, or not on the grid of
   the volume), are skipped and listed under `failed` in `inference_nifti_settings.json`. With
   `--allow_missing_masks`, volumes without a mask or with an empty one are used whole instead;
