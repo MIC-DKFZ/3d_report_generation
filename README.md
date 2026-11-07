@@ -21,10 +21,7 @@ uv sync --extra totalsegmentator
 
 or with pip in a new environment: `pip install -e ".[totalsegmentator]"`.
 
-Reports are generated in float32, as the checkpoints' config sets it
-(`eval.inference_precision: fp32`), so that with greedy decoding they hardly depend on the batch
-size, the number of GPUs or the GPU type. Float32 uses PyTorch's SDPA attention, so the
-FlashAttention 3 of training is not needed (without it, loading warns about it).
+FlashAttention 3 is not needed; the warning about it when loading can be ignored.
 
 ## Downloads
 
@@ -47,9 +44,8 @@ totalseg_download_weights -t total
 
 and set `HF_HUB_OFFLINE=1` for the runs. On Slurm or LSF clusters, set `HF_HUB_CACHE` to the
 Hugging Face cache the downloads went to (outside clusters, `~/.cache/huggingface/hub` is used).
-`TOTALSEG_HOME_DIR` sets where TotalSegmentator keeps its weights (default
-`~/.totalsegmentator`). TotalSegmentator sends anonymous usage statistics unless
-`"send_usage_stats": false` is set in `<TOTALSEG_HOME_DIR>/config.json`.
+TotalSegmentator keeps its weights in `TOTALSEG_HOME_DIR` (default `~/.totalsegmentator`) and
+sends anonymous usage statistics unless `"send_usage_stats": false` is set in `config.json` there.
 
 ## Generating reports
 
