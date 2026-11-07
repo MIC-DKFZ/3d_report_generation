@@ -67,6 +67,15 @@ which the GPU memory fragments and runs out.
   used; missing ones are made with TotalSegmentator 2.18.0 and saved there, so that later runs
   reuse them. Without `--mask_dir`, they are made in `<output folder>/totalsegmentator_masks`.
   Own masks must be TotalSegmentator v2 `total` segmentations on the grid of their volume.
+- With many volumes, it is faster to make the masks beforehand with several TotalSegmentator
+  processes per GPU (as many as GPU and CPU memory allow), each on its own volumes, and to pass
+  them with `--mask_dir`. These are the settings of `inference_nifti.py`:
+
+  ```bash
+  TotalSegmentator -i <input_dir>/<volume>.nii.gz -o <mask_dir>/<volume>.nii.gz --ml --task total
+  ```
+
+  Masks still missing then (e.g. where a process failed) are made by `inference_nifti.py`.
 - Volumes that cannot be read, or without a usable mask (missing, empty, or not on the grid of
   the volume), are skipped and listed under `failed` in `inference_nifti_settings.json`. With
   `--allow_missing_masks`, volumes without a mask or with an empty one are used whole instead;
