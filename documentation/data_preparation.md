@@ -56,7 +56,7 @@ The supplied configs use `${NAME}` placeholders to keep data paths portable.
 used by these configs. Set whichever variables your selected config references, or replace their
 references in YAML with absolute paths or your own variable names.
 The two variables that training requires, `VLM_CONFIG_DIR` and `VLM_OUTPUT_DIR`,
-are explained in the [quick start](../README.md#quick-start).
+are explained in the [quick start](../README.md#training-quick-start).
 
 ```bash
 export VLM_EMBEDS="/path/to/embeddings"

@@ -4,13 +4,13 @@ Run commands from the repository root after [installation](../README.md#installa
 and [data preparation](data_preparation.md).
 
 Set `VLM_CONFIG_DIR` and `VLM_OUTPUT_DIR` as shown in the
-[quick start](../README.md#quick-start), which also covers batch-size settings
+[quick start](../README.md#training-quick-start), which also covers batch-size settings
 and multi-GPU training. `--train_config` and `--add_base_configs` paths are relative
 to `VLM_CONFIG_DIR`.
 
 ## nnFoundation
 
-The [quick start](../README.md#quick-start) trains nnFoundationViT on CT-RATE.
+The [quick start](../README.md#training-quick-start) trains nnFoundationViT on CT-RATE.
 All four recipes use the same command; only the `--train_config` and
 `--add_base_configs` pair changes:
 

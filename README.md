@@ -3,6 +3,8 @@
 [![nnFoundation paper](https://img.shields.io/badge/nnFoundation-arXiv-b31b1b?logo=arxiv)](https://arxiv.org/abs/2609.26924)
 [![nnFoundationViT models](https://img.shields.io/badge/Hugging%20Face-nnFoundationViT-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/nnFoundationViT)
 [![nnFoundationCNN models](https://img.shields.io/badge/Hugging%20Face-nnFoundationCNN-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/nnFoundationCNN)
+[![nnFoundationViT-ReportGen-CT-RATE model](https://img.shields.io/badge/Hugging%20Face-ReportGen--CT--RATE-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/nnFoundationViT-ReportGen-CT-RATE)
+[![nnFoundationViT-ReportGen-Merlin model](https://img.shields.io/badge/Hugging%20Face-ReportGen--Merlin-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/nnFoundationViT-ReportGen-Merlin)
 
 [![RMR paper](https://img.shields.io/badge/RMR-arXiv-b31b1b?logo=arxiv)](https://arxiv.org/abs/2608.08713)
 [![PrimusM-MAE model](https://img.shields.io/badge/Hugging%20Face-PrimusM--MAE-ffc107?logo=huggingface)](https://huggingface.co/MIC-DKFZ/PrimusM-MAE)
@@ -21,7 +23,8 @@ experiments for nnFoundation. Frozen features from
 [nnFoundationViT](https://huggingface.co/MIC-DKFZ/nnFoundationViT) or
 [nnFoundationCNN](https://huggingface.co/MIC-DKFZ/nnFoundationCNN) are connected
 to Qwen2.5-VL-3B through a trainable vision-to-language adapter, with LoRA
-adaptation of the language model.
+adaptation of the language model. To generate reports for your own CT volumes, use the
+[released report-generation models](#generating-reports-with-the-released-models) instead.
 
 **RMR (Resolution Meets Reduction):** RMR investigates how to preserve useful
 visual detail while reducing the token cost of 3D report generation. Its
@@ -38,7 +41,39 @@ From the repository root:
 uv sync --locked --python 3.12
 ```
 
-## Quick start
+## Generating reports with the released models
+
+The two released models connect frozen
+[nnFoundationViT](https://huggingface.co/MIC-DKFZ/nnFoundationViT) features to Qwen3-VL-2B and
+were trained with an updated recipe. For new data, we recommend them over models trained with
+the configurations in the nnFoundation paper.
+
+| Model | Trained on | Use for |
+| --- | --- | --- |
+| [nnFoundationViT-ReportGen-CT-RATE](https://huggingface.co/MIC-DKFZ/nnFoundationViT-ReportGen-CT-RATE) | CT-RATE | Chest CT |
+| [nnFoundationViT-ReportGen-Merlin](https://huggingface.co/MIC-DKFZ/nnFoundationViT-ReportGen-Merlin) | Merlin | Abdominal CT |
+
+[`inference_nifti.py`](inference_nifti.py) generates one report per NIfTI volume in a folder.
+It crops each volume to its TotalSegmentator mask and preprocesses and encodes it as in
+training, so no preprocessing settings have to be passed. Install the TotalSegmentator extra,
+download a model, and run it (`--nproc_per_node` sets the number of GPUs):
+
+```bash
+uv sync --locked --python 3.12 --extra totalsegmentator
+uv run hf download MIC-DKFZ/nnFoundationViT-ReportGen-CT-RATE --local-dir models/ctrate
+
+uv run torchrun --standalone --nproc_per_node=1 inference_nifti.py \
+  --checkpoint_dir models/ctrate \
+  --input_dir /path/to/chest_ct_volumes \
+  --mask_dir /path/to/masks \
+  --output_dir /path/to/reports
+```
+
+The reports are saved in `inference_results.json` in the output folder. See
+[report generation for NIfTI volumes](documentation/nifti_inference.md) for masks, offline
+use, batching, and the output files.
+
+## Training quick start
 
 The example below trains nnFoundationViT on CT-RATE. Before running it,
 [prepare the dataset JSONs and vision embeddings](documentation/data_preparation.md)
@@ -113,6 +148,7 @@ not affected.
 - [RMR embedding names and requirements](documentation/rmr_embeddings.md)
 - [Training recipes, overrides, and resuming](documentation/training.md)
 - [Inference and evaluation](documentation/inference_and_evaluation.md)
+- [Report generation for NIfTI volumes](documentation/nifti_inference.md)
 
 ## Citation
 

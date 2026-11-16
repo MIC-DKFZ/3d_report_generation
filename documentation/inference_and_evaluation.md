@@ -4,6 +4,10 @@ Run the commands from the repository root. Inference needs the run's trained che
 vision embeddings; `VLM_OUTPUT_DIR` is only needed to pass a run by its folder name instead of
 its path. Evaluating saved predictions needs neither.
 
+To generate reports for a folder of NIfTI volumes without dataset JSONs or precomputed
+embeddings, with a released model or your own run, see
+[report generation for NIfTI volumes](nifti_inference.md).
+
 ## Automatic evaluation after training
 
 The config fields `eval.run_inference` and `eval.run_eval` are `true` by default, so
