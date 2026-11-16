@@ -17,13 +17,14 @@ accepted as in 'inference.py', e.g. '--data.vision_input_orientation LPS' for ru
 does not set it.
 
 Runs whose inputs were cropped to an ROI mask ('data.vision_input_preprocessing.roi_mask') crop
-the volumes to the masks in '--mask_dir' (same relative paths as the volumes). For TotalSegmentator
-'total' masks, as in the nnFoundationViT foreground ('FG') runs, masks missing there are made with
+the volumes to the masks in '--mask_dir' (same relative paths as the volumes). If the ROI comes
+from TotalSegmentator 'total' masks, as for the ROI embeddings of
+'vlm/scripts/embeddings/generate_embeddings.py', masks missing there are made with
 TotalSegmentator, as the training masks, and saved there for later runs (see
 'vlm/data/preprocessing/totalsegmentator_masks.py'); without '--mask_dir', all masks are made, in
-'<output_dir>/totalsegmentator_masks'. Other masks, e.g. the lung crops of earlier CT-RATE runs,
-are not made here and must be passed. Volumes without a usable mask are skipped (listed under
-'failed'), or used whole with '--allow_missing_masks'.
+'<output_dir>/totalsegmentator_masks'. Other masks, and the masks of runs whose config does not
+record the ROI, are not made here and must be passed. Volumes without a usable mask are skipped
+(listed under 'failed'), or used whole with '--allow_missing_masks'.
 
 Launched with torchrun, e.g. 'torchrun --standalone --nproc_per_node=4 inference_nifti.py ...',
 the volumes are split across the GPUs and rank 0 saves the reports of all of them.

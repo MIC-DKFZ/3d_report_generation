@@ -1,12 +1,11 @@
 """
 ROI masks of NIfTI volumes made with TotalSegmentator, for inference on volumes without masks.
 
-The runs cropped to TotalSegmentator 'total' masks (the nnFoundationViT foreground runs) used the
-masks shipped with CT-RATE ('ts_seg/ts_total') and those made for Merlin, both with
-TotalSegmentator v2 (117 labels); runs cropped to other masks, e.g. the lung crops of earlier
-CT-RATE runs, are not covered. The masks made here use the same task, with its default settings
-(not '--fast') and all labels in one file ('--ml'), so that they can be cropped to like the
-training masks.
+The runs cropped to TotalSegmentator 'total' masks (the lungs or the foreground of all labels, see
+'vlm/scripts/embeddings/generate_embeddings.py') used the masks shipped with CT-RATE
+('ts_seg/ts_total') and those made for Merlin, both with TotalSegmentator v2 (117 labels). The
+masks made here use the same task, with its default settings (not '--fast') and all labels in one
+file ('--ml'), so that they can be cropped to like the training masks.
 
 TotalSegmentator is an optional dependency, 'pip install TotalSegmentator==2.18.0'; its weights
 are downloaded on first use into 'TOTALSEG_HOME_DIR' (default '~/.totalsegmentator'), or

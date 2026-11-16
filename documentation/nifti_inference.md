@@ -32,7 +32,7 @@ download them beforehand on a machine that shares the file system:
 
 ```bash
 uv run hf download Qwen/Qwen3-VL-2B-Instruct
-uv run hf download MIC-DKFZ/nnFoundationViT
+uv run hf download MIC-DKFZ/nnFoundationViT --revision c691f2115140458ec64017712eb8ebbc8dde6ae4
 uv run totalseg_download_weights -t total
 ```
 
@@ -65,7 +65,8 @@ Use `models/merlin` for abdominal CT. With `torchrun`, the volumes are split acr
 
 ### Masks
 
-The volumes are cropped to TotalSegmentator v2 `total` masks (the foreground of all labels).
+The volumes are cropped to TotalSegmentator v2 `total` masks (for the released models, the
+foreground of all labels).
 Masks in `--mask_dir` with the same relative path as their volume are used; missing ones are
 made with TotalSegmentator and saved there, so that later runs reuse them. Without
 `--mask_dir`, the masks are made in `<output_dir>/totalsegmentator_masks`. Masks you provide
@@ -92,8 +93,8 @@ marked with `"mask": "missing, whole volume"`.
 
 Each output folder holds:
 
-- `inference_results.json`: one report per volume (`output_text_clean`), and whether its mask was
-  read, made, or missing (`mask`).
+- `inference_results.json`: one report per volume (`output_text_clean`), and where its mask came
+  from (`mask`: `read`, `generated`, or `missing, whole volume`).
 - `inference_nifti_settings.json`: the preprocessing, encoder, and mask settings used, and the
   skipped volumes.
 - `final_config.yml`: the model's config as used.
@@ -108,6 +109,8 @@ Pass `--run_dir` (a run folder, or a unique run folder name under `VLM_OUTPUT_DI
 volumes with the encoder recorded in `data.embedding_encoder`.
 
 Runs without these settings need the preprocessing as arguments, at least `--processing_mode`,
-and the encoder with `--vision_encoder` and `--vision_encoder_checkpoint`. Masks other than
-TotalSegmentator `total` masks are not made by the script and must be passed with `--mask_dir`.
+and the encoder with `--vision_encoder` and `--vision_encoder_checkpoint`. The script makes masks
+only for runs whose config records a TotalSegmentator `total` ROI; for other runs, pass the masks
+with `--mask_dir`, and the ROI labels with `--mask_label_ids` if the masks hold more labels than
+the ROI.
 Run `uv run python inference_nifti.py --help` for all options.
