@@ -8,9 +8,10 @@ locates its separately stored vision embeddings; the report provides the trainin
 target and evaluation reference. The scripts below convert the original report
 tables into this format, applying the splits and exclusions used in the papers.
 
-Use **v1 for nnFoundation** and **v2 for RMR**. Both versions can share an output
-folder because their filenames include the version. Their differences are listed
-in the table below.
+Use **v1 for nnFoundation** and **v2 for RMR**. The
+[released nnFoundation report-generation models](../README.md#generating-reports-with-the-released-models)
+were trained on v2. Both versions can share an output folder because
+their filenames include the version. Their differences are listed in the table below.
 
 For [CT-RATE](https://huggingface.co/datasets/ibrahimhamamci/CT-RATE), the dataset JSON generators expect the original
 `radiology_text_reports/train_reports.csv` and
@@ -111,8 +112,7 @@ them into the run config, so that inference on new volumes
 The [released report-generation models](../README.md#generating-reports-with-the-released-models)
 use other settings than the paper presets: on both datasets, the foreground of all labels as ROI
 (`--roi foreground`), cropped at the volume's own spacing and resized once to the encoder input
-(`--processing_mode resized_direct`), with the nnFoundationViT revision recorded in their
-`final_config.yml`:
+(`--processing_mode resized_direct`), and the nnFoundationViT revision they were trained with:
 
 ```bash
 uv run python vlm/scripts/embeddings/generate_embeddings.py \

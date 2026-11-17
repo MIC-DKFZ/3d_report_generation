@@ -27,6 +27,10 @@ the nnFoundation evaluation on Merlin, so its Merlin recipes disable them; add
 `--eval.calculate_classifier_score` to compute them with
 [ModernBERT-Merlin](https://huggingface.co/MIC-DKFZ/ModernBERT-Merlin).
 
+The [released report-generation models](../README.md#generating-reports-with-the-released-models)
+were trained with an updated recipe, recorded in their `final_config.yml`; see
+[data preparation](data_preparation.md#embeddings-of-the-released-models) for their embeddings.
+
 ## RMR
 
 First [prepare the RMR embeddings](rmr_embeddings.md).

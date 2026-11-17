@@ -24,7 +24,8 @@ experiments for nnFoundation. Frozen features from
 [nnFoundationCNN](https://huggingface.co/MIC-DKFZ/nnFoundationCNN) are connected
 to Qwen2.5-VL-3B through a trainable vision-to-language adapter, with LoRA
 adaptation of the language model. To generate reports for your own CT volumes, use the
-[released report-generation models](#generating-reports-with-the-released-models) instead.
+[released report-generation models](#generating-reports-with-the-released-models) instead,
+which were trained with an updated recipe.
 
 **RMR (Resolution Meets Reduction):** RMR investigates how to preserve useful
 visual detail while reducing the token cost of 3D report generation. Its
