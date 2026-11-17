@@ -8,12 +8,15 @@ Generate the vision embeddings of the nnFoundation and RMR papers from CT volume
 - RMR: Primus-1B_ROI and Primus-1B_Whole, encoded by PrimusM-MAE as one input block, from the
   ROI or the whole volume; both resize their input.
 
-'--dataset' selects the dataset's layout and ROI:
-- ctrate: split folders 'train_fixed' and 'valid_fixed'; reoriented to LPS; the lungs
-  (TotalSegmentator 'total' labels 10-14).
-- merlin: no split folders; reoriented to LAS; the foreground of all TotalSegmentator 'total'
-  labels, without components of fewer than 100 voxels. Before fitting, the ROI is enlarged to at
-  least the encoder input (192 mm at 1 mm) where the volume allows it.
+'--dataset' selects the dataset's layout:
+- ctrate: split folders 'train_fixed' and 'valid_fixed'; reoriented to LPS.
+- merlin: no split folders; reoriented to LAS.
+
+The ROI embeddings crop CT-RATE to the lungs and Merlin to the foreground; '--roi' replaces it.
+Both ROIs come from TotalSegmentator 'total' masks:
+- lungs: labels 10-14.
+- foreground: all labels, without components of fewer than 100 voxels. Before fitting, the ROI
+  is enlarged to at least the encoder input (192 mm at 1 mm) where the volume allows it.
 
 Each volume '<name>.nii.gz' found (recursively) in the split folders of '--input_dir' is
 reoriented, z-score normalized, resampled to 1 mm, cropped to its ROI (the mask's bounding box,
@@ -27,8 +30,8 @@ interrupted run can be restarted.
 
 Options beyond the papers: '--processing_mode' replaces the embedding's mode, e.g.
 'resized_direct' (the ROI cropped at the volume's own spacing and resized once, with
-anti-aliasing; see vlm/data/preprocessing/encoder_input.py), and '--roi foreground' crops
-CT-RATE to the foreground of all labels, as Merlin. Launched with torchrun, the volumes are split
+anti-aliasing; see vlm/data/preprocessing/encoder_input.py), and '--roi' replaces the
+paper's ROI, e.g. '--roi foreground' for CT-RATE. Launched with torchrun, the volumes are split
 across the processes (on all nodes), each on its own GPU.
 
 The settings are saved once per embedding folder, as '<output_dir>/vision_input_preprocessing.yml';
@@ -65,30 +68,31 @@ from vlm.models.vision_encoders.primus import PrimusEncoder
 from vlm.models.vision_encoders.resenc import ResEncEncoder
 from vlm.utils.serialization import save_json
 
-# Encoder, its default checkpoint, whether the ROI is used, and the processing mode per dataset.
+# Encoder, its default checkpoint, and per dataset its ROI (None: the whole volume) and
+# processing mode.
 EMBEDDINGS = {
     "nnFoundationViT": {
         "encoder": PrimusEncoder,
         "checkpoint": "MIC-DKFZ/nnFoundationViT",
-        "roi": True,
+        "rois": {"ctrate": "lungs", "merlin": "foreground"},
         "processing_modes": {"ctrate": "center_crop", "merlin": "resized"},
     },
     "nnFoundationCNN": {
         "encoder": ResEncEncoder,
         "checkpoint": "MIC-DKFZ/nnFoundationCNN",
-        "roi": True,
+        "rois": {"ctrate": "lungs", "merlin": "foreground"},
         "processing_modes": {"ctrate": "resized", "merlin": "resized"},
     },
     "Primus-1B_ROI": {
         "encoder": PrimusEncoder,
         "checkpoint": "MIC-DKFZ/PrimusM-MAE",
-        "roi": True,
+        "rois": {"ctrate": "lungs", "merlin": "foreground"},
         "processing_modes": {"ctrate": "resized", "merlin": "resized"},
     },
     "Primus-1B_Whole": {
         "encoder": PrimusEncoder,
         "checkpoint": "MIC-DKFZ/PrimusM-MAE",
-        "roi": False,
+        "rois": None,
         "processing_modes": {"ctrate": "resized", "merlin": "resized"},
     },
 }
@@ -96,13 +100,21 @@ EMBEDDINGS = {
 # Default target spacing in millimetres (z, y, x).
 TARGET_SPACING = (1.0, 1.0, 1.0)
 
-# Shared by Merlin's default ROI and '--roi foreground' for either dataset.
-FOREGROUND_ROI = {
-    "roi_mask": "TotalSegmentator 'total', foreground of all labels",
-    "mask_label_ids": None,
-    "enforce_min_bbox": True,
-    "outlier_method": "connected_components",
-    "outlier_min_voxels": 100,
+# ROIs from TotalSegmentator 'total' masks, as recorded in 'data.vision_input_preprocessing'.
+ROIS = {
+    "lungs": {
+        "roi_mask": "TotalSegmentator 'total', lungs (labels 10-14)",
+        "mask_label_ids": [10, 11, 12, 13, 14],
+        "enforce_min_bbox": False,
+        "outlier_method": "none",
+    },
+    "foreground": {
+        "roi_mask": "TotalSegmentator 'total', foreground of all labels",
+        "mask_label_ids": None,
+        "enforce_min_bbox": True,
+        "outlier_method": "connected_components",
+        "outlier_min_voxels": 100,
+    },
 }
 
 # Orientations are those the datasets are mostly stored in, so that most volumes stay unchanged.
@@ -110,17 +122,10 @@ DATASETS = {
     "ctrate": {
         "orientation": "LPS",
         "split_folders": ["train_fixed", "valid_fixed"],
-        "roi": {
-            "roi_mask": "TotalSegmentator 'total', lungs (labels 10-14)",
-            "mask_label_ids": [10, 11, 12, 13, 14],
-            "enforce_min_bbox": False,
-            "outlier_method": "none",
-        },
     },
     "merlin": {
         "orientation": "LAS",
         "split_folders": [""],
-        "roi": FOREGROUND_ROI,
     },
 }
 
@@ -164,22 +169,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--roi",
-        choices=["dataset", "foreground"],
-        default="dataset",
-        help="The dataset's ROI, or the foreground of all TotalSegmentator labels (Merlin's ROI) "
-        "for both datasets.",
+        choices=ROIS,
+        default=None,
+        help="Replaces the embedding's ROI (CT-RATE: lungs, Merlin: foreground).",
     )
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument(
         "--overwrite", action="store_true", help="Embed volumes already saved again."
     )
     args = parser.parse_args(argv)
-    uses_roi = EMBEDDINGS[args.embedding]["roi"]
+    uses_roi = EMBEDDINGS[args.embedding]["rois"] is not None
     if uses_roi and args.mask_dir is None:
         parser.error(f"{args.embedding} embeds the ROI and needs '--mask_dir'.")
     if not uses_roi and args.mask_dir is not None:
         parser.error(f"{args.embedding} embeds the whole volume and takes no '--mask_dir'.")
-    if not uses_roi and args.roi != "dataset":
+    if not uses_roi and args.roi is not None:
         parser.error(f"{args.embedding} embeds the whole volume and takes no '--roi'.")
     return args
 
@@ -189,17 +193,16 @@ def paper_settings(
     dataset: str,
     checkpoint: str,
     processing_mode: str | None = None,
-    roi: str = "dataset",
+    roi: str | None = None,
 ) -> VisionInputSettings:
     preset = EMBEDDINGS[embedding]
-    roi_settings = FOREGROUND_ROI if roi == "foreground" else DATASETS[dataset]["roi"]
     return VisionInputSettings(
         vision_input_orientation=DATASETS[dataset]["orientation"],
         vision_input_preprocessing=VisionInputPreprocessingConfig(
             target_spacing=TARGET_SPACING,
             normalization="z_score",
             processing_mode=processing_mode or preset["processing_modes"][dataset],
-            **(roi_settings if preset["roi"] else {}),
+            **(ROIS[roi or preset["rois"][dataset]] if preset["rois"] else {}),
         ),
         embedding_encoder={
             "class_name": preset["encoder"].__name__,

@@ -69,7 +69,8 @@ folder that contains the `<dataset>_<version>_*.json` files.
 
 `--embedding` names the features as the configs do (`${VLM_EMBEDS}/<DATASET>_<embedding>`), and
 `--dataset` selects the dataset's layout and region of interest (ROI), including CT-RATE's split
-folders (`train_fixed` and `valid_fixed`, embedded into the same folders of the output). The ROI
+folders (`train_fixed` and `valid_fixed`, embedded into the same folders of the output);
+`--roi lungs` or `--roi foreground` replaces the papers' ROI. The ROI
 features need the [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) `total` masks
 of the volumes, stored with the same relative paths: CT-RATE provides them in `ts_seg/ts_total`;
 for Merlin, run TotalSegmentator on the volumes. The encoders are downloaded from Hugging Face
