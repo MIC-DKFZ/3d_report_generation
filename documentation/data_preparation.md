@@ -105,6 +105,28 @@ The settings are saved as `vision_input_preprocessing.yml` in the output folder.
 them into the run config, so that inference on new volumes
 ([`inference_nifti.py`](../inference_nifti.py)) preprocesses and encodes them the same way.
 
+### Embeddings of the released models
+
+The [released report-generation models](../README.md#generating-reports-with-the-released-models)
+use other settings than the paper presets: on both datasets, the foreground of all labels as ROI
+(`--roi foreground`), cropped at the volume's own spacing and resized once to the encoder input
+(`--processing_mode resized_direct`), with the nnFoundationViT revision recorded in their
+`final_config.yml`:
+
+```bash
+uv run python vlm/scripts/embeddings/generate_embeddings.py \
+  --embedding nnFoundationViT --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
+  --mask_dir /path/to/CT-RATE/dataset/ts_seg/ts_total \
+  --roi foreground --processing_mode resized_direct \
+  --checkpoint MIC-DKFZ/nnFoundationViT@c691f2115140458ec64017712eb8ebbc8dde6ae4 \
+  --output_dir /path/to/embeddings
+```
+
+For Merlin, use `--dataset merlin` with its volumes and masks as above. The saved settings then
+match the `data` settings in the released models' `final_config.yml`, which records all their
+training settings. Generating reports for new volumes with
+[`inference_nifti.py`](nifti_inference.md) needs no embeddings.
+
 ### Matching embedding folders to configs
 
 `VLM_EMBEDS` points to the parent directory of your embedding folders. Their names
