@@ -42,7 +42,7 @@ From the repository root:
 uv sync --locked --python 3.12
 ```
 
-## Generating reports with the released models
+## Generating reports with the released models (Inference)
 
 The two released models connect frozen
 [nnFoundationViT](https://huggingface.co/MIC-DKFZ/nnFoundationViT) features to Qwen3-VL-2B and
