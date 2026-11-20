@@ -4,6 +4,7 @@ for preparing the images of image-mode training.
 """
 
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import SimpleITK as sitk
@@ -64,6 +65,9 @@ class NiftiEncoderInputDataset(Dataset):
     not on the grid of their volume or have no voxel of the ROI. 'allow_missing_masks' uses the
     volumes without a mask, or with an empty one, whole even then; their samples are marked with
     'whole_volume'. A mask off the grid of its volume stays an error.
+
+    'preprocess' replaces 'preprocess_encoder_input': it maps the reoriented volume and mask to
+    the sample's fields, e.g. the blocks of a multi-block input.
     """
 
     def __init__(
@@ -75,6 +79,7 @@ class NiftiEncoderInputDataset(Dataset):
         preprocessing_kwargs: dict,
         strict_masks: bool = False,
         allow_missing_masks: bool = False,
+        preprocess: Callable[[sitk.Image, sitk.Image | None], dict] | None = None,
     ):
         self.input_dir = input_dir
         self.files = files
@@ -83,6 +88,7 @@ class NiftiEncoderInputDataset(Dataset):
         self.preprocessing_kwargs = preprocessing_kwargs
         self.strict_masks = strict_masks
         self.allow_missing_masks = allow_missing_masks
+        self.preprocess = preprocess
 
     def __len__(self):
         return len(self.files)
@@ -116,13 +122,15 @@ class NiftiEncoderInputDataset(Dataset):
                     logger.warning(f"Mask {mask_path} not found, using the whole volume.")
                     whole_volume = True
             image = sitk.DICOMOrient(image, self.orientation)
-            encoder_input = preprocess_encoder_input(image, mask, **self.preprocessing_kwargs)
-            return {
-                **sample,
-                "encoder_input": encoder_input[0],
-                "whole_volume": whole_volume,
-                "error": None,
-            }
+            if self.preprocess is not None:
+                inputs = self.preprocess(image, mask)
+            else:
+                inputs = {
+                    "encoder_input": preprocess_encoder_input(
+                        image, mask, **self.preprocessing_kwargs
+                    )[0]
+                }
+            return {**sample, **inputs, "whole_volume": whole_volume, "error": None}
         except Exception as error:  # Skip unreadable volumes instead of stopping the run.
             return {**sample, "encoder_input": None, "error": f"{type(error).__name__}: {error}"}
 

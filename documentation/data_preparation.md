@@ -48,8 +48,8 @@ and adds the remaining source validation studies to training.
 
 Training requires precomputed vision embeddings. Generate them with
 [`generate_embeddings.py`](../vlm/scripts/embeddings/generate_embeddings.py): the
-nnFoundationViT and nnFoundationCNN features of the nnFoundation configs, and the single-block
-Primus features of the RMR configs. See [RMR embeddings](rmr_embeddings.md) for all features the
+nnFoundationViT and nnFoundationCNN features of the nnFoundation configs, and the Primus
+features of the RMR configs. See [RMR embeddings](rmr_embeddings.md) for all features the
 RMR configs expect.
 
 The supplied configs use `${NAME}` placeholders to keep data paths portable.
@@ -91,35 +91,44 @@ uv run python vlm/scripts/embeddings/generate_embeddings.py \
   --output_dir "${VLM_EMBEDS}/CTRATE_Primus-1B_Whole"
 ```
 
-| Paper | `--embedding` | Encoder | Input | CT-RATE | Merlin |
-| --- | --- | --- | --- | --- | --- |
+| Paper     | `--embedding` | Encoder | Input | CT-RATE | Merlin |
+|-----------| --- | --- | --- | --- | --- |
 | nnFoundation | `nnFoundationViT` | [nnFoundationViT](https://huggingface.co/MIC-DKFZ/nnFoundationViT) | ROI | Center crop | Resized |
 | nnFoundation | `nnFoundationCNN` | [nnFoundationCNN](https://huggingface.co/MIC-DKFZ/nnFoundationCNN) | ROI | Resized | Resized |
-| RMR | `Primus-1B_ROI` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | ROI | Resized | Resized |
-| RMR | `Primus-1B_Whole` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | Whole volume | Resized | Resized |
+| nnFoundation | `nnFoundationViT_release` | [nnFoundationViT](https://huggingface.co/MIC-DKFZ/nnFoundationViT) | Foreground | Resized directly | Resized directly |
+| RMR       | `Primus-1B_ROI` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | ROI | Resized | Resized |
+| RMR       | `Primus-1B_Whole` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | Whole volume | Resized | Resized |
+| RMR       | `Primus-4B_2_1_2_ROI` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | ROI, 2 × 1 × 2 blocks | Resized | Resized |
+| RMR       | `Primus-4B_1_2_2_ROI` | [PrimusM-MAE](https://huggingface.co/MIC-DKFZ/PrimusM-MAE) | ROI, 1 × 2 × 2 blocks | Resized | Resized |
 
-Each volume is reoriented, z-score normalized, resampled to 1 mm, cropped to its ROI (the lungs
+Each volume is reoriented (to the dataset's orientation, LPS for CT-RATE and LAS for Merlin,
+unless the encoder or `--orientation` sets another), z-score normalized, resampled to 1 mm, cropped to its ROI (the lungs
 for CT-RATE, the foreground for Merlin) and center cropped or resized to the encoder input of
-192³, as listed above. Existing embeddings are skipped, so an interrupted run can be restarted.
-The script's docstring describes each step in detail.
+192³, as listed above. The multi-block features (`4B`) resize the ROI to a window of four
+encoder inputs, encode them one by one and merge their embeddings into one grid. Existing
+embeddings are skipped, so an interrupted run can be restarted. The script's docstring describes
+each step in detail; `--help` lists the options that change a preset (e.g. `--processing_mode`,
+`--grid`, `--orientation`, `--bf16`) and those for large runs (`--batch_size`, `--num_shards`, `--shard_id`;
+launched with `torchrun`, the volumes are split across its processes). With `--output_base`
+instead of `--output_dir`, the folder is named `<DATASET>_<embedding>` followed by the changed
+options.
 
-The settings are saved as `vision_input_preprocessing.yml` in the output folder. Training copies
+The settings of single-block embeddings are saved as `vision_input_preprocessing.yml` in the output folder. Training copies
 them into the run config, so that inference on new volumes
 ([`inference_nifti.py`](../inference_nifti.py)) preprocesses and encodes them the same way.
 
 ### Embeddings of the released models
 
 The [released report-generation models](../README.md#generating-reports-with-the-released-models)
-use other settings than the paper presets: on both datasets, the foreground of all labels as ROI
-(`--roi foreground`), cropped at the volume's own spacing and resized once to the encoder input
-(`--processing_mode resized_direct`), and the nnFoundationViT revision they were trained with:
+use other settings than the paper presets, collected in `nnFoundationViT_release`: on both
+datasets, the foreground of all labels as ROI, cropped at the volume's own spacing and resized
+once to the encoder input (`resized_direct`), and the nnFoundationViT revision they were trained
+with:
 
 ```bash
 uv run python vlm/scripts/embeddings/generate_embeddings.py \
-  --embedding nnFoundationViT --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
+  --embedding nnFoundationViT_release --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
   --mask_dir /path/to/CT-RATE/dataset/ts_seg/ts_total \
-  --roi foreground --processing_mode resized_direct \
-  --checkpoint MIC-DKFZ/nnFoundationViT@c691f2115140458ec64017712eb8ebbc8dde6ae4 \
   --output_dir /path/to/embeddings
 ```
 

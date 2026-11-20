@@ -6,7 +6,9 @@ Generate the vision embeddings of the nnFoundation and RMR papers from CT volume
 - nnFoundation: nnFoundationViT and nnFoundationCNN, from the ROI. On CT-RATE, nnFoundationViT
   center crops the ROI and nnFoundationCNN resizes it; on Merlin, both resize it.
 - RMR: Primus-1B_ROI and Primus-1B_Whole, encoded by PrimusM-MAE as one input block, from the
-  ROI or the whole volume; both resize their input.
+  ROI or the whole volume, and Primus-4B_2_1_2_ROI (CT-RATE) and Primus-4B_1_2_2_ROI (Merlin), as
+  2 × 1 × 2 or 1 × 2 × 2 input blocks from the ROI; all resize their input.
+- nnFoundationViT_release: the released nnFoundationViT, from the foreground, 'resized_direct'.
 
 '--dataset' selects the dataset's layout:
 - ctrate: split folders 'train_fixed' and 'valid_fixed'; reoriented to LPS.
@@ -23,20 +25,27 @@ reoriented, z-score normalized, resampled to 1 mm, cropped to its ROI (the mask'
 enlarged by 4%, from the mask with the same relative path in '--mask_dir'), fitted to the encoder
 input (192³) and encoded in float32, on a GPU if one is available: a center crop or pad keeps
 1 mm, while resizing gives a spacing of the input's size divided by 192. Volumes without a mask
-are embedded whole, with a warning. The embedding
-(C, D, H, W) is saved as '<output_dir>/<split folder>/<name>_embedding.bl2', where the paper
-configs expect it (see documentation/data_preparation.md). Existing embeddings are skipped, so an
-interrupted run can be restarted.
+are embedded whole, with a warning. The embedding (C, D, H, W) is saved as
+'<output_dir>/<split folder>/<name>_embedding.bl2', where the paper configs expect it (see
+documentation/data_preparation.md). Existing embeddings are skipped, so an interrupted run can be
+restarted.
 
-Options beyond the papers: '--processing_mode' replaces the embedding's mode, e.g.
-'resized_direct' (the ROI cropped at the volume's own spacing and resized once, with
-anti-aliasing; see vlm/data/preprocessing/encoder_input.py), and '--roi' replaces the
-paper's ROI, e.g. '--roi foreground' for CT-RATE. Launched with torchrun, the volumes are split
-across the processes (on all nodes), each on its own GPU.
+The multi-block embeddings (Primus-4B) cover the resized ROI with a window of input blocks,
+encoded one by one and merged into one embedding grid (see vlm/embeddings/multiblock.py).
 
-The settings are saved once per embedding folder, as '<output_dir>/vision_input_preprocessing.yml';
-training copies them into the run config, so that 'inference_nifti.py' embeds new volumes the same
-way.
+Options beyond the papers ('--help' lists them) change the preset, e.g. '--processing_mode
+resized_direct' (the ROI cropped at the volume's own spacing and resized once, with
+anti-aliasing; see vlm/data/preprocessing/encoder_input.py) or '--roi foreground' for CT-RATE.
+'--orientation' replaces the input orientation (by default the encoder's, if it has one,
+otherwise the dataset's).
+With '--output_base' instead of '--output_dir', the folder is named after the dataset, the
+embedding and these options, e.g. 'CTRATE_nnFoundationViT_roi-foreground'. Launched with
+torchrun, the volumes are split across the processes (on all nodes), each on its own GPU;
+'--num_shards' and '--shard_id' split them across independent jobs.
+
+The settings of single-block embeddings are saved once per embedding folder, as
+'<output_dir>/vision_input_preprocessing.yml'; training copies them into the run config, so that
+'inference_nifti.py' embeds new volumes the same way.
 
     uv run python vlm/scripts/embeddings/generate_embeddings.py \\
         --embedding nnFoundationViT --dataset ctrate --input_dir /path/to/CT-RATE/dataset \\
@@ -45,93 +54,33 @@ way.
 """
 
 import argparse
-import os
+from dataclasses import fields
 from pathlib import Path
 
-import blosc2
-import numpy as np
-import SimpleITK as sitk
-import torch
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-
-from vlm.configs.data_config import VisionInputPreprocessingConfig, VisionInputSettings
-from vlm.data.preprocessing.encoder_input import PROCESSING_MODES
-from vlm.data.preprocessing.nifti_inputs import (
-    NiftiEncoderInputDataset,
-    collate_samples,
-    find_nifti_files,
-    strip_nifti_suffix,
+from vlm.configs.data_config import (
+    VisionInputPreprocessingConfig,
+    VisionInputSettings,
+    validate_orientation,
 )
-from vlm.data.vision_input_settings import save_settings
-from vlm.models.vision_encoders.primus import PrimusEncoder
-from vlm.models.vision_encoders.resenc import ResEncEncoder
-from vlm.utils.serialization import save_json
-
-# Encoder, its default checkpoint, and per dataset its ROI (None: the whole volume) and
-# processing mode.
-EMBEDDINGS = {
-    "nnFoundationViT": {
-        "encoder": PrimusEncoder,
-        "checkpoint": "MIC-DKFZ/nnFoundationViT",
-        "rois": {"ctrate": "lungs", "merlin": "foreground"},
-        "processing_modes": {"ctrate": "center_crop", "merlin": "resized"},
-    },
-    "nnFoundationCNN": {
-        "encoder": ResEncEncoder,
-        "checkpoint": "MIC-DKFZ/nnFoundationCNN",
-        "rois": {"ctrate": "lungs", "merlin": "foreground"},
-        "processing_modes": {"ctrate": "resized", "merlin": "resized"},
-    },
-    "Primus-1B_ROI": {
-        "encoder": PrimusEncoder,
-        "checkpoint": "MIC-DKFZ/PrimusM-MAE",
-        "rois": {"ctrate": "lungs", "merlin": "foreground"},
-        "processing_modes": {"ctrate": "resized", "merlin": "resized"},
-    },
-    "Primus-1B_Whole": {
-        "encoder": PrimusEncoder,
-        "checkpoint": "MIC-DKFZ/PrimusM-MAE",
-        "rois": None,
-        "processing_modes": {"ctrate": "resized", "merlin": "resized"},
-    },
-}
-
-# Default target spacing in millimetres (z, y, x).
-TARGET_SPACING = (1.0, 1.0, 1.0)
-
-# ROIs from TotalSegmentator 'total' masks, as recorded in 'data.vision_input_preprocessing'.
-ROIS = {
-    "lungs": {
-        "roi_mask": "TotalSegmentator 'total', lungs (labels 10-14)",
-        "mask_label_ids": [10, 11, 12, 13, 14],
-        "enforce_min_bbox": False,
-        "outlier_method": "none",
-    },
-    "foreground": {
-        "roi_mask": "TotalSegmentator 'total', foreground of all labels",
-        "mask_label_ids": None,
-        "enforce_min_bbox": True,
-        "outlier_method": "connected_components",
-        "outlier_min_voxels": 400,
-    },
-}
-
-# Orientations are those the datasets are mostly stored in, so that most volumes stay unchanged.
-DATASETS = {
-    "ctrate": {
-        "orientation": "LPS",
-        "split_folders": ["train_fixed", "valid_fixed"],
-    },
-    "merlin": {
-        "orientation": "LAS",
-        "split_folders": [""],
-    },
-}
+from vlm.data.preprocessing.encoder_input import NORMALIZATIONS, PROCESSING_MODES
+from vlm.embeddings.registry import DATASETS, EMBEDDINGS, ENCODERS, ROIS
+from vlm.embeddings.runner import EmbeddingJob, RuntimeOptions, run
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0].strip())
+def orientation_code(value: str) -> str:
+    try:
+        return validate_orientation(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def default_orientation(args: argparse.Namespace) -> str:
+    encoder = ENCODERS[EMBEDDINGS[args.embedding].encoder]
+    return encoder.orientation or DATASETS[args.dataset]["orientation"]
+
+
+def build_parser(description: str | None = None) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--embedding", choices=EMBEDDINGS, required=True)
     parser.add_argument("--dataset", choices=DATASETS, required=True)
     parser.add_argument(
@@ -149,170 +98,204 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "'--input_dir', for the ROI embeddings. Volumes without a mask are embedded whole, with "
         "a warning.",
     )
-    parser.add_argument(
+    output = parser.add_mutually_exclusive_group(required=True)
+    output.add_argument(
         "--output_dir",
         type=Path,
-        required=True,
         help="Embedding folder, the 'data.vision_input_path' of the runs; holds the settings.",
     )
-    parser.add_argument(
+    output.add_argument(
+        "--output_base",
+        type=Path,
+        help="Folder in which the embedding folder is named after the dataset, the embedding "
+        "and the options changing it, e.g. 'CTRATE_nnFoundationViT_roi-foreground'.",
+    )
+
+    preset = parser.add_argument_group("changes to the embedding preset")
+    preset.add_argument(
         "--checkpoint",
         default=None,
-        help="Encoder checkpoint file or Hugging Face repository; by default the encoder's "
-        "repository, e.g. 'MIC-DKFZ/nnFoundationViT'.",
+        help="Encoder checkpoint file or Hugging Face repository (optionally "
+        "'<repository>@<revision>'); by default the embedding's. Replacing the embedding's "
+        "checkpoint needs '--output_dir'.",
     )
-    parser.add_argument(
+    preset.add_argument("--roi", choices=ROIS, default=None, help="Replaces the embedding's ROI.")
+    preset.add_argument(
         "--processing_mode",
         choices=PROCESSING_MODES,
         default=None,
-        help="Replaces the embedding's processing mode, e.g. 'resized_direct'.",
+        help="Replaces the embedding's processing mode, e.g. 'resized_direct' (the ROI cropped "
+        "at the volume's own spacing and resized once, with anti-aliasing).",
     )
-    parser.add_argument(
-        "--roi",
-        choices=ROIS,
+    preset.add_argument(
+        "--grid",
+        type=int,
+        nargs=3,
         default=None,
-        help="Replaces the embedding's ROI (CT-RATE: lungs, Merlin: foreground).",
+        metavar=("GZ", "GY", "GX"),
+        help="Encoder inputs per axis: a window of GZ·GY·GX inputs is embedded block-wise and "
+        "the block embeddings merged (no settings file is saved).",
     )
-    parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument(
+    preset.add_argument(
+        "--tile_step_size",
+        type=float,
+        default=1.0,
+        help="Multi-block: sliding-window step as a fraction of the input; below 1, blocks "
+        "overlap and are merged with Gaussian weights.",
+    )
+    preset.add_argument("--input_shape", type=int, nargs=3, default=None, metavar=("Z", "Y", "X"))
+    preset.add_argument(
+        "--target_spacing", type=float, nargs=3, default=None, metavar=("Z", "Y", "X")
+    )
+    preset.add_argument("--normalization", choices=NORMALIZATIONS, default=None)
+    preset.add_argument(
+        "--orientation",
+        type=orientation_code,
+        default=None,
+        help="Orientation of the encoder inputs, e.g. 'RAS'; by default the encoder's, otherwise "
+        "the dataset's (CT-RATE 'LPS', Merlin 'LAS').",
+    )
+    preset.add_argument(
+        "--bf16",
+        action="store_true",
+        help="Encode in bfloat16 (saved as float32); changes the embeddings noticeably, but "
+        "large multi-block inputs need it for memory-efficient attention.",
+    )
+
+    runtime = parser.add_argument_group("runtime")
+    runtime.add_argument(
+        "--cudnn_attention",
+        action="store_true",
+        help="Attention through cuDNN with the head dim zero-padded (needs '--bf16'); faster "
+        "on GH200, differing by rounding only.",
+    )
+    runtime.add_argument("--num_workers", type=int, default=4)
+    runtime.add_argument("--prefetch_factor", type=int, default=2)
+    runtime.add_argument(
+        "--batch_size", type=int, default=1, help="Single-block volumes per batch."
+    )
+    runtime.add_argument(
+        "--block_batch_size", type=int, default=1, help="Multi-block: blocks per encoder call."
+    )
+    runtime.add_argument(
+        "--save_workers",
+        type=int,
+        default=2,
+        help="Processes saving the embeddings; 0 saves them in the main process.",
+    )
+    runtime.add_argument("--save_threads", type=int, default=8, help="blosc2 threads per saver.")
+    runtime.add_argument(
+        "--num_shards",
+        type=int,
+        default=1,
+        help="Independent jobs the volumes are split across, e.g. one per node.",
+    )
+    runtime.add_argument("--shard_id", type=int, default=0, help="This job's shard.")
+    runtime.add_argument("--max_files", type=int, default=None, help="Per split, for testing.")
+    runtime.add_argument(
+        "--debug_save_preprocessed",
+        action="store_true",
+        help="Also save the encoder inputs as NIfTI in '<split folder>/preprocessed'.",
+    )
+    runtime.add_argument(
         "--overwrite", action="store_true", help="Embed volumes already saved again."
     )
-    args = parser.parse_args(argv)
-    uses_roi = EMBEDDINGS[args.embedding]["rois"] is not None
+    return parser
+
+
+def validate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> argparse.Namespace:
+    preset = EMBEDDINGS[args.embedding]
+    uses_roi = preset.rois is not None
     if uses_roi and args.mask_dir is None:
         parser.error(f"{args.embedding} embeds the ROI and needs '--mask_dir'.")
     if not uses_roi and args.mask_dir is not None:
         parser.error(f"{args.embedding} embeds the whole volume and takes no '--mask_dir'.")
     if not uses_roi and args.roi is not None:
         parser.error(f"{args.embedding} embeds the whole volume and takes no '--roi'.")
+    if preset.checkpoint is None and args.checkpoint is None:
+        parser.error(f"{args.embedding} has no checkpoint of its own and needs '--checkpoint'.")
+    if preset.checkpoint is not None and args.checkpoint is not None and args.output_dir is None:
+        parser.error("Another '--checkpoint' needs an '--output_dir'.")
+    grid = tuple(args.grid or preset.grid)
+    if grid == (1, 1, 1) and args.tile_step_size != 1.0:
+        parser.error("'--tile_step_size' needs a multi-block grid.")
+    if not 0 < args.tile_step_size <= 1:
+        parser.error("'--tile_step_size' must be in (0, 1].")
+    if args.cudnn_attention and not args.bf16:
+        parser.error("'--cudnn_attention' needs '--bf16'.")
+    if not 0 <= args.shard_id < args.num_shards:
+        parser.error("'--shard_id' must be in [0, '--num_shards').")
     return args
 
 
-def paper_settings(
-    embedding: str,
-    dataset: str,
-    checkpoint: str,
-    processing_mode: str | None = None,
-    roi: str | None = None,
-) -> VisionInputSettings:
-    preset = EMBEDDINGS[embedding]
-    return VisionInputSettings(
-        vision_input_orientation=DATASETS[dataset]["orientation"],
-        vision_input_preprocessing=VisionInputPreprocessingConfig(
-            target_spacing=TARGET_SPACING,
-            normalization="z_score",
-            processing_mode=processing_mode or preset["processing_modes"][dataset],
-            **(ROIS[roi or preset["rois"][dataset]] if preset["rois"] else {}),
-        ),
-        embedding_encoder={
-            "class_name": preset["encoder"].__name__,
-            "checkpoint_path": checkpoint,
-        },
-    )
+def parse_args(argv: list[str] | None = None, description: str | None = None):
+    parser = build_parser(description)
+    return validate(parser, parser.parse_args(argv))
 
 
-def save_embedding(embedding: np.ndarray, path: Path):
-    """Save atomically, so that an interrupted run leaves no partial embedding behind."""
-    tmp_path = f"{path}.tmp"
-    blosc2.save_array(
-        np.ascontiguousarray(embedding),
-        tmp_path,
-        mode="w",
-        cparams={"codec": blosc2.Codec.ZSTD, "clevel": 8},
-    )
-    os.replace(tmp_path, path)
-
-
-def split_files(
-    input_dir: Path, output_dir: Path, overwrite: bool, rank: int = 0, world_size: int = 1
-) -> dict[Path, Path]:
-    """
-    The volumes of a split folder still to embed, mapped to their embedding files: of all its
-    volumes, every 'world_size'-th from 'rank' on, so that the processes split them the same way
-    however many each has already saved.
-    """
-    if not input_dir.is_dir():
-        raise FileNotFoundError(f"Split folder {input_dir} not found.")
-    files = find_nifti_files(input_dir)
-    if not files:
-        raise FileNotFoundError(f"No NIfTI files found in {input_dir}")
-    output_paths = {
-        file: output_dir / f"{Path(strip_nifti_suffix(file)).name}_embedding.bl2" for file in files
-    }
-    duplicates = len(files) - len(set(output_paths.values()))
-    if duplicates:
-        raise ValueError(f"{duplicates} volumes in {input_dir} share a file name with another.")
-    shard = list(output_paths.items())[rank::world_size]
-    return {file: path for file, path in shard if overwrite or not path.exists()}
-
-
-def init_preprocessing_worker(worker_id: int):
-    # DataLoader already limits PyTorch threads; limit SimpleITK's separate pool too.
-    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(1)
-
-
-def main(args: argparse.Namespace):
+def folder_name(args: argparse.Namespace) -> str:
+    """'<DATASET>_<embedding>', followed by the options that change the embeddings."""
     preset = EMBEDDINGS[args.embedding]
-    checkpoint = args.checkpoint or preset["checkpoint"]
-    settings = paper_settings(
-        args.embedding, args.dataset, checkpoint, args.processing_mode, args.roi
-    )
-    # Under torchrun, each process embeds every 'world_size'-th volume of each split.
-    rank = int(os.environ.get("RANK", "0"))
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    input_dir = args.input_dir.resolve()
-    # All splits are listed first, so that a missing one fails before hours of embedding.
-    splits = {
-        split: split_files(
-            input_dir / split, args.output_dir / split, args.overwrite, rank, world_size
-        )
-        for split in DATASETS[args.dataset]["split_folders"]
-    }
-    # Before embedding, so that settings differing from the folder's fail early.
-    settings_file = save_settings(args.output_dir, settings)
+    parts = [args.dataset.upper(), args.embedding]
+    if args.roi and args.roi != preset.roi(args.dataset):
+        parts.append(f"roi-{args.roi}")
+    if args.processing_mode and args.processing_mode != preset.processing_mode(args.dataset):
+        parts.append(args.processing_mode)
+    if args.grid and tuple(args.grid) != preset.grid:
+        parts.append("grid" + "x".join(map(str, args.grid)))
+    if args.tile_step_size != 1.0:
+        parts.append(f"step{args.tile_step_size:g}")
+    if args.input_shape:
+        parts.append("in" + "x".join(map(str, args.input_shape)))
+    if args.target_spacing:
+        parts.append("sp" + "x".join(f"{s:g}" for s in args.target_spacing))
+    if args.normalization:
+        parts.append(args.normalization)
+    if args.orientation and args.orientation != default_orientation(args):
+        parts.append(args.orientation)
+    if args.bf16:
+        parts.append("bf16")
+    return "_".join(parts)
 
-    device = f"cuda:{os.environ.get('LOCAL_RANK', '0')}" if torch.cuda.is_available() else "cpu"
-    encoder = preset["encoder"].from_pretrained(checkpoint).to(device).eval()
-    preprocessing_kwargs = settings.vision_input_preprocessing.preprocessing_kwargs(
-        encoder.patch_size
+
+def embedding_job(args: argparse.Namespace) -> EmbeddingJob:
+    preset = EMBEDDINGS[args.embedding]
+    encoder = ENCODERS[preset.encoder]
+    checkpoint = args.checkpoint or preset.checkpoint
+    roi = args.roi or preset.roi(args.dataset)
+    settings = VisionInputSettings(
+        vision_input_orientation=args.orientation or default_orientation(args),
+        vision_input_preprocessing=VisionInputPreprocessingConfig(
+            target_spacing=args.target_spacing or encoder.target_spacing,
+            normalization=args.normalization or preset.normalization or encoder.normalization,
+            processing_mode=args.processing_mode or preset.processing_mode(args.dataset),
+            **(ROIS[roi] if roi else {}),
+        ),
+        embedding_encoder=(
+            None
+            if encoder.embedding_encoder is None or checkpoint is None
+            else {"class_name": encoder.embedding_encoder, "checkpoint_path": checkpoint}
+        ),
     )
-    for split, output_paths in splits.items():
-        output_dir = args.output_dir / split
-        output_dir.mkdir(parents=True, exist_ok=True)
-        loader = DataLoader(
-            NiftiEncoderInputDataset(
-                input_dir / split,
-                list(output_paths),
-                settings.vision_input_orientation,
-                None if args.mask_dir is None else args.mask_dir / split,
-                preprocessing_kwargs,
-            ),
-            batch_size=1,
-            num_workers=args.num_workers,
-            collate_fn=collate_samples,
-            worker_init_fn=init_preprocessing_worker,
-        )
-        failed = []
-        with torch.inference_mode():
-            for (sample,) in tqdm(
-                loader, desc=f"Embedding {split or args.dataset}", disable=rank != 0
-            ):
-                if sample["error"] is not None:
-                    print(f"Skipped {sample['path']}: {sample['error']}")
-                    failed.append({key: sample[key] for key in ("path", "error")})
-                    continue
-                # Float32, as for the papers' embeddings: bf16 changes them noticeably.
-                embedding = encoder(sample["encoder_input"][None].to(device).float())[0]
-                save_embedding(embedding.cpu().numpy(), output_paths[Path(sample["path"])])
-        if failed:
-            failed_file = output_dir / (
-                "failed.json" if world_size == 1 else f"failed_rank{rank}.json"
-            )
-            save_json(failed, failed_file)
-            print(f"Skipped {len(failed)} of {len(output_paths)} volumes, see {failed_file}")
-        print(f"Saved {len(output_paths) - len(failed)} embeddings to {output_dir}")
-    print(f"Settings in {settings_file}")
+    return EmbeddingJob(
+        build_encoder=lambda: encoder.build(checkpoint),
+        settings=settings,
+        input_dir=args.input_dir,
+        output_dir=args.output_dir or args.output_base / folder_name(args),
+        split_folders=DATASETS[args.dataset]["split_folders"],
+        mask_dir=args.mask_dir if roi else None,
+        input_shape=args.input_shape or encoder.input_shape,
+        grid=tuple(args.grid or preset.grid),
+        tile_step_size=args.tile_step_size,
+        bf16=args.bf16,
+        options=RuntimeOptions(**{f.name: getattr(args, f.name) for f in fields(RuntimeOptions)}),
+    )
+
+
+def main(argv: list[str] | None = None, description: str | None = None) -> None:
+    """Runs the command line; packages with their own presets register them and call it."""
+    run(embedding_job(parse_args(argv, description or __doc__.split("\n\n")[0].strip())))
 
 
 if __name__ == "__main__":
-    main(parse_args())
+    main()

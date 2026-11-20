@@ -1,7 +1,6 @@
 """Reorientation, preprocessing and encoding of NIfTI volumes for inference on new images."""
 
 import contextlib
-import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,6 +29,7 @@ from vlm.data.vision_input_settings import load_settings
 from vlm.models.vision_encoders import nnssl, primus, resenc
 from vlm.models.vision_encoders.primus import PrimusEncoder
 from vlm.models.vision_encoders.resenc import ResEncEncoder
+from vlm.scripts.embeddings import generate_embeddings
 
 # A tiny Primus, in the plan format of nnssl's PrimusX.
 TINY_ARCH_KWARGS = {
@@ -362,7 +362,6 @@ def test_nested_volumes_use_their_masks_and_failures_are_reported(tmp_path):
     torch.testing.assert_close(scan["encoder_input"], expected)
 
 
-
 def test_strict_masks_skip_volumes_without_a_usable_mask_unless_allowed(tmp_path):
     identity = (1, 0, 0, 0, 1, 0, 0, 0, 1)
     array = np.random.default_rng(0).normal(size=(16, 16, 16)).astype(np.float32)
@@ -385,13 +384,16 @@ def test_strict_masks_skip_volumes_without_a_usable_mask_unless_allowed(tmp_path
     assert "no voxel of the ROI" in strict["empty"]["error"]
     assert "not found" in strict["missing"]["error"]
     assert "spacing" in strict["off_grid"]["error"]
-    torch.testing.assert_close(allowed["masked"]["encoder_input"], strict["masked"]["encoder_input"])
+    torch.testing.assert_close(
+        allowed["masked"]["encoder_input"], strict["masked"]["encoder_input"]
+    )
     whole = make_dataset(tmp_path / "in")[0]["encoder_input"]
     for name in ("empty", "missing"):
         assert allowed[name]["error"] is None and allowed[name]["whole_volume"]
         torch.testing.assert_close(allowed[name]["encoder_input"], whole)
     # A mask off the grid of its volume is a wrong mask, not a missing one.
     assert "spacing" in allowed["off_grid"]["error"]
+
 
 def inference_args(**overrides):
     args = dict.fromkeys(inference_nifti.PREPROCESSING_FIELDS)
@@ -469,14 +471,6 @@ def test_image_runs_have_no_embedding_encoder():
         )
 
 
-def load_embedding_script():
-    path = Path(__file__).resolve().parents[1] / "scripts/embeddings/generate_embeddings.py"
-    spec = importlib.util.spec_from_file_location("generate_embeddings", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 @pytest.mark.parametrize(
     "embedding, roi_mask",
     [
@@ -487,7 +481,7 @@ def load_embedding_script():
 def test_public_script_saves_the_paper_embeddings_with_their_settings(
     tmp_path, monkeypatch, embedding, roi_mask
 ):
-    script = load_embedding_script()
+    script = generate_embeddings
     monkeypatch.setattr(script.torch.cuda, "is_available", lambda: False)
     checkpoint, _ = tiny_checkpoint(tmp_path)
     rng = np.random.default_rng(0)
@@ -550,7 +544,7 @@ def test_public_script_saves_the_paper_embeddings_with_their_settings(
     ],
 )
 def test_public_script_takes_masks_exactly_for_roi_embeddings(capsys, embedding, mask_args, match):
-    script = load_embedding_script()
+    script = generate_embeddings
     with pytest.raises(SystemExit):
         script.parse_args(
             ["--embedding", embedding, "--dataset", "merlin", "--input_dir", "in"]
@@ -632,7 +626,7 @@ def test_direct_resizing_needs_masks_on_the_grid_of_their_volumes():
 
 
 def test_public_script_records_the_processing_mode_and_foreground_roi(tmp_path, monkeypatch):
-    script = load_embedding_script()
+    script = generate_embeddings
     monkeypatch.setattr(script.torch.cuda, "is_available", lambda: False)
     checkpoint, _ = tiny_checkpoint(tmp_path)
     rng = np.random.default_rng(0)
@@ -666,7 +660,7 @@ def test_public_script_records_the_processing_mode_and_foreground_roi(tmp_path, 
 
 @pytest.mark.parametrize("world_size", [2, 3])
 def test_public_script_shards_split_every_volume_exactly_once(tmp_path, world_size):
-    script = load_embedding_script()
+    script = generate_embeddings
     for i in range(7):
         (tmp_path / "in").mkdir(exist_ok=True)
         (tmp_path / f"in/case_{i}.nii.gz").write_bytes(b"")
