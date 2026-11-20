@@ -15,7 +15,7 @@ Generate the vision embeddings of the nnFoundation and RMR papers from CT volume
 The ROI embeddings crop CT-RATE to the lungs and Merlin to the foreground; '--roi' replaces it.
 Both ROIs come from TotalSegmentator 'total' masks:
 - lungs: labels 10-14.
-- foreground: all labels, without components of fewer than 100 voxels. Before fitting, the ROI
+- foreground: all labels, without components of fewer than 400 voxels. Before fitting, the ROI
   is enlarged to at least the encoder input (192 mm at 1 mm) where the volume allows it.
 
 Each volume '<name>.nii.gz' found (recursively) in the split folders of '--input_dir' is
@@ -113,7 +113,7 @@ ROIS = {
         "mask_label_ids": None,
         "enforce_min_bbox": True,
         "outlier_method": "connected_components",
-        "outlier_min_voxels": 100,
+        "outlier_min_voxels": 400,
     },
 }
 

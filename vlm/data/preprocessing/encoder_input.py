@@ -3,7 +3,7 @@ Preprocessing of CT volumes into vision encoder inputs, shared by the embedding 
 (vlm/scripts/embeddings/generate_embeddings.py) and the inference on NIfTI images.
 
 Single-block pipeline per volume: normalize → resample to the encoder spacing, if it has one →
-crop to the mask ROI (bounding box expanded by 4%) → normalize again → fit to the encoder input
+crop to the mask ROI (bounding box expanded by 4%) → normalize again (z_score, min_max) → fit to the encoder input
 shape by resizing ('resized') or center cropping/padding ('center_crop').
 
 'resized_direct' skips the resampling to the target spacing: the ROI is cropped at the volume's
@@ -34,7 +34,23 @@ from vlm.data.preprocessing.default_resampling import (
 )
 
 PROCESSING_MODES = ("resized", "center_crop", "resized_direct")
-NORMALIZATIONS = ("z_score", "min_max", "vista3d_scale", "merlin_scale", "none")
+NORMALIZATIONS = (
+    "z_score",
+    "min_max",
+    "vista3d_scale",
+    "merlin_scale",
+    "fvlm_scale",
+    "radar_scale",
+    "none",
+)
+# HU windows mapped to [0, 1] (clipped). They are applied once, before the ROI crop; z_score and
+# min_max are computed again on the ROI.
+HU_WINDOWS = {
+    "vista3d_scale": (-963.8247715525971, 1053.678477684517),
+    "merlin_scale": (-1000.0, 1000.0),
+    "fvlm_scale": (-1150.0, 350.0),
+    "radar_scale": (-300.0, 400.0),
+}
 OUTLIER_METHODS = ("none", "connected_components")
 
 
@@ -150,16 +166,8 @@ def apply_normalization(image: np.ndarray, scheme: str = "z_score") -> np.ndarra
             image = (image - min_val) / (max_val - min_val)
         return image
 
-    elif scheme == "vista3d_scale":
-        a_min = -963.8247715525971
-        a_max = 1053.678477684517
-        image = (image - a_min) / (a_max - a_min)
-        image = np.clip(image, 0.0, 1.0)
-        return image
-
-    elif scheme == "merlin_scale":
-        a_min = -1000.0
-        a_max = 1000.0
+    elif scheme in HU_WINDOWS:
+        a_min, a_max = HU_WINDOWS[scheme]
         image = (image - a_min) / (a_max - a_min)
         image = np.clip(image, 0.0, 1.0)
         return image
@@ -268,8 +276,13 @@ def fit_to_input_shape(
     processing_mode: str,
     input_shape: Tuple[int, int, int],
 ) -> torch.Tensor:
-    """Normalize the (c, z, y, x) ROI again and resize or center crop/pad it to (1, c, *input_shape)."""
-    image = torch.from_numpy(apply_normalization(roi[None], normalization))
+    """
+    Normalize the (c, z, y, x) ROI again (z_score, min_max; HU windows are already applied) and
+    resize or center crop/pad it to (1, c, *input_shape).
+    """
+    if normalization not in HU_WINDOWS:
+        roi = apply_normalization(roi, normalization)
+    image = torch.from_numpy(np.asarray(roi, dtype=np.float32)[None])
     if processing_mode == "center_crop":
         return center_crop_or_pad_3d(image, input_shape)
     if processing_mode == "resized":
