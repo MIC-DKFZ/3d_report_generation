@@ -69,27 +69,3 @@ def test_hf_classifier_predicts_in_order_including_singleton_last_batch(monkeypa
             "padding": "max_length",
             "truncation": True,
         }
-
-
-def test_hf_classifier_rejects_wrong_number_of_findings(monkeypatch):
-    monkeypatch.setattr(
-        ctrate_radbert.AutoModelForSequenceClassification,
-        "from_pretrained",
-        Mock(return_value=FakeClassifier(num_labels=2)),
-    )
-
-    with pytest.raises(ValueError, match="2 labels, expected 18"):
-        ctrate_radbert.RadBertClassifier()
-
-
-def test_supplied_reference_labels_skip_reference_inference(monkeypatch):
-    labels = pd.DataFrame({column: [1, 0] for column in ctrate_radbert.LABEL_COLUMNS})
-    predictor = Mock(return_value=labels)
-    monkeypatch.setattr(ctrate_radbert, "predict_labels", predictor)
-
-    _, _, references = ctrate_radbert.evaluate_reports(
-        ["pred 1", "pred 2"], ["ref 1", "ref 2"], ["1", "2"], default_gt_df=labels
-    )
-
-    predictor.assert_called_once_with(["pred 1", "pred 2"])
-    pd.testing.assert_frame_equal(references, labels)

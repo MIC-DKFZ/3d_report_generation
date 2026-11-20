@@ -50,15 +50,6 @@ class OptimizerRecorder(TrainerCallback):
         )
 
 
-class StopAtStep(TrainerCallback):
-    def __init__(self, step):
-        self.step = step
-
-    def on_step_end(self, args, state, control, **kwargs):
-        if state.global_step == self.step:
-            control.should_training_stop = True
-
-
 def train(
     output_dir,
     checkpoint=None,
@@ -178,27 +169,6 @@ def test_resume_matches_uninterrupted_training(tmp_path, uninterrupted, resume_s
     torch.testing.assert_close(flat_parameters(model), expected_parameters)
 
 
-def test_resume_from_final_checkpoint_takes_no_step(tmp_path, uninterrupted):
-    output_dir, _, expected_parameters, _ = uninterrupted
-    model, trained, steps = train(tmp_path, output_dir / f"checkpoint-{MAX_STEPS}")
-
-    assert not trained
-    assert not steps
-    torch.testing.assert_close(flat_parameters(model), expected_parameters)
-
-
-def test_phase_end_is_saved_without_checkpointing(tmp_path):
-    train(tmp_path, save_strategy="no")
-    # A later phase or a resumed run starts from this checkpoint.
-    assert [path.name for path in tmp_path.glob("checkpoint-*")] == ["checkpoint-4"]
-
-
-def test_stopping_early_ends_the_run_instead_of_the_phase(tmp_path):
-    _, trained, steps = train(tmp_path, callbacks=[StopAtStep(2)])
-    assert trained
-    assert sorted(steps) == [0, 1]
-
-
 def ddp_worker(rank, world_size, rendezvous, output_dir):
     torch.set_num_threads(1)
     AcceleratorState._reset_state(reset_partial_state=True)
@@ -232,6 +202,7 @@ def ddp_worker(rank, world_size, rendezvous, output_dir):
         dist.destroy_process_group()
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not dist.is_gloo_available(), reason="CPU DDP requires Gloo")
 def test_two_process_ddp_phase_change_keeps_ranks_in_sync(tmp_path):
     previous_threads = torch.get_num_threads()

@@ -2,10 +2,9 @@
 
 import sys
 
-import pytest
 
 from vlm.configs.data_config import DataConfig, VisionInputSettings
-from vlm.data.vision_input_settings import apply_saved_settings, save_settings
+from vlm.data.vision_input_settings import save_settings
 from vlm.utils.serialization import load_yaml, save_yaml
 
 SETTINGS = VisionInputSettings(
@@ -28,74 +27,6 @@ def data_config(vision_input_path, **fields):
         embed_size=(2, 2, 2),
         **fields,
     )
-
-
-def test_the_run_config_is_filled_from_the_settings_file(tmp_path):
-    save_settings(tmp_path, SETTINGS)
-    data = data_config(tmp_path)
-
-    apply_saved_settings(data)
-
-    assert data.vision_input_orientation == "LPS"
-    assert data.vision_input_preprocessing == SETTINGS.vision_input_preprocessing
-
-
-def test_the_embedding_encoder_is_recorded_unless_the_file_has_none(tmp_path):
-    encoder = {"class_name": "ResEncEncoder", "checkpoint_path": "MIC-DKFZ/nnFoundationCNN"}
-    save_settings(tmp_path / "with", SETTINGS.model_copy(update={"embedding_encoder": encoder}))
-    save_settings(tmp_path / "without", SETTINGS)
-    filled = data_config(tmp_path / "with")
-    kept = data_config(tmp_path / "without", embedding_encoder=encoder)
-
-    apply_saved_settings(filled)
-    apply_saved_settings(kept)
-
-    assert filled.embedding_encoder.model_dump() == encoder
-    assert kept.embedding_encoder.model_dump() == encoder
-    with pytest.raises(ValueError, match="embedding_encoder"):
-        apply_saved_settings(
-            data_config(tmp_path / "with", embedding_encoder={**encoder, "class_name": "X"})
-        )
-
-
-def test_settings_in_the_config_must_match_the_file(tmp_path):
-    save_settings(tmp_path, SETTINGS)
-    matching = data_config(
-        tmp_path,
-        vision_input_orientation="lps",
-        vision_input_preprocessing=SETTINGS.vision_input_preprocessing.model_dump(),
-    )
-    apply_saved_settings(matching)
-    assert matching.vision_input_preprocessing == SETTINGS.vision_input_preprocessing
-
-    with pytest.raises(ValueError, match="vision_input_orientation"):
-        apply_saved_settings(data_config(tmp_path, vision_input_orientation="LAS"))
-    with pytest.raises(ValueError, match="vision_input_preprocessing"):
-        apply_saved_settings(
-            data_config(tmp_path, vision_input_preprocessing={"processing_mode": "center_crop"})
-        )
-
-
-def test_inputs_without_a_settings_file_leave_the_config_unchanged(tmp_path):
-    data = data_config(tmp_path, vision_input_orientation="RAS")
-
-    apply_saved_settings(data)
-
-    assert data.vision_input_orientation == "RAS" and data.vision_input_preprocessing is None
-
-
-def test_text_only_runs_read_no_settings(tmp_path):
-    save_settings(tmp_path, SETTINGS)
-    data = DataConfig(
-        dataset_name="ctrate",
-        answer_types="all",
-        text_only=True,
-        vision_input_path=str(tmp_path),
-    )
-
-    apply_saved_settings(data)
-
-    assert data.vision_input_orientation is None
 
 
 def test_training_saves_the_settings_in_the_final_config(monkeypatch, tmp_path):

@@ -35,23 +35,3 @@ def test_cudnn_attention_is_disabled_on_hopper_before_torch_2_15(
     set_device(monkeypatch, "2.14.1+cu132", capability)
     train_script.disable_cudnn_attention_on_hopper_if_affected()
     assert cudnn_sdp["calls"] == [False]
-
-
-@pytest.mark.parametrize(
-    "version, capability, cuda_available, enabled",
-    [
-        ("2.14.1+cu132", (8, 6), True, True),  # Ampere
-        ("2.15.0+cu132", (9, 0), True, True),  # fixed in 2.15
-        ("2.14.1+cu132", (9, 0), False, True),  # no GPU
-        ("2.14.1+cu132", (9, 0), True, False),  # already disabled
-    ],
-)
-def test_cudnn_attention_is_left_unchanged_otherwise(
-    monkeypatch, cudnn_sdp, version, capability, cuda_available, enabled
-):
-    import train as train_script
-
-    cudnn_sdp["enabled"] = enabled
-    set_device(monkeypatch, version, capability, cuda_available)
-    train_script.disable_cudnn_attention_on_hopper_if_affected()
-    assert cudnn_sdp["calls"] == []

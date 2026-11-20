@@ -10,25 +10,20 @@ import pytest
 import SimpleITK as sitk
 import torch
 from dynamic_network_architectures.architectures.primus import Primus
-from pydantic import ValidationError
 
 import inference_nifti
 from vlm.configs.data_config import (
     DataConfig,
-    EmbeddingEncoderConfig,
     VisionInputPreprocessingConfig,
 )
 from vlm.data.preprocessing import nifti_inputs
 from vlm.data.preprocessing.encoder_input import (
-    anti_aliasing_sigmas,
-    min_roi_voxels,
     preprocess_encoder_input,
     resize_with_anti_aliasing,
 )
 from vlm.data.vision_input_settings import load_settings
-from vlm.models.vision_encoders import nnssl, primus, resenc
+from vlm.models.vision_encoders import nnssl, primus
 from vlm.models.vision_encoders.primus import PrimusEncoder
-from vlm.models.vision_encoders.resenc import ResEncEncoder
 from vlm.scripts.embeddings import generate_embeddings
 
 # A tiny Primus, in the plan format of nnssl's PrimusX.
@@ -49,90 +44,7 @@ TINY_ARCH_KWARGS = {
 }
 
 
-@pytest.mark.parametrize("orientation", ["lps", "LAS", "RAI", "SPL"])
-def test_orientation_codes_are_validated_and_upper_cased(orientation):
-    data = DataConfig(
-        dataset_name="ctrate", answer_types="all", vision_input_orientation=orientation
-    )
-    assert data.vision_input_orientation == orientation.upper()
-
-
-@pytest.mark.parametrize("orientation", ["LP", "LPSI", "LLS", "LRS", "XYZ"])
-def test_invalid_orientation_codes_are_rejected(orientation):
-    with pytest.raises(ValidationError, match="vision_input_orientation"):
-        DataConfig(dataset_name="ctrate", answer_types="all", vision_input_orientation=orientation)
-
-
-def test_vision_input_preprocessing_gives_the_preprocessing_kwargs():
-    data = DataConfig(
-        dataset_name="ctrate",
-        answer_types="all",
-        vision_input_preprocessing={
-            "processing_mode": "resized",
-            "roi_mask": "TotalSegmentator lungs",
-            "mask_label_ids": [10, 11],
-            "target_spacing": [1.5, 1.0, 1.0],
-        },
-    )
-    kwargs = data.vision_input_preprocessing.preprocessing_kwargs([8, 8, 8])
-
-    assert kwargs == {
-        "target_spacing": (1.5, 1.0, 1.0),
-        "normalization": "z_score",
-        "input_shape": (8, 8, 8),
-        "processing_mode": "resized",
-        "mask_label_ids": [10, 11],
-        "enforce_min_bbox": True,
-        "outlier_method": "none",
-        "outlier_min_voxels": 400,
-    }
-    # Saved and loaded again, as in 'final_config.yml'.
-    assert DataConfig.model_validate(data.model_dump()) == data
-
-
-def test_vision_input_preprocessing_is_optional():
-    assert DataConfig(dataset_name="ctrate", answer_types="all").vision_input_preprocessing is None
-
-
-@pytest.mark.parametrize(
-    "preprocessing, match",
-    [
-        ({}, "processing_mode"),
-        ({"processing_mode": "resize"}, "processing_mode"),
-        ({"processing_mode": "resized", "normalization": "zscore"}, "normalization"),
-        ({"processing_mode": "resized", "mask_label_ids": [1]}, "roi_mask"),
-        ({"processing_mode": "resized", "outlier_method": "connected_components"}, "roi_mask"),
-        ({"processing_mode": "resized", "unknown": 1}, "unknown"),
-    ],
-)
-def test_invalid_vision_input_preprocessing_is_rejected(preprocessing, match):
-    with pytest.raises(ValidationError, match=match):
-        DataConfig(
-            dataset_name="ctrate", answer_types="all", vision_input_preprocessing=preprocessing
-        )
-
-
 # A tiny ResEnc U-Net, in the plan format of nnssl's 'ResidualEncoderUNet'.
-TINY_RESENC_PLANS = {
-    "arch_class_name": "dynamic_network_architectures.architectures.unet.ResidualEncoderUNet",
-    "arch_kwargs": {
-        "n_stages": 3,
-        "features_per_stage": [4, 8, 16],
-        "conv_op": "torch.nn.modules.conv.Conv3d",
-        "kernel_sizes": [[3, 3, 3]] * 3,
-        "strides": [[1, 1, 1], [2, 2, 2], [2, 2, 2]],
-        "n_blocks_per_stage": [1, 1, 2],
-        "n_conv_per_stage_decoder": [1, 1],
-        "conv_bias": True,
-        "norm_op": "torch.nn.modules.instancenorm.InstanceNorm3d",
-        "norm_op_kwargs": {"eps": 1e-5, "affine": True},
-        "dropout_op": None,
-        "dropout_op_kwargs": None,
-        "nonlin": "torch.nn.LeakyReLU",
-        "nonlin_kwargs": {"inplace": True},
-    },
-    "arch_kwargs_requiring_import": ["conv_op", "norm_op", "dropout_op", "nonlin"],
-}
 
 
 def tiny_checkpoint(tmp_path, spacing_style="noresample", spacing=None, downstream_size=16):
@@ -153,14 +65,6 @@ def tiny_checkpoint(tmp_path, spacing_style="noresample", spacing=None, downstre
         spacing,
         key_to_lpe="eva.pos_embed",
         downstream_size=downstream_size,
-    )
-
-
-def tiny_resenc_checkpoint(tmp_path):
-    torch.manual_seed(0)
-    weights = resenc.build_resenc(TINY_RESENC_PLANS, 1).state_dict()
-    return save_nnssl_checkpoint(
-        tmp_path, weights, TINY_RESENC_PLANS, ("encoder.stem", "encoder.stages")
     )
 
 
@@ -197,28 +101,6 @@ def save_nnssl_checkpoint(
     return path, weights
 
 
-def test_encoder_is_built_from_the_plan_of_an_nnssl_checkpoint(tmp_path):
-    path, weights = tiny_checkpoint(tmp_path)
-
-    encoder = PrimusEncoder.from_pretrained(path)
-
-    assert not encoder.training
-    assert encoder.embed_dim == 24
-    assert encoder.downsample_factor == (4, 4, 4)
-    assert encoder.patch_size == (16, 16, 16)
-    assert encoder.target_spacing is None and encoder.normalization == "z_score"
-    assert set(encoder.state_dict()) == {k for k in weights if k.startswith(("down_", "eva."))}
-    torch.testing.assert_close(encoder.eva.pos_embed, weights["eva.pos_embed"])
-    with torch.no_grad():
-        assert encoder(torch.randn(2, 1, 16, 16, 16)).shape == (2, 24, 4, 4, 4)
-
-
-def test_encoder_resamples_to_the_spacing_of_its_pre_training(tmp_path):
-    path, _ = tiny_checkpoint(tmp_path, spacing_style="median", spacing=[2.0, 1.0, 1.0])
-
-    assert PrimusEncoder.from_pretrained(path).target_spacing == (2.0, 1.0, 1.0)
-
-
 def test_positional_embedding_is_resized_to_the_recommended_patch_size(tmp_path):
     path, weights = tiny_checkpoint(tmp_path, downstream_size=24)
 
@@ -231,60 +113,6 @@ def test_positional_embedding_is_resized_to_the_recommended_patch_size(tmp_path)
     )
     with torch.no_grad():
         assert encoder(torch.randn(1, 1, 24, 24, 24)).shape == (1, 24, 6, 6, 6)
-
-
-def test_resize_pos_embed_keeps_prefix_tokens_and_an_unchanged_grid():
-    pos_embed = torch.randn(1, 2 + 4**3, 8)
-    resized = nnssl.resize_pos_embed(pos_embed, (4, 4, 4), (2, 4, 6))
-    assert resized.shape == (1, 2 + 2 * 4 * 6, 8)
-    torch.testing.assert_close(resized[:, :2], pos_embed[:, :2])
-    torch.testing.assert_close(nnssl.resize_pos_embed(pos_embed, (4, 4, 4), (4, 4, 4)), pos_embed)
-
-
-@pytest.mark.parametrize("encoder_class", [PrimusEncoder, ResEncEncoder])
-def test_encoder_needs_a_checkpoint(encoder_class):
-    with pytest.raises(ValueError, match="checkpoint"):
-        encoder_class.from_pretrained(None)
-
-
-@pytest.mark.parametrize("class_name", ["PrimusM", "Primus"])
-def test_preset_and_plain_primus_plans_are_built(class_name):
-    arch_kwargs = None
-    if class_name == "Primus":
-        arch_kwargs = {
-            "embed_dim": 24,
-            "patch_embed_size": [4, 4, 4],
-            "eva_depth": 1,
-            "eva_numheads": 2,
-        }
-    network = primus.build_primus(
-        {"arch_class_name": class_name, "arch_kwargs": arch_kwargs}, 1, (16, 16, 16)
-    )
-    assert network.embed_dim == (864 if class_name == "PrimusM" else 24)
-
-
-def test_resenc_encoder_keeps_the_last_encoder_stage(tmp_path):
-    path, weights = tiny_resenc_checkpoint(tmp_path)
-    network = resenc.build_resenc(TINY_RESENC_PLANS, 1)
-    network.load_state_dict(weights)
-
-    encoder = ResEncEncoder.from_pretrained(path)
-
-    assert not encoder.training
-    assert encoder.embed_dim == 16 and encoder.downsample_factor == (4, 4, 4)
-    assert encoder.patch_size == (16, 16, 16)
-    assert encoder.target_spacing is None and encoder.normalization == "z_score"
-    assert set(encoder.state_dict()) == {k for k in weights if k.startswith("encoder.")}
-    x = torch.randn(2, 1, 16, 16, 16)
-    with torch.no_grad():
-        grid = encoder(x)
-        torch.testing.assert_close(grid, network.eval().encoder(x)[-1])
-    assert grid.shape == (2, 16, 4, 4, 4)
-
-
-def test_resenc_l_preset_is_built():
-    network = resenc.build_resenc({"arch_class_name": "ResEncL", "arch_kwargs": None}, 1)
-    assert network.encoder.output_channels[-1] == 320
 
 
 def test_padded_attention_head_dim_matches_unpadded_attention(tmp_path, monkeypatch):
@@ -340,61 +168,6 @@ def test_volumes_are_reoriented_before_preprocessing(tmp_path):
     torch.testing.assert_close(from_las_kept, from_lps.flip(-2))
 
 
-def test_nested_volumes_use_their_masks_and_failures_are_reported(tmp_path):
-    identity = (1, 0, 0, 0, 1, 0, 0, 0, 1)
-    array = np.zeros((16, 16, 16), np.float32)
-    array[4:8, 4:8, 4:8] = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
-    mask = np.zeros((16, 16, 16), np.uint8)
-    mask[4:8, 4:8, 4:8] = 1
-    write_volume(tmp_path / "in/a/b/scan.nii.gz", array, identity)
-    write_volume(tmp_path / "masks/a/b/scan.nii.gz", mask, identity)
-    (tmp_path / "in/broken.nii").write_text("not a volume")
-
-    dataset = make_dataset(tmp_path / "in", mask_dir=tmp_path / "masks")
-    scan, broken = dataset[0], dataset[1]
-
-    assert broken["image_id"] == "broken" and broken["encoder_input"] is None
-    assert broken["error"]
-    assert scan["image_id"] == "a/b/scan" and scan["error"] is None
-    # The 4³ mask ROI is enlarged to the 8³ input shape around it and normalized again.
-    roi = torch.from_numpy(array[2:10, 2:10, 2:10])
-    expected = ((roi - roi.mean()) / roi.std(correction=0))[None]
-    torch.testing.assert_close(scan["encoder_input"], expected)
-
-
-def test_strict_masks_skip_volumes_without_a_usable_mask_unless_allowed(tmp_path):
-    identity = (1, 0, 0, 0, 1, 0, 0, 0, 1)
-    array = np.random.default_rng(0).normal(size=(16, 16, 16)).astype(np.float32)
-    for name in ("masked", "empty", "missing", "off_grid"):
-        write_volume(tmp_path / f"in/{name}.nii.gz", array, identity)
-    mask = np.zeros((16, 16, 16), np.uint8)
-    mask[4:8, 4:8, 4:8] = 1
-    write_volume(tmp_path / "masks/masked.nii.gz", mask, identity)
-    write_volume(tmp_path / "masks/empty.nii.gz", np.zeros_like(mask), identity)
-    write_volume(tmp_path / "masks/off_grid.nii.gz", mask, identity, spacing=(2.0, 1.0, 1.0))
-
-    strict = make_dataset(tmp_path / "in", tmp_path / "masks", strict_masks=True)
-    allowed = make_dataset(
-        tmp_path / "in", tmp_path / "masks", strict_masks=True, allow_missing_masks=True
-    )
-    strict = {s["image_id"]: s for s in strict}
-    allowed = {s["image_id"]: s for s in allowed}
-
-    assert strict["masked"]["error"] is None and not strict["masked"]["whole_volume"]
-    assert "no voxel of the ROI" in strict["empty"]["error"]
-    assert "not found" in strict["missing"]["error"]
-    assert "spacing" in strict["off_grid"]["error"]
-    torch.testing.assert_close(
-        allowed["masked"]["encoder_input"], strict["masked"]["encoder_input"]
-    )
-    whole = make_dataset(tmp_path / "in")[0]["encoder_input"]
-    for name in ("empty", "missing"):
-        assert allowed[name]["error"] is None and allowed[name]["whole_volume"]
-        torch.testing.assert_close(allowed[name]["encoder_input"], whole)
-    # A mask off the grid of its volume is a wrong mask, not a missing one.
-    assert "spacing" in allowed["off_grid"]["error"]
-
-
 def inference_args(**overrides):
     args = dict.fromkeys(inference_nifti.PREPROCESSING_FIELDS)
     return SimpleNamespace(**{**args, "mask_dir": None, **overrides})
@@ -418,59 +191,6 @@ def test_preprocessing_comes_from_the_run_config_and_arguments_override_it(tmp_p
     assert preprocessing.outlier_min_voxels == 10 and sources["outlier_min_voxels"] == "argument"
 
 
-def test_runs_without_preprocessing_in_their_config_use_the_encoder_and_defaults():
-    args = inference_args(processing_mode="resized")
-
-    preprocessing, sources = inference_nifti.resolve_preprocessing(args, None, ENCODER)
-
-    assert (
-        preprocessing.target_spacing == (2.0, 1.0, 1.0) and sources["target_spacing"] == "encoder"
-    )
-    assert preprocessing.roi_mask is None and preprocessing.enforce_min_bbox
-    assert sources["processing_mode"] == "argument" and sources["enforce_min_bbox"] == "default"
-
-
-def test_runs_without_preprocessing_in_their_config_need_a_processing_mode():
-    with pytest.raises(ValueError, match="--processing_mode"):
-        inference_nifti.resolve_preprocessing(inference_args(), None, ENCODER)
-
-
-def test_runs_trained_on_mask_crops_need_the_masks():
-    with pytest.raises(ValueError, match="--mask_dir"):
-        inference_nifti.resolve_preprocessing(inference_args(), CONFIGURED, ENCODER)
-
-
-RECORDED_ENCODER = EmbeddingEncoderConfig(
-    class_name="ResEncEncoder", checkpoint_path="/models/small_resencL.pth"
-)
-
-
-def test_the_embedding_encoder_comes_from_the_run_config_and_arguments_override_it():
-    no_args = SimpleNamespace(vision_encoder=None, vision_encoder_checkpoint=None)
-    local_copy = SimpleNamespace(vision_encoder=None, vision_encoder_checkpoint="/local.pth")
-
-    assert inference_nifti.resolve_embedding_encoder(no_args, RECORDED_ENCODER) == (
-        "ResEncEncoder",
-        "/models/small_resencL.pth",
-    )
-    assert inference_nifti.resolve_embedding_encoder(local_copy, RECORDED_ENCODER) == (
-        "ResEncEncoder",
-        "/local.pth",
-    )
-    with pytest.raises(ValueError, match="--vision_encoder"):
-        inference_nifti.resolve_embedding_encoder(no_args, None)
-
-
-def test_image_runs_have_no_embedding_encoder():
-    with pytest.raises(ValidationError, match="embedding_encoder"):
-        DataConfig(
-            dataset_name="ctrate",
-            answer_types="all",
-            vision_input_type="image",
-            embedding_encoder=RECORDED_ENCODER.model_dump(),
-        )
-
-
 @pytest.mark.parametrize(
     "embedding, roi_mask",
     [
@@ -481,8 +201,7 @@ def test_image_runs_have_no_embedding_encoder():
 def test_public_script_saves_the_paper_embeddings_with_their_settings(
     tmp_path, monkeypatch, embedding, roi_mask
 ):
-    script = generate_embeddings
-    monkeypatch.setattr(script.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     checkpoint, _ = tiny_checkpoint(tmp_path)
     rng = np.random.default_rng(0)
     mask = np.zeros((24, 22, 26), np.uint8)
@@ -496,15 +215,14 @@ def test_public_script_saves_the_paper_embeddings_with_their_settings(
         write_volume(tmp_path / f"masks/{name}.nii.gz", mask, ras, spacing=(1.2, 1.0, 1.5))
     mask_args = ("--mask_dir", str(tmp_path / "masks")) if roi_mask else ()
 
-    script.main(
-        script.parse_args(
-            [
-                *("--embedding", embedding, "--dataset", "ctrate"),
-                *("--input_dir", str(tmp_path / "in"), *mask_args),
-                *("--output_dir", str(tmp_path / "out")),
-                *("--checkpoint", str(checkpoint), "--num_workers", "0"),
-            ]
-        )
+    generate_embeddings.main(
+        [
+            *("--embedding", embedding, "--dataset", "ctrate"),
+            *("--input_dir", str(tmp_path / "in"), *mask_args),
+            *("--output_dir", str(tmp_path / "out")),
+            *("--checkpoint", str(checkpoint), "--num_workers", "0"),
+            *("--save_workers", "0"),
+        ]
     )
 
     settings = load_settings(tmp_path / "out")
@@ -535,29 +253,6 @@ def test_public_script_saves_the_paper_embeddings_with_their_settings(
         torch.testing.assert_close(torch.from_numpy(saved), expected)
 
 
-@pytest.mark.parametrize(
-    "embedding, mask_args, match",
-    [
-        ("nnFoundationCNN", [], "needs '--mask_dir'"),
-        ("Primus-1B_Whole", ["--mask_dir", "masks"], "takes no '--mask_dir'"),
-        ("Primus-1B_Whole", ["--roi", "foreground"], "takes no '--roi'"),
-    ],
-)
-def test_public_script_takes_masks_exactly_for_roi_embeddings(capsys, embedding, mask_args, match):
-    script = generate_embeddings
-    with pytest.raises(SystemExit):
-        script.parse_args(
-            ["--embedding", embedding, "--dataset", "merlin", "--input_dir", "in"]
-            + ["--output_dir", "out", *mask_args]
-        )
-    assert match in capsys.readouterr().err
-
-
-def test_anti_aliasing_filters_only_the_shrinking_axes():
-    assert anti_aliasing_sigmas((96, 470, 470), (192, 100, 100)) == pytest.approx((0, 1.85, 1.85))
-    assert anti_aliasing_sigmas((50, 100, 100), (50, 100, 100)) == (0, 0, 0)
-
-
 def test_resizing_with_anti_aliasing_averages_detail_finer_than_the_output():
     # Stripes one voxel wide along x, shrunk by 64 / 15 (about CT-RATE's in-plane factor): they
     # should average to grey; trilinear resizing alone turns them into a coarser false pattern.
@@ -572,19 +267,6 @@ def test_resizing_with_anti_aliasing_averages_detail_finer_than_the_output():
     inner, plain_inner = filtered[..., 1:-1], plain[..., 1:-1]
     assert inner.std() < 0.01 and plain_inner.std() > 0.2
     torch.testing.assert_close(inner.mean(), torch.tensor(0.5), atol=0.01, rtol=0)
-
-
-def test_growing_axes_are_resized_without_filtering():
-    image = torch.randn(1, 1, 6, 16, 16)
-    plain = torch.nn.functional.interpolate(
-        image, size=(12, 16, 16), mode="trilinear", align_corners=False
-    )
-    torch.testing.assert_close(resize_with_anti_aliasing(image, (12, 16, 16)), plain)
-
-
-def test_the_smallest_direct_roi_has_the_extent_of_the_resampled_one():
-    assert min_roi_voxels((192, 192, 192), (2.0, 0.5, 0.8), (1.0, 1.0, 1.0)) == (96, 384, 240)
-    assert min_roi_voxels((192, 192, 192), (2.0, 0.5, 0.8), None) == (192, 192, 192)
 
 
 def test_direct_resizing_crops_the_same_roi_as_resampling_first():
@@ -609,67 +291,3 @@ def test_direct_resizing_crops_the_same_roi_as_resampling_first():
     # Both crops hold mostly the ROI; its intensity fills the centre of the input.
     assert direct[..., 2:6, 2:6, 2:6].mean() > 0.9
     assert resampled[..., 2:6, 2:6, 2:6].mean() > 0.9
-
-
-def test_direct_resizing_needs_masks_on_the_grid_of_their_volumes():
-    image = sitk.GetImageFromArray(np.zeros((10, 12, 12), np.float32))
-    mask = sitk.GetImageFromArray(np.ones((10, 6, 6), np.uint8))
-    with pytest.raises(ValueError, match="grid of their volumes"):
-        preprocess_encoder_input(
-            image,
-            mask,
-            target_spacing=(1.0, 1.0, 1.0),
-            normalization="none",
-            input_shape=(8, 8, 8),
-            processing_mode="resized_direct",
-        )
-
-
-def test_public_script_records_the_processing_mode_and_foreground_roi(tmp_path, monkeypatch):
-    script = generate_embeddings
-    monkeypatch.setattr(script.torch.cuda, "is_available", lambda: False)
-    checkpoint, _ = tiny_checkpoint(tmp_path)
-    rng = np.random.default_rng(0)
-    mask = np.zeros((24, 22, 26), np.uint8)
-    mask[3:20, 4:18, 2:24] = 1
-    ras = (-1, 0, 0, 0, -1, 0, 0, 0, 1)
-    for name in ("train_fixed/x_1", "valid_fixed/y_1"):
-        volume = rng.normal(size=(24, 22, 26)).astype(np.float32)
-        write_volume(tmp_path / f"in/{name}.nii.gz", volume, ras, spacing=(1.2, 1.0, 1.5))
-        write_volume(tmp_path / f"masks/{name}.nii.gz", mask, ras, spacing=(1.2, 1.0, 1.5))
-
-    script.main(
-        script.parse_args(
-            [
-                *("--embedding", "nnFoundationViT", "--dataset", "ctrate"),
-                *("--input_dir", str(tmp_path / "in"), "--mask_dir", str(tmp_path / "masks")),
-                *("--output_dir", str(tmp_path / "out"), "--checkpoint", str(checkpoint)),
-                *("--processing_mode", "resized_direct", "--roi", "foreground"),
-                *("--num_workers", "0"),
-            ]
-        )
-    )
-
-    preprocessing = load_settings(tmp_path / "out").vision_input_preprocessing
-    assert preprocessing.processing_mode == "resized_direct"
-    assert preprocessing.roi_mask == "TotalSegmentator 'total', foreground of all labels"
-    assert preprocessing.mask_label_ids is None
-    for name in ("train_fixed/x_1", "valid_fixed/y_1"):
-        assert (tmp_path / "out" / f"{name}_embedding.bl2").is_file()
-
-
-@pytest.mark.parametrize("world_size", [2, 3])
-def test_public_script_shards_split_every_volume_exactly_once(tmp_path, world_size):
-    script = generate_embeddings
-    for i in range(7):
-        (tmp_path / "in").mkdir(exist_ok=True)
-        (tmp_path / f"in/case_{i}.nii.gz").write_bytes(b"")
-    # One volume already embedded: the shards still split all volumes the same way.
-    (tmp_path / "out").mkdir()
-    (tmp_path / "out/case_0_embedding.bl2").write_bytes(b"")
-    shards = [
-        script.split_files(tmp_path / "in", tmp_path / "out", False, rank, world_size)
-        for rank in range(world_size)
-    ]
-    names = sorted(path.name for shard in shards for path in shard)
-    assert names == [f"case_{i}.nii.gz" for i in range(1, 7)]

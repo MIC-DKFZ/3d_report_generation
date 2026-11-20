@@ -67,6 +67,8 @@ dev = [
   "black",
   "isort",
   "pre-commit",
+  "pytest-xdist>=3.8.0",
+  "pytest-cov>=7.1.0",
 ]
 # Triton kernels for the Qwen3.5 linear-attention layers. GPU environments only: once
 # installed, transformers routes these layers through them on every device.
@@ -83,6 +85,12 @@ totalsegmentator = [
   "numpy<2",
   "vtk==9.7.2",
 ]
+
+[tool.pytest.ini_options]
+# 'uv run pytest vlm/test' skips the slow tests (multi-process, DeepSpeed, METEOR);
+# 'uv run pytest -n auto -m "" vlm/test' runs them all, in parallel.
+addopts = "-m 'not slow'"
+markers = ["slow: multi-process, DeepSpeed or Java tests, skipped by default"]
 
 [tool.isort]
 profile = "black"

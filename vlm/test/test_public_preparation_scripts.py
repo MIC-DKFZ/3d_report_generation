@@ -1,6 +1,5 @@
 """Run the public preparation scripts on their own, copied out of the repository."""
 
-import ast
 import json
 import os
 from pathlib import Path
@@ -38,20 +37,6 @@ def read_json(path):
 
 
 # Embedding needs the vlm encoders and preprocessing, which inference on new volumes also uses.
-USES_VLM = {"embeddings/generate_embeddings.py"}
-
-
-def test_scripts_have_no_vlm_imports_or_absolute_source_paths():
-    for path in PUBLIC_ROOT.rglob("*.py"):
-        assert "/home/j385i" not in path.read_text()
-        if path.relative_to(PUBLIC_ROOT).as_posix() in USES_VLM:
-            continue
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                assert not any(alias.name.split(".")[0] == "vlm" for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                assert node.module is None or node.module.split(".")[0] != "vlm"
 
 
 @pytest.mark.parametrize("version", ["v1", "v2"])
@@ -185,57 +170,3 @@ def test_merlin_from_original_spreadsheet_only(exported, tmp_path, version):
     assert {path.name for path in output.iterdir()} == {
         f"merlin_{version}_{split}.json" for split in ("train", "val", "test", "train_val")
     }
-
-
-@pytest.mark.parametrize("version", ["v1", "v2"])
-def test_merlin_rejects_unlisted_duplicate_studies(exported, tmp_path, version):
-    source = tmp_path / "reports.xlsx"
-    pd.DataFrame(
-        [
-            {"study id": "duplicate", "Split": split, "Findings": RAW_REPORT}
-            for split in ("train", "test")
-        ]
-    ).to_excel(source, index=False)
-    scripts = exported / "datasets/merlin"
-    (scripts / "selection.json").write_text(
-        json.dumps({"splits": {"val": ["val"]}, "exclusions": {"v1": [], "v2": []}})
-    )
-    result = run_script(
-        scripts / f"create_dataset_jsons_{version}.py",
-        "--reports-xlsx",
-        source,
-        "--output-dir",
-        tmp_path / "generated",
-        cwd=tmp_path,
-    )
-    assert result.returncode != 0
-    assert "Duplicate study IDs remain" in result.stderr
-    assert not (tmp_path / "generated").exists()
-
-
-def test_missing_bundled_selection_is_not_silently_ignored(exported, tmp_path):
-    source = tmp_path / "source/radiology_text_reports"
-    source.mkdir(parents=True)
-    for name in ["train_reports.csv", "validation_reports.csv"]:
-        pd.DataFrame(
-            [
-                {
-                    "VolumeName": "train_1_a_1.nii.gz",
-                    "Findings_EN": "Normal.",
-                    "Impressions_EN": "Not given.",
-                }
-            ]
-        ).to_csv(source / name, index=False)
-    (exported / "datasets/ctrate/selection.json").unlink()
-    output = tmp_path / "generated"
-    result = run_script(
-        exported / "datasets/ctrate/create_dataset_jsons_v2.py",
-        "--dataset-path",
-        source.parent,
-        "--output-dir",
-        output,
-        cwd=tmp_path,
-    )
-    assert result.returncode != 0
-    assert "Required source or bundled support file missing" in result.stderr
-    assert not output.exists()

@@ -19,6 +19,7 @@ def reports(count, seed):
     return [" ".join(rng.choices(WORDS, k=rng.randint(8, 40))) for _ in range(count)]
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(shutil.which("java") is None, reason="METEOR needs Java")
 def test_meteor_matches_compute_score_and_keeps_the_statistics():
     preds, gts = reports(30, seed=0), reports(30, seed=1)

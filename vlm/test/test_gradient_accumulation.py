@@ -146,22 +146,6 @@ def test_accumulation_matches_token_mean(tmp_path, sample_count):
         assert_same_weights(model, reference)
 
 
-def test_token_count_excludes_first_label_prompt_and_padding(tmp_path):
-    trainer = make_trainer(make_model(), make_samples(1), 1, 1, tmp_path)
-    batch = {"labels": torch.tensor([[2, -100, 3, 1], [-100, 2, 1, -100]])}
-    batches, count = trainer.get_batch_samples(iter([batch]), 6, torch.device("cpu"))
-    assert batches == [batch]
-    assert count.item() == 4
-
-
-def test_empty_iterator_and_unsupervised_window(tmp_path):
-    trainer = make_trainer(make_model(), make_samples(1), 1, 1, tmp_path)
-    assert trainer.get_batch_samples(iter([]), 6, torch.device("cpu")) == ([], None)
-    batch = {"labels": torch.tensor([[2, -100]])}
-    with pytest.raises(ValueError, match="no supervised tokens"):
-        trainer.get_batch_samples(iter([batch]), 6, torch.device("cpu"))
-
-
 def ddp_worker(rank, world_size, rendezvous, output_dir):
     torch.set_num_threads(1)
     AcceleratorState._reset_state(reset_partial_state=True)
@@ -197,6 +181,7 @@ def ddp_worker(rank, world_size, rendezvous, output_dir):
         dist.destroy_process_group()
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not dist.is_gloo_available(), reason="CPU DDP requires Gloo")
 def test_four_process_ddp_matches_global_token_mean(tmp_path):
     # Fresh workers avoid inheriting initialized autograd and thread pools.

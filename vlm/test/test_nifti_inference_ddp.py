@@ -8,6 +8,8 @@ import torch.distributed as dist
 
 from vlm.utils.ddp import gather_inference_outputs
 
+pytestmark = pytest.mark.slow
+
 FILES = [f"case_{i:02d}.nii.gz" for i in range(7)]
 FAILED = {"case_03.nii.gz"}
 
