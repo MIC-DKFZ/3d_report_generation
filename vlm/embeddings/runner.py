@@ -1,6 +1,8 @@
 """
 Embedding a dataset: the volumes of each split folder are preprocessed in DataLoader workers,
 encoded on the GPU and saved asynchronously as '<output_dir>/<split folder>/<name>_embedding.bl2'.
+Several jobs that differ only in their encoder and output folder (e.g. checkpoints of one
+encoder) run in one pass: each volume is preprocessed once and encoded by each of their encoders.
 """
 
 import multiprocessing
@@ -8,7 +10,7 @@ import os
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import Callable
@@ -230,34 +232,57 @@ def encode(encoder: nn.Module, inputs: torch.Tensor, device, dtype, chunk: int) 
     )
 
 
-def run(job: EmbeddingJob) -> None:
+def shared_part(job: EmbeddingJob) -> EmbeddingJob:
+    """The job without its encoder and output folder, which jobs run in one pass share."""
+    settings = job.settings.model_copy(update={"embedding_encoder": None})
+    return replace(job, build_encoder=None, output_dir=None, settings=settings)
+
+
+def run(*jobs: EmbeddingJob) -> None:
+    """Run the jobs in one pass; they may differ only in their encoder and output folder."""
+    job = jobs[0]
+    if any(shared_part(other) != shared_part(job) for other in jobs[1:]):
+        raise ValueError(
+            "Jobs run in one pass may differ only in their encoder and output folder."
+        )
+    if len({other.output_dir for other in jobs}) < len(jobs):
+        raise ValueError("Jobs run in one pass need their own output folders.")
     opts = job.options
     # Under torchrun, each process embeds every 'world_size'-th volume of its shard.
     rank = int(os.environ.get("RANK", "0"))
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     input_dir = job.input_dir.resolve()
-    # All splits are listed first, so that a missing one fails before hours of embedding.
-    splits = {
-        split: split_files(
-            input_dir / split,
-            job.output_dir / split,
-            opts.overwrite,
-            rank,
-            world_size,
-            opts.shard_id,
-            opts.num_shards,
-            opts.max_files,
-        )
-        for split in job.split_folders
-    }
+    # All splits are listed first, so that a missing one fails before hours of embedding. A
+    # volume is embedded if one of the jobs still lacks it, and saved by those that do.
+    splits = {}
+    for split in job.split_folders:
+        todo = [
+            split_files(
+                input_dir / split,
+                other.output_dir / split,
+                opts.overwrite,
+                rank,
+                world_size,
+                opts.shard_id,
+                opts.num_shards,
+                opts.max_files,
+            )
+            for other in jobs
+        ]
+        files = [f for f in find_nifti_files(input_dir / split) if any(f in t for t in todo)]
+        splits[split] = (files, todo)
     # Before embedding, so that settings differing from the folder's fail early.
     if not job.multiblock:
-        print(f"Settings in {save_settings(job.output_dir, job.settings)}")
+        for other in jobs:
+            print(f"Settings in {save_settings(other.output_dir, other.settings)}")
 
     device = f"cuda:{os.environ.get('LOCAL_RANK', '0')}" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if job.bf16 else torch.float32
-    encoder = job.build_encoder().to(device, dtype).eval()
-    input_shape = tuple(job.input_shape or encoder.patch_size)
+    encoders = [other.build_encoder().to(device, dtype).eval() for other in jobs]
+    input_shapes = {tuple(job.input_shape or encoder.patch_size) for encoder in encoders}
+    if len(input_shapes) > 1:
+        raise ValueError(f"Jobs run in one pass need one input shape, got {input_shapes}.")
+    (input_shape,) = input_shapes
     preprocessing = job.settings.vision_input_preprocessing
     preprocessing_kwargs = preprocessing.preprocessing_kwargs(input_shape)
     preprocess = None
@@ -271,13 +296,14 @@ def run(job: EmbeddingJob) -> None:
 
     saver = AsyncEmbeddingSaver(opts.save_workers, opts.save_threads)
     try:
-        for split, output_paths in splits.items():
-            output_dir = job.output_dir / split
-            output_dir.mkdir(parents=True, exist_ok=True)
+        for split, (files, todo) in splits.items():
+            output_dirs = [other.output_dir / split for other in jobs]
+            for output_dir in output_dirs:
+                output_dir.mkdir(parents=True, exist_ok=True)
             loader = DataLoader(
                 NiftiEncoderInputDataset(
                     input_dir / split,
-                    list(output_paths),
+                    files,
                     job.settings.vision_input_orientation,
                     None if job.mask_dir is None else job.mask_dir / split,
                     preprocessing_kwargs,
@@ -304,34 +330,47 @@ def run(job: EmbeddingJob) -> None:
                         for s in samples:
                             save_preprocessed(
                                 s["encoder_input"] if job.multiblock else s["encoder_input"][None],
-                                output_dir / "preprocessed",
+                                output_dirs[0] / "preprocessed",
                                 Path(s["image_id"]).name,
                                 preprocessing.target_spacing,
                             )
-                    if not samples:
-                        continue
-                    if job.multiblock:
-                        (sample,) = samples
-                        blocks = encode(
-                            encoder, sample["encoder_input"], device, dtype, opts.block_batch_size
-                        )
-                        embeddings = merge_block_embeddings(
-                            blocks, sample["offsets"], input_shape, tuple(job.grid)
-                        )[None]
-                    else:
-                        inputs = torch.stack([s["encoder_input"] for s in samples])
-                        embeddings = encode(encoder, inputs, device, dtype, len(inputs))
-                    for s, embedding in zip(samples, embeddings.cpu()):
-                        saver.save(embedding, output_paths[Path(s["path"])])
+                    for encoder, output_paths in zip(encoders, todo):
+                        needed = [s for s in samples if Path(s["path"]) in output_paths]
+                        if not needed:
+                            continue
+                        if job.multiblock:
+                            (sample,) = needed
+                            blocks = encode(
+                                encoder,
+                                sample["encoder_input"],
+                                device,
+                                dtype,
+                                opts.block_batch_size,
+                            )
+                            embeddings = merge_block_embeddings(
+                                blocks, sample["offsets"], input_shape, tuple(job.grid)
+                            )[None]
+                        else:
+                            inputs = torch.stack([s["encoder_input"] for s in needed])
+                            embeddings = encode(encoder, inputs, device, dtype, len(inputs))
+                        for s, embedding in zip(needed, embeddings.cpu()):
+                            saver.save(embedding, output_paths[Path(s["path"])])
             saver.wait()
-            if failed:
-                failed_file = output_dir / (
-                    "failed.json"
-                    if world_size == 1 and opts.num_shards == 1
-                    else f"failed_shard{opts.shard_id}_rank{rank}.json"
-                )
-                save_json(failed, failed_file)
-                print(f"Skipped {len(failed)} of {len(output_paths)} volumes, see {failed_file}")
-            print(f"Saved {len(output_paths) - len(failed)} embeddings to {output_dir}")
+            failed_paths = {Path(f["path"]) for f in failed}
+            for output_dir, output_paths in zip(output_dirs, todo):
+                failed_here = [f for f in failed if Path(f["path"]) in output_paths]
+                if failed_here:
+                    failed_file = output_dir / (
+                        "failed.json"
+                        if world_size == 1 and opts.num_shards == 1
+                        else f"failed_shard{opts.shard_id}_rank{rank}.json"
+                    )
+                    save_json(failed_here, failed_file)
+                    print(
+                        f"Skipped {len(failed_here)} of {len(output_paths)} volumes, "
+                        f"see {failed_file}"
+                    )
+                saved = len(set(output_paths) - failed_paths)
+                print(f"Saved {saved} embeddings to {output_dir}")
     finally:
         saver.shutdown()

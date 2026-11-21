@@ -192,17 +192,30 @@ def test_preprocessing_comes_from_the_run_config_and_arguments_override_it(tmp_p
 
 
 @pytest.mark.parametrize(
-    "embedding, roi_mask",
+    "embedding, roi_mask, n_checkpoints",
     [
-        ("nnFoundationViT", "TotalSegmentator 'total', lungs (labels 10-14)"),
-        ("Primus-1B_Whole", None),
+        ("nnFoundationViT", "TotalSegmentator 'total', lungs (labels 10-14)", 1),
+        ("Primus-1B_Whole", None, 1),
+        # Two checkpoints in one pass, each into its own folder.
+        ("nnFoundationViT", "TotalSegmentator 'total', lungs (labels 10-14)", 2),
     ],
 )
 def test_public_script_saves_the_paper_embeddings_with_their_settings(
-    tmp_path, monkeypatch, embedding, roi_mask
+    tmp_path, monkeypatch, embedding, roi_mask, n_checkpoints
 ):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    checkpoint, _ = tiny_checkpoint(tmp_path)
+    checkpoints = []
+    for i in range(n_checkpoints):
+        (tmp_path / f"ckpt{i}").mkdir()
+        checkpoints.append(tiny_checkpoint(tmp_path / f"ckpt{i}")[0])
+        if i:  # different weights
+            weights = torch.load(checkpoints[i], weights_only=False)
+            weights["network_weights"] = {
+                k: v + 0.01 if v.is_floating_point() else v
+                for k, v in weights["network_weights"].items()
+            }
+            torch.save(weights, checkpoints[i])
+    outputs = [tmp_path / f"out{i}" for i in range(n_checkpoints)]
     rng = np.random.default_rng(0)
     mask = np.zeros((24, 22, 26), np.uint8)
     mask[3:20, 4:18, 2:12] = 10  # a lung lobe
@@ -217,15 +230,20 @@ def test_public_script_saves_the_paper_embeddings_with_their_settings(
 
     generate_embeddings.main(
         [
-            *("--embedding", embedding, "--dataset", "ctrate"),
+            *("--embedding", *[embedding] * n_checkpoints, "--dataset", "ctrate"),
             *("--input_dir", str(tmp_path / "in"), *mask_args),
-            *("--output_dir", str(tmp_path / "out")),
-            *("--checkpoint", str(checkpoint), "--num_workers", "0"),
+            *("--output_dir", *map(str, outputs)),
+            *("--checkpoint", *map(str, checkpoints), "--num_workers", "0"),
             *("--save_workers", "0"),
         ]
     )
 
-    settings = load_settings(tmp_path / "out")
+    for checkpoint, output in zip(checkpoints, outputs):
+        check_saved_embeddings(tmp_path, output, checkpoint, names, roi_mask)
+
+
+def check_saved_embeddings(tmp_path, output, checkpoint, names, roi_mask):
+    settings = load_settings(output)
     data = DataConfig(dataset_name="ctrate", answer_types="all", **settings.model_dump())
     assert data.vision_input_orientation == "LPS"
     assert data.embedding_encoder.model_dump() == {
@@ -247,7 +265,7 @@ def test_public_script_saves_the_paper_embeddings_with_their_settings(
             )
         )[0].detach()
         saved = blosc2.load_array(
-            str(tmp_path / "out" / Path(name).parts[0] / f"{Path(name).name}_embedding.bl2")
+            str(output / Path(name).parts[0] / f"{Path(name).name}_embedding.bl2")
         )
         assert saved.shape == (24, 4, 4, 4)
         torch.testing.assert_close(torch.from_numpy(saved), expected)

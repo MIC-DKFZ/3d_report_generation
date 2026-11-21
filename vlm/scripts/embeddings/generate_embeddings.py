@@ -43,6 +43,10 @@ embedding and these options, e.g. 'CTRATE_nnFoundationViT_roi-foreground'. Launc
 torchrun, the volumes are split across the processes (on all nodes), each on its own GPU;
 '--num_shards' and '--shard_id' split them across independent jobs.
 
+Several embeddings that share their preprocessing, e.g. checkpoints of one encoder, are made in
+one pass: '--embedding', '--checkpoint' and '--output_dir' then take one value per embedding, and
+each volume is preprocessed once and encoded by each encoder.
+
 The settings of single-block embeddings are saved once per embedding folder, as
 '<output_dir>/vision_input_preprocessing.yml'; training copies them into the run config, so that
 'inference_nifti.py' embeds new volumes the same way.
@@ -81,7 +85,14 @@ def default_orientation(args: argparse.Namespace) -> str:
 
 def build_parser(description: str | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--embedding", choices=EMBEDDINGS, required=True)
+    parser.add_argument(
+        "--embedding",
+        choices=EMBEDDINGS,
+        nargs="+",
+        required=True,
+        help="One or several embeddings with the same preprocessing, made in one pass (the same one "
+        "twice for two checkpoints).",
+    )
     parser.add_argument("--dataset", choices=DATASETS, required=True)
     parser.add_argument(
         "--input_dir",
@@ -102,7 +113,9 @@ def build_parser(description: str | None = None) -> argparse.ArgumentParser:
     output.add_argument(
         "--output_dir",
         type=Path,
-        help="Embedding folder, the 'data.vision_input_path' of the runs; holds the settings.",
+        nargs="+",
+        help="Embedding folder, the 'data.vision_input_path' of the runs; holds the settings. "
+        "One per embedding.",
     )
     output.add_argument(
         "--output_base",
@@ -114,10 +127,11 @@ def build_parser(description: str | None = None) -> argparse.ArgumentParser:
     preset = parser.add_argument_group("changes to the embedding preset")
     preset.add_argument(
         "--checkpoint",
+        nargs="+",
         default=None,
         help="Encoder checkpoint file or Hugging Face repository (optionally "
         "'<repository>@<revision>'); by default the embedding's. Replacing the embedding's "
-        "checkpoint needs '--output_dir'.",
+        "checkpoint needs '--output_dir'. One per embedding.",
     )
     preset.add_argument("--roi", choices=ROIS, default=None, help="Replaces the embedding's ROI.")
     preset.add_argument(
@@ -203,6 +217,28 @@ def build_parser(description: str | None = None) -> argparse.ArgumentParser:
     return parser
 
 
+def split_embeddings(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> list[argparse.Namespace]:
+    """One namespace per embedding, with its own '--checkpoint' and '--output_dir'."""
+    n = len(args.embedding)
+    for name in ("checkpoint", "output_dir"):
+        values = getattr(args, name)
+        if values is not None and len(values) != n:
+            parser.error(f"'--{name}' needs one value per embedding ({n}).")
+    return [
+        argparse.Namespace(
+            **{
+                **vars(args),
+                "embedding": embedding,
+                "checkpoint": None if args.checkpoint is None else args.checkpoint[i],
+                "output_dir": None if args.output_dir is None else args.output_dir[i],
+            }
+        )
+        for i, embedding in enumerate(args.embedding)
+    ]
+
+
 def validate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> argparse.Namespace:
     preset = EMBEDDINGS[args.embedding]
     uses_roi = preset.rois is not None
@@ -228,9 +264,12 @@ def validate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> argpa
     return args
 
 
-def parse_args(argv: list[str] | None = None, description: str | None = None):
+def parse_args(
+    argv: list[str] | None = None, description: str | None = None
+) -> list[argparse.Namespace]:
+    """One namespace per embedding."""
     parser = build_parser(description)
-    return validate(parser, parser.parse_args(argv))
+    return [validate(parser, args) for args in split_embeddings(parser, parser.parse_args(argv))]
 
 
 def folder_name(args: argparse.Namespace) -> str:
@@ -292,9 +331,15 @@ def embedding_job(args: argparse.Namespace) -> EmbeddingJob:
     )
 
 
+def embedding_jobs(
+    argv: list[str] | None = None, description: str | None = None
+) -> list[EmbeddingJob]:
+    return [embedding_job(args) for args in parse_args(argv, description)]
+
+
 def main(argv: list[str] | None = None, description: str | None = None) -> None:
     """Runs the command line; packages with their own presets register them and call it."""
-    run(embedding_job(parse_args(argv, description or __doc__.split("\n\n")[0].strip())))
+    run(*embedding_jobs(argv, description or __doc__.split("\n\n")[0].strip()))
 
 
 if __name__ == "__main__":

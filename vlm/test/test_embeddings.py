@@ -15,7 +15,7 @@ from vlm.embeddings.multiblock import (
 )
 from vlm.embeddings.runner import run
 from vlm.models.vision_encoders.primus import PrimusEncoder
-from vlm.scripts.embeddings.generate_embeddings import embedding_job, parse_args
+from vlm.scripts.embeddings.generate_embeddings import embedding_jobs
 
 RAS = (-1, 0, 0, 0, -1, 0, 0, 0, 1)
 
@@ -31,16 +31,14 @@ def test_multiblock_embeddings_are_merged_without_settings(tmp_path, monkeypatch
         write_volume(tmp_path / f"in/{name}.nii.gz", volume, RAS)
         write_volume(tmp_path / f"masks/{name}.nii.gz", mask, RAS)
 
-    job = embedding_job(
-        parse_args(
-            [
-                *("--embedding", "Primus-4B_2_1_2_ROI", "--dataset", "ctrate"),
-                *("--input_dir", str(tmp_path / "in"), "--mask_dir", str(tmp_path / "masks")),
-                *("--output_dir", str(tmp_path / "out"), "--checkpoint", str(checkpoint)),
-                *("--num_workers", "0", "--save_workers", "0", "--block_batch_size", "3"),
-                "--debug_save_preprocessed",
-            ]
-        )
+    (job,) = embedding_jobs(
+        [
+            *("--embedding", "Primus-4B_2_1_2_ROI", "--dataset", "ctrate"),
+            *("--input_dir", str(tmp_path / "in"), "--mask_dir", str(tmp_path / "masks")),
+            *("--output_dir", str(tmp_path / "out"), "--checkpoint", str(checkpoint)),
+            *("--num_workers", "0", "--save_workers", "0", "--block_batch_size", "3"),
+            "--debug_save_preprocessed",
+        ]
     )
     run(job)
 
