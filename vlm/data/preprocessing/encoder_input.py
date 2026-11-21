@@ -4,7 +4,9 @@ Preprocessing of CT volumes into vision encoder inputs, shared by the embedding 
 
 Single-block pipeline per volume: normalize → resample to the encoder spacing, if it has one →
 crop to the mask ROI (bounding box expanded by 4%) → normalize again (z_score, min_max) → fit to the encoder input
-shape by resizing ('resized') or center cropping/padding ('center_crop').
+shape by resizing ('resized') or center cropping/padding ('center_crop'). Only the voxels of the
+ROI (with 'center_crop', of the part that is kept) are resampled, with the result of resampling
+the whole volume (vlm/data/preprocessing/windowed_resampling.py).
 
 'resized_direct' skips the resampling to the target spacing: the ROI is cropped at the volume's
 own spacing and resized to the encoder input shape in one step, with a Gaussian anti-aliasing
@@ -32,6 +34,7 @@ from vlm.data.preprocessing.default_resampling import (
     determine_do_sep_z_and_axis,
     resample_data_or_seg,
 )
+from vlm.data.preprocessing.windowed_resampling import resampled_roi
 
 PROCESSING_MODES = ("resized", "center_crop", "resized_direct")
 NORMALIZATIONS = (
@@ -335,8 +338,8 @@ def preprocess_encoder_input(
                 data, mask_data, min_size_zyx[::-1] if enforce_min_bbox else None
             )
         return fit_to_input_shape(data, normalization, processing_mode, input_shape)
-    if target_spacing is not None:
-        data = resample_to_spacing_if_needed(data, image.GetSpacing()[::-1], target_spacing)
+    spacing = image.GetSpacing()[::-1]
+    mask_data = None
     if mask is not None:
         mask_data = binarize_mask(
             sitk.GetArrayFromImage(mask)[np.newaxis],
@@ -344,6 +347,24 @@ def preprocess_encoder_input(
             outlier_method,
             outlier_min_voxels,
         )
+    if target_spacing is not None:
+        # z_score and min_max are computed on the whole ROI, so only HU windows allow the crop.
+        crop_to = input_shape
+        if processing_mode != "center_crop" or normalization not in HU_WINDOWS:
+            crop_to = None
+        roi = resampled_roi(
+            data,
+            mask_data,
+            spacing,
+            mask.GetSpacing()[::-1] if mask is not None else spacing,
+            target_spacing,
+            input_shape if enforce_min_bbox and mask is not None else None,
+            crop_to,
+        )
+        if roi is not None:
+            return fit_to_input_shape(roi, normalization, processing_mode, input_shape)
+        data = resample_to_spacing_if_needed(data, spacing, target_spacing)
+    if mask_data is not None:
         if target_spacing is not None:
             mask_data = resample_to_spacing_if_needed(
                 mask_data, mask.GetSpacing()[::-1], target_spacing, is_seg=True
