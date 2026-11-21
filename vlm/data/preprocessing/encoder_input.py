@@ -29,9 +29,7 @@ from vlm.data.preprocessing.crop_to_mask import (
     get_mask_bounding_box,
 )
 from vlm.data.preprocessing.default_resampling import (
-    ANISO_THRESHOLD,
     compute_new_shape,
-    determine_do_sep_z_and_axis,
     resample_data_or_seg,
 )
 from vlm.data.preprocessing.windowed_resampling import resampled_roi
@@ -116,42 +114,20 @@ def binarize_mask(
     return mask
 
 
-def resample_data_or_seg_to_spacing(
-    data: np.ndarray,
-    current_spacing: Union[Tuple[float, ...], List[float], np.ndarray],
-    new_spacing: Union[Tuple[float, ...], List[float], np.ndarray],
-    is_seg: bool = False,
-    order: int = 3,
-    order_z: int = 0,
-    force_separate_z: Optional[bool] = False,
-    separate_z_anisotropy_threshold: float = ANISO_THRESHOLD,
-) -> np.ndarray:
-    """Resample data to new spacing with proper anisotropy handling."""
-    do_separate_z, axis = determine_do_sep_z_and_axis(
-        force_separate_z,
-        current_spacing,
-        new_spacing,
-        separate_z_anisotropy_threshold,
-    )
-
-    assert data.ndim == 4, "data must be (c, z, y, x)"
-
-    new_shape = compute_new_shape(data.shape[1:], current_spacing, new_spacing)
-    return resample_data_or_seg(
-        data, new_shape, is_seg, axis, order, do_separate_z, order_z=order_z
-    )
-
-
-def resample_to_spacing_if_needed(
+def resample_to_spacing(
     data: np.ndarray,
     current_spacing: Tuple[float, ...],
     target_spacing: Tuple[float, ...],
     is_seg: bool = False,
 ) -> np.ndarray:
-    """Resample (c, z, y, x) data, unless it already has the target spacing (within 0.01 mm)."""
+    """
+    Resample (c, z, y, x) data to the target spacing with nnU-Net's 'resample_data_or_seg'
+    (order 3, never separately along z), unless it already has it (within 0.01 mm).
+    """
     if np.allclose(current_spacing, target_spacing, atol=1e-2):
         return data
-    return resample_data_or_seg_to_spacing(data, current_spacing, target_spacing, is_seg=is_seg)
+    new_shape = compute_new_shape(data.shape[1:], current_spacing, target_spacing)
+    return resample_data_or_seg(data, new_shape, is_seg=is_seg)
 
 
 def apply_normalization(image: np.ndarray, scheme: str = "z_score") -> np.ndarray:
@@ -363,10 +339,10 @@ def preprocess_encoder_input(
         )
         if roi is not None:
             return fit_to_input_shape(roi, normalization, processing_mode, input_shape)
-        data = resample_to_spacing_if_needed(data, spacing, target_spacing)
+        data = resample_to_spacing(data, spacing, target_spacing)
     if mask_data is not None:
         if target_spacing is not None:
-            mask_data = resample_to_spacing_if_needed(
+            mask_data = resample_to_spacing(
                 mask_data, mask.GetSpacing()[::-1], target_spacing, is_seg=True
             )
         data = crop_to_mask_roi(data, mask_data, input_shape if enforce_min_bbox else None)

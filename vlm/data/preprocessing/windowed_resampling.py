@@ -1,10 +1,10 @@
 """
 Resampling of the encoder input's region only, with the result of resampling the whole volume.
 
-'resample_data_or_seg_to_spacing' (vlm/data/preprocessing/encoder_input.py, never separate-z)
-resizes with skimage 'resize(order=3, mode="edge", anti_aliasing=False, clip=True)' to
-new_shape = round(shape * spacing / target_spacing): output voxel o of an axis samples the input
-at s * (o + 0.5) - 0.5, s = shape / new_shape, and the result is clipped to the input's range.
+'resample_to_spacing' (vlm/data/preprocessing/encoder_input.py) resizes with skimage
+'resize(order=3, mode="edge", anti_aliasing=False, clip=True)' to new_shape =
+round(shape * spacing / target_spacing): output voxel o of an axis samples the input at
+s * (o + 0.5) - 0.5, s = shape / new_shape, and the result is clipped to the input's range.
 Segmentations are resized the same way, label by label, and thresholded at 0.5.
 
 The cubic spline coefficients of a voxel depend on its neighbourhood with a weight that decays by
