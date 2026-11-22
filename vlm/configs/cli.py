@@ -1,7 +1,7 @@
 import argparse
 import json
 from collections.abc import Container
-from typing import Any
+from typing import Any, get_args
 
 from pydantic import BaseModel
 
@@ -61,7 +61,8 @@ def add_config_cli_args(
                 )
                 parser.add_argument(
                     f"--{path}",
-                    type=str,  # Pydantic casts and validates the CLI string.
+                    # Pydantic casts and validates the CLI string; 'null' sets optional fields to None.
+                    type=_parse_optional_cli_value if type(None) in get_args(annotation) else str,
                     default=argparse.SUPPRESS,
                     help=f"Set {key} (default: {value})",
                     **options,
@@ -69,6 +70,10 @@ def add_config_cli_args(
 
     register_fields(default_model, parent_key)
     return dynamic_kwargs_paths
+
+
+def _parse_optional_cli_value(value: str) -> str | None:
+    return None if value == "null" else value
 
 
 def _parse_dynamic_cli_value(value: str) -> Any:

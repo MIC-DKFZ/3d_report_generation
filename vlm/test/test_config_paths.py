@@ -88,6 +88,8 @@ def test_training_setup_preserves_train_config_handling_and_portable_output(
             "${DATA_ROOT}/override.json",
             "--general.run_name_suffix",
             "nv_reason_ct",
+            "--eval.do_sample",
+            "null",
         ],
     )
     log_files = []
@@ -112,6 +114,7 @@ def test_training_setup_preserves_train_config_handling_and_portable_output(
     assert saved["run"]["general"]["output_dir"].startswith("${VLM_OUTPUT_DIR}/")
     assert saved["run"]["data"]["train_dataset_json_path"] == "${DATA_ROOT}/override.json"
     assert saved["run"]["data"]["test_dataset_json_path"] == "${UNUSED_TEST_ROOT}/test.json"
+    assert loaded.eval.do_sample is None and saved["run"]["eval"]["do_sample"] is None
     assert loaded.general.output_dir.expression.startswith("${VLM_OUTPUT_DIR}/")
 
 

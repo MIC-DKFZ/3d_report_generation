@@ -65,6 +65,7 @@ The paper recipes first train only the adapter, then all configured parameters.
 Override config values with dotted flags, for example
 `--trainer.per_device_train_batch_size 3`. CLI values override the run config;
 the run config overrides its bases, with earlier bases taking precedence.
+`null` sets an optional field to `None`, for example `--eval.do_sample null`.
 Use `${NAME}` in YAML paths to reference environment variables.
 See [vlm/configs](../vlm/configs/) for all fields and defaults.
 
