@@ -18,6 +18,12 @@ class ModelConfig(ConfigBase):
         description="Attention kernel of the language model, passed to Hugging Face 'from_pretrained'. "
                     "Used by the Qwen3-VL and Qwen3.5 models; 'flash_attention_3' needs the FA3 wheel."
     )
+    post_init: bool = Field(
+        False,
+        description="Call the model's 'post_init()' after loading, which re-initializes the adapter's "
+                    "linear layers. Qwen2.5-VL and Qwen3-VL only; enable to reproduce the nnFoundation "
+                    "and RMR experiments."
+    )
 
     vision_encoder: VisionEncoderClassConfig | None = Field(
         None,

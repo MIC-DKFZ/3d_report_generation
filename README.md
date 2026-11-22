@@ -138,10 +138,8 @@ The nnFoundation and RMR experiments initialized the adapter's linear layers wit
 zero biases). The default PyTorch initialization performs better, so the call is
 disabled by default.
 
-**To reproduce the paper results, uncomment `# self.model.post_init()`** in
-the [Qwen25VL](vlm/models/qwen25vl/wrapper.py) or
-[Qwen3VL](vlm/models/qwen3vl/wrapper.py) wrapper used by your configuration. Configurations with other language models are
-not affected.
+**To reproduce the paper results, add `--model.post_init`** to the training command.
+It affects the Qwen2.5-VL and Qwen3-VL models only.
 
 ## Documentation
 
