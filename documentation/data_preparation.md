@@ -68,13 +68,7 @@ export MERLIN_DATASET_JSONS="/path/to/dataset_jsons/MERLIN"
 Set each JSON variable to the `--output-dir` used for that dataset's generator: the
 folder that contains the `<dataset>_<version>_*.json` files.
 
-`--embedding` is one of the presets in the table below, and `--dataset` selects the dataset's layout and region of interest (ROI), including CT-RATE's split
-folders (`train_fixed` and `valid_fixed`, embedded into the same folders of the output);
-`--roi lungs` or `--roi foreground` replaces the papers' ROI. The ROI
-features need the [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) `total` masks
-of the volumes, stored with the same relative paths: CT-RATE provides them in `ts_seg/ts_total`;
-for Merlin, run TotalSegmentator on the volumes. The encoders are downloaded from Hugging Face
-(`--checkpoint` takes a local file instead).
+Generate the embeddings of one dataset with one command per feature:
 
 ```bash
 uv run python vlm/scripts/embeddings/generate_embeddings.py \
@@ -85,8 +79,17 @@ uv run python vlm/scripts/embeddings/generate_embeddings.py \
   --mask_dir /path/to/totalsegmentator_masks --output_base "${VLM_EMBEDS}"
 ```
 
-The embeddings are saved in `${VLM_EMBEDS}/<DATASET>_<embedding>`, where the configs expect
-them. `Primus-1B_Whole` needs no `--mask_dir`.
+- `--embedding`: the feature to generate, one of the presets in the table below.
+- `--dataset`: `ctrate` or `merlin`; selects the dataset's folder layout and region of interest
+  (ROI). For CT-RATE, `--input_dir` holds the `train_fixed` and `valid_fixed` folders.
+- `--mask_dir`: the [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) `total`
+  masks, which define the ROI, with the same relative paths as the volumes under `--input_dir`.
+  CT-RATE provides them in `ts_seg/ts_total`; for Merlin, make them with TotalSegmentator as
+  described in [masks](nifti_inference.md#masks). `Primus-1B_Whole` needs no masks.
+- `--output_base`: the embeddings are saved in `${VLM_EMBEDS}/<DATASET>_<embedding>`, where the
+  configs expect them.
+
+The encoders are downloaded from Hugging Face (`--checkpoint` takes a local file instead).
 
 | Paper     | `--embedding` | Encoder | Input | CT-RATE | Merlin |
 |-----------| --- | --- | --- | --- | --- |
@@ -102,12 +105,14 @@ Each volume is reoriented (to the dataset's orientation, LPS for CT-RATE and LAS
 unless the encoder or `--orientation` sets another), z-score normalized, resampled to 1 mm, cropped to its ROI (the lungs
 for CT-RATE, the foreground for Merlin) and center cropped or resized to the encoder input of
 192³, as listed above. The multi-block features (`4B`) resize the ROI to a window of four
-encoder inputs, encode them one by one and merge their embeddings into one grid. Existing
-embeddings are skipped, so an interrupted run can be restarted. The script's docstring describes
-each step in detail; `--help` lists the options that change a preset (e.g. `--processing_mode`,
-`--grid`, `--orientation`, `--bf16`) and those for large runs (`--batch_size`, `--num_shards`, `--shard_id`;
-launched with `torchrun`, the volumes are split across its processes). Changed options are
-appended to the folder name; `--output_dir` instead of `--output_base` sets the folder itself.
+encoder inputs, encode them one by one and merge their embeddings into one grid. The script's
+docstring describes each step in detail.
+
+`--help` lists the options that change a preset (e.g. `--roi lungs` or `--roi foreground`
+instead of the papers' ROI, `--processing_mode`, `--grid`, `--orientation`, `--bf16`) and those for large runs (`--batch_size`, `--num_shards`,
+`--shard_id`; launched with `torchrun`, the volumes are split across its processes). Changed
+options are appended to the folder name; `--output_dir` instead of `--output_base` sets the
+folder itself. Existing embeddings are skipped, so an interrupted run can be restarted.
 
 The settings are saved as `vision_input_preprocessing.yml` in the output folder. Training copies
 them into the run config, so that inference on new volumes
@@ -154,10 +159,9 @@ With `VLM_EMBEDS=/path/to/embeddings`, this expects:
     └── valid_fixed/<image_id>_embedding.bl2
 ```
 
-These are config naming conventions, not names automatically assigned by training.
-Place your generated features at the configured path (rename or symlink the output
-folder if needed), or edit `data.vision_input_path` in your dataset base to point
-to their actual location. Renaming alone does not make features compatible: the
+`generate_embeddings.py` with `--output_base "${VLM_EMBEDS}"` creates exactly these folders.
+With `--output_dir` or changed options, rename or symlink the output folder, or edit
+`data.vision_input_path` in your dataset base to point to it. Renaming alone does not make features compatible: the
 encoder, preprocessing, `embed_dim`, and `embed_size` must match the recipe.
 
 Files are named `<image_id>_embedding.bl2`. CT-RATE uses `train_fixed/` for train/val

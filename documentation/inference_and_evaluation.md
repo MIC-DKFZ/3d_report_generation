@@ -1,8 +1,9 @@
 # Inference and evaluation
 
-Run the commands from the repository root. Inference needs the run's trained checkpoint and
-vision embeddings; `VLM_OUTPUT_DIR` is only needed to pass a run by its folder name instead of
-its path. Evaluating saved predictions needs neither.
+Run the commands from the repository root. Inference needs the run's trained checkpoint, vision
+embeddings, and dataset JSONs: export the variables its config references (e.g. `VLM_EMBEDS`,
+`CTRATE_DATASET_JSONS`) as for training. `VLM_OUTPUT_DIR` is only needed to pass a run by its
+folder name instead of its path. Evaluating saved predictions needs none of these.
 
 To generate reports for a folder of NIfTI volumes without dataset JSONs or precomputed
 embeddings, with a released model or your own run, see
