@@ -108,8 +108,9 @@ Pass `--run_dir` (a run folder, or a unique run folder name under `VLM_OUTPUT_DI
 [data preparation](data_preparation.md)). Runs trained on precomputed embeddings encode the
 volumes with the encoder recorded in `data.embedding_encoder`.
 
-Runs without these settings need the preprocessing as arguments, at least `--processing_mode`,
-and the encoder with `--vision_encoder` and `--vision_encoder_checkpoint`. The script makes masks
+Runs without these settings need the preprocessing as arguments, at least `--processing_mode`
+(and `--grid` for multi-block embeddings such as Primus-4B), and the encoder with
+`--vision_encoder` and `--vision_encoder_checkpoint`. The script makes masks
 only for runs whose config records a TotalSegmentator `total` ROI; for other runs, pass the masks
 with `--mask_dir`, and the ROI labels with `--mask_label_ids` if the masks hold more labels than
 the ROI.

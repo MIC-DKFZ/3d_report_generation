@@ -47,7 +47,7 @@ Several embeddings that share their preprocessing, e.g. checkpoints of one encod
 one pass: '--embedding', '--checkpoint' and '--output_dir' then take one value per embedding, and
 each volume is preprocessed once and encoded by each encoder.
 
-The settings of single-block embeddings are saved once per embedding folder, as
+The settings are saved once per embedding folder, as
 '<output_dir>/vision_input_preprocessing.yml'; training copies them into the run config, so that
 'inference_nifti.py' embeds new volumes the same way.
 
@@ -148,7 +148,7 @@ def build_parser(description: str | None = None) -> argparse.ArgumentParser:
         default=None,
         metavar=("GZ", "GY", "GX"),
         help="Encoder inputs per axis: a window of GZ·GY·GX inputs is embedded block-wise and "
-        "the block embeddings merged (no settings file is saved).",
+        "the block embeddings merged.",
     )
     preset.add_argument(
         "--tile_step_size",
@@ -308,6 +308,8 @@ def embedding_job(args: argparse.Namespace) -> EmbeddingJob:
             target_spacing=args.target_spacing or encoder.target_spacing,
             normalization=args.normalization or preset.normalization or encoder.normalization,
             processing_mode=args.processing_mode or preset.processing_mode(args.dataset),
+            grid=tuple(args.grid or preset.grid),
+            tile_step_size=args.tile_step_size,
             **(ROIS[roi] if roi else {}),
         ),
         embedding_encoder=(
@@ -324,8 +326,6 @@ def embedding_job(args: argparse.Namespace) -> EmbeddingJob:
         split_folders=DATASETS[args.dataset]["split_folders"],
         mask_dir=args.mask_dir if roi else None,
         input_shape=args.input_shape or encoder.input_shape,
-        grid=tuple(args.grid or preset.grid),
-        tile_step_size=args.tile_step_size,
         bf16=args.bf16,
         options=RuntimeOptions(**{f.name: getattr(args, f.name) for f in fields(RuntimeOptions)}),
     )

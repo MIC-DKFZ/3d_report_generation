@@ -33,11 +33,7 @@ from vlm.data.preprocessing.nifti_inputs import (
     strip_nifti_suffix,
 )
 from vlm.data.vision_input_settings import save_settings
-from vlm.embeddings.multiblock import (
-    Shape,
-    merge_block_embeddings,
-    preprocess_multiblock_input,
-)
+from vlm.embeddings.multiblock import Shape, encode_multiblock, multiblock_sample
 from vlm.utils.serialization import save_json
 
 
@@ -62,9 +58,9 @@ class RuntimeOptions:
 @dataclass
 class EmbeddingJob:
     """
-    What to embed and how. 'settings' holds the orientation and preprocessing; single-block
-    embeddings, which inference on new volumes can reproduce, save them in the output folder.
-    'input_shape' None takes the encoder's 'patch_size'.
+    What to embed and how. 'settings' holds the orientation and preprocessing (including a
+    multi-block grid), saved in the output folder so that inference on new volumes can reproduce
+    them. 'input_shape' None takes the encoder's 'patch_size'.
     """
 
     build_encoder: Callable[[], nn.Module]
@@ -74,14 +70,12 @@ class EmbeddingJob:
     split_folders: list[str]
     mask_dir: Path | None = None
     input_shape: Shape | None = None
-    grid: Shape = (1, 1, 1)
-    tile_step_size: float = 1.0
     bf16: bool = False
     options: RuntimeOptions = field(default_factory=RuntimeOptions)
 
     @property
     def multiblock(self) -> bool:
-        return tuple(self.grid) != (1, 1, 1)
+        return self.settings.vision_input_preprocessing.multiblock
 
 
 def output_path(output_dir: Path, file: Path) -> Path:
@@ -200,11 +194,6 @@ def attention_backend(cudnn: bool):
         F.scaled_dot_product_attention = _torch_sdpa
 
 
-def multiblock_sample(image: sitk.Image, mask: sitk.Image | None, **kwargs) -> dict:
-    blocks, offsets = preprocess_multiblock_input(image, mask, **kwargs)
-    return {"encoder_input": blocks, "offsets": offsets}
-
-
 def init_preprocessing_worker(worker_id: int):
     # DataLoader already limits PyTorch threads; limit SimpleITK's separate pool too.
     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(1)
@@ -272,9 +261,8 @@ def run(*jobs: EmbeddingJob) -> None:
         files = [f for f in find_nifti_files(input_dir / split) if any(f in t for t in todo)]
         splits[split] = (files, todo)
     # Before embedding, so that settings differing from the folder's fail early.
-    if not job.multiblock:
-        for other in jobs:
-            print(f"Settings in {save_settings(other.output_dir, other.settings)}")
+    for other in jobs:
+        print(f"Settings in {save_settings(other.output_dir, other.settings)}")
 
     device = f"cuda:{os.environ.get('LOCAL_RANK', '0')}" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if job.bf16 else torch.float32
@@ -290,8 +278,8 @@ def run(*jobs: EmbeddingJob) -> None:
         preprocess = partial(
             multiblock_sample,
             **preprocessing_kwargs,
-            grid=tuple(job.grid),
-            tile_step_size=job.tile_step_size,
+            grid=tuple(preprocessing.grid),
+            tile_step_size=preprocessing.tile_step_size,
         )
 
     saver = AsyncEmbeddingSaver(opts.save_workers, opts.save_threads)
@@ -340,15 +328,17 @@ def run(*jobs: EmbeddingJob) -> None:
                             continue
                         if job.multiblock:
                             (sample,) = needed
-                            blocks = encode(
-                                encoder,
-                                sample["encoder_input"],
-                                device,
-                                dtype,
-                                opts.block_batch_size,
-                            )
-                            embeddings = merge_block_embeddings(
-                                blocks, sample["offsets"], input_shape, tuple(job.grid)
+                            embeddings = encode_multiblock(
+                                partial(
+                                    encode,
+                                    encoder,
+                                    device=device,
+                                    dtype=dtype,
+                                    chunk=opts.block_batch_size,
+                                ),
+                                sample,
+                                input_shape,
+                                tuple(preprocessing.grid),
                             )[None]
                         else:
                             inputs = torch.stack([s["encoder_input"] for s in needed])

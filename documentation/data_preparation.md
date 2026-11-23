@@ -113,7 +113,7 @@ launched with `torchrun`, the volumes are split across its processes). With `--o
 instead of `--output_dir`, the folder is named `<DATASET>_<embedding>` followed by the changed
 options.
 
-The settings of single-block embeddings are saved as `vision_input_preprocessing.yml` in the output folder. Training copies
+The settings are saved as `vision_input_preprocessing.yml` in the output folder. Training copies
 them into the run config, so that inference on new volumes
 ([`inference_nifti.py`](../inference_nifti.py)) preprocesses and encodes them the same way.
 

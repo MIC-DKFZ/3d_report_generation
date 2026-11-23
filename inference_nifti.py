@@ -4,7 +4,9 @@ Generate reports for a folder of NIfTI volumes with a trained run.
 Unlike 'inference.py', which runs on the dataset of the run's config, this script takes any
 folder of (nested) NIfTI files. Each volume is reoriented to 'data.vision_input_orientation',
 preprocessed like the training inputs, encoded by the vision encoder and passed to the trained
-model, so the model receives the same kind of input as in training.
+model, so the model receives the same kind of input as in training. Embeddings of several
+encoder inputs ('data.vision_input_preprocessing.grid', e.g. Primus-4B) are encoded block by
+block and merged, as by 'vlm/scripts/embeddings/generate_embeddings.py'.
 
 The preprocessing comes from 'data.vision_input_preprocessing' of the run's config; arguments
 override it, and runs without it need at least '--processing_mode' (spacing and normalization
@@ -31,7 +33,9 @@ the volumes are split across the GPUs and rank 0 saves the reports of all of the
 """
 
 import argparse
+from functools import partial
 from pathlib import Path
+from typing import Callable
 
 import torch
 import torch.distributed as dist
@@ -58,6 +62,7 @@ from vlm.data.preprocessing.nifti_inputs import (
     strip_nifti_suffix,
 )
 from vlm.data.types import VisionInputType
+from vlm.embeddings.multiblock import encode_multiblock, multiblock_sample
 from vlm.models.abstract_vl_wrapper import AbstractVLWrapper
 from vlm.models.vision_encoders.base import VisionEncoderBase
 from vlm.training.checkpointing import save_final_config
@@ -75,7 +80,7 @@ from vlm.utils.precision import (
 from vlm.utils.seeding import seed_everything
 from vlm.utils.serialization import save_json
 
-# The settings of 'preprocess_encoder_input' besides the input shape.
+# The fields of 'data.vision_input_preprocessing' besides the ROI mask.
 PREPROCESSING_FIELDS = (
     "target_spacing",
     "normalization",
@@ -84,6 +89,8 @@ PREPROCESSING_FIELDS = (
     "enforce_min_bbox",
     "outlier_method",
     "outlier_min_voxels",
+    "grid",
+    "tile_step_size",
 )
 
 
@@ -157,7 +164,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Use volumes without a mask, or with an empty one (e.g. where TotalSegmentator "
         "failed), whole instead of skipping them. The model saw almost no whole volumes in "
         "training, so their reports are less reliable; they are marked with "
-        "'\"mask\": \"missing, whole volume\"' in the results.",
+        '\'"mask": "missing, whole volume"\' in the results.',
     )
     preprocessing = parser.add_argument_group(
         "preprocessing; overrides 'data.vision_input_preprocessing' of the run's config"
@@ -178,6 +185,16 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     )
     preprocessing.add_argument("--outlier_method", choices=OUTLIER_METHODS, default=None)
     preprocessing.add_argument("--outlier_min_voxels", type=int, default=None)
+    preprocessing.add_argument(
+        "--grid",
+        type=int,
+        nargs=3,
+        default=None,
+        metavar=("GZ", "GY", "GX"),
+        help="Encoder inputs per axis of multi-block embeddings (e.g. 2 1 2 for Primus-4B on "
+        "CT-RATE).",
+    )
+    preprocessing.add_argument("--tile_step_size", type=float, default=None)
 
     prompt = parser.add_argument_group("prompt; defaults to the one of the dataset JSONs")
     prompt.add_argument("--question", default=QUESTION)
@@ -229,6 +246,44 @@ def resolve_preprocessing(
             "The run's inputs were whole volumes, but '--mask_dir' crops the volumes to masks."
         )
     return VisionInputPreprocessingConfig(roi_mask=roi_mask, **values), sources
+
+
+def multiblock_preprocess(
+    preprocessing: VisionInputPreprocessingConfig, preprocessing_kwargs: dict
+) -> Callable | None:
+    """The 'preprocess' of 'NiftiEncoderInputDataset' for multi-block inputs, else None."""
+    if not preprocessing.multiblock:
+        return None
+    return partial(
+        multiblock_sample,
+        **preprocessing_kwargs,
+        grid=tuple(preprocessing.grid),
+        tile_step_size=preprocessing.tile_step_size,
+    )
+
+
+def encode_samples(
+    encoder: VisionEncoderBase,
+    samples: list[dict],
+    preprocessing: VisionInputPreprocessingConfig,
+    input_shape: tuple[int, int, int],
+    device: str | torch.device = "cuda",
+) -> torch.Tensor:
+    """The embeddings (n, C, D, H, W) of the samples, on the CPU."""
+    if not preprocessing.multiblock:
+        inputs = torch.stack([s["encoder_input"] for s in samples])
+        return encoder(inputs.to(device)).cpu()
+    return torch.stack(
+        [
+            encode_multiblock(
+                lambda blocks: encoder(blocks.to(device)),
+                sample,
+                tuple(input_shape),
+                tuple(preprocessing.grid),
+            ).cpu()
+            for sample in samples
+        ]
+    )
 
 
 def resolve_embedding_encoder(
@@ -306,13 +361,21 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
     if generate_masks and args.mask_dir is None:
         args.mask_dir = Path(output_dir, "totalsegmentator_masks")
     preprocessing, sources = resolve_preprocessing(args, configured, encoder)
+    if image_mode and preprocessing.multiblock:
+        raise ValueError("Runs trained on images take one encoder input; 'grid' must be 1 1 1.")
     preprocessing_kwargs = preprocessing.preprocessing_kwargs(input_shape)
+    preprocess = multiblock_preprocess(preprocessing, preprocessing_kwargs)
+    described = {
+        **preprocessing_kwargs,
+        "grid": tuple(preprocessing.grid),
+        "tile_step_size": preprocessing.tile_step_size,
+    }
     files = find_nifti_files(input_dir)
     if not files:
         raise FileNotFoundError(f"No NIfTI files found in {input_dir}")
     logger.info_main(
         f"Generating reports for {len(files)} volumes in {input_dir} on {world_size} GPU(s): "
-        f"reoriented to {orientation}, preprocessed with {preprocessing_kwargs} (from: "
+        f"reoriented to {orientation}, preprocessed with {described} (from: "
         f"{sources}), encoded by {encoder_name}. Prompt: {question!r}"
     )
     # Each rank takes every 'world_size'-th volume.
@@ -337,6 +400,7 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
             preprocessing_kwargs,
             strict_masks=True,
             allow_missing_masks=args.allow_missing_masks,
+            preprocess=preprocess,
         ),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -361,8 +425,7 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
             if image_mode:
                 vision_inputs = [s["encoder_input"] for s in samples]
             else:
-                encoder_inputs = torch.stack([s["encoder_input"] for s in samples])
-                vision_inputs = encoder(encoder_inputs.cuda()).cpu()
+                vision_inputs = encode_samples(encoder, samples, preprocessing, input_shape)
                 if tuple(vision_inputs.shape[1:]) != expected_shape:
                     raise ValueError(
                         f"{encoder_name} gives embeddings of shape "
@@ -437,7 +500,7 @@ def main(args: argparse.Namespace, config_cli_args: list[str]):
                 "whole_volumes": sum(r["mask"] == "missing, whole volume" for r in results),
                 "totalsegmentator": totalsegmentator_masks.settings() if generate_masks else None,
                 "roi_mask": preprocessing.roi_mask,
-                "preprocessing": preprocessing_kwargs,
+                "preprocessing": described,
                 "preprocessing_sources": sources,
                 "inference_precision": precision,
                 "question": question,

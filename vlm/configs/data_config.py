@@ -33,7 +33,8 @@ class VisionInputPreprocessingConfig(ConfigBase):
     How the vision inputs (images or the volumes of the embeddings) were made from the CT
     volumes, as the arguments of 'preprocess_encoder_input'
     (vlm/data/preprocessing/encoder_input.py), so that new volumes can be preprocessed the same
-    way at inference ('inference_nifti.py'). The encoder input shape is the vision encoder's.
+    way at inference ('inference_nifti.py'). The encoder input shape is the vision encoder's;
+    a multi-block 'grid' fits the ROI to a window of several encoder inputs.
     """
 
     target_spacing: tuple[float, float, float] | None = Field(
@@ -70,6 +71,23 @@ class VisionInputPreprocessingConfig(ConfigBase):
     outlier_min_voxels: int = Field(
         400, description="Smallest mask component kept by 'connected_components'."
     )
+    grid: tuple[int, int, int] = Field(
+        (1, 1, 1),
+        description="Encoder inputs per axis (z, y, x): the ROI is fit to a window of this many "
+        "inputs, which are encoded one by one and merged into one embedding grid "
+        "(vlm/embeddings/multiblock.py).",
+    )
+    tile_step_size: float = Field(
+        1.0,
+        gt=0,
+        le=1,
+        description="Step between the blocks of a multi-block window, as a fraction of the "
+        "encoder input; below 1, the blocks overlap and are merged with Gaussian weights.",
+    )
+
+    @property
+    def multiblock(self) -> bool:
+        return tuple(self.grid) != (1, 1, 1)
 
     @model_validator(mode="after")
     def validate_mask_settings_need_a_mask(self):
@@ -81,8 +99,17 @@ class VisionInputPreprocessingConfig(ConfigBase):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_multiblock_settings(self):
+        if min(self.grid) < 1:
+            raise ValueError(f"'grid' needs at least one encoder input per axis, not {self.grid}.")
+        if not self.multiblock and self.tile_step_size != 1.0:
+            raise ValueError("'tile_step_size' needs a multi-block 'grid'.")
+        return self
+
     def preprocessing_kwargs(self, input_shape: tuple[int, int, int]) -> dict:
-        """The keyword arguments of 'preprocess_encoder_input'."""
+        """The keyword arguments of 'preprocess_encoder_input' (without 'grid' and
+        'tile_step_size', which 'multiblock_sample' takes besides them)."""
         return {
             "target_spacing": self.target_spacing,
             "normalization": self.normalization,

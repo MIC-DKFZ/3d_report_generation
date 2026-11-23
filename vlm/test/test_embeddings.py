@@ -7,12 +7,10 @@ import SimpleITK as sitk
 import torch
 from test_nifti_inference import tiny_checkpoint, write_volume
 
+import inference_nifti
 from vlm.data.preprocessing import encoder_input
+from vlm.data.preprocessing.nifti_inputs import NiftiEncoderInputDataset
 from vlm.data.vision_input_settings import load_settings
-from vlm.embeddings.multiblock import (
-    merge_block_embeddings,
-    preprocess_multiblock_input,
-)
 from vlm.embeddings.runner import run
 from vlm.models.vision_encoders.primus import PrimusEncoder
 from vlm.scripts.embeddings.generate_embeddings import embedding_jobs
@@ -20,7 +18,7 @@ from vlm.scripts.embeddings.generate_embeddings import embedding_jobs
 RAS = (-1, 0, 0, 0, -1, 0, 0, 0, 1)
 
 
-def test_multiblock_embeddings_are_merged_without_settings(tmp_path, monkeypatch):
+def test_multiblock_embeddings_are_reproduced_from_their_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     checkpoint, _ = tiny_checkpoint(tmp_path)
     rng = np.random.default_rng(0)
@@ -42,18 +40,27 @@ def test_multiblock_embeddings_are_merged_without_settings(tmp_path, monkeypatch
     )
     run(job)
 
-    assert load_settings(tmp_path / "out") is None
     debug = sorted(p.name for p in (tmp_path / "out/valid_fixed/preprocessed").iterdir())
     assert debug == [f"y_1_block{i}.nii.gz" for i in range(4)]
+    # 'inference_nifti.py' embeds a new volume from the saved settings as the script did.
+    settings = load_settings(tmp_path / "out")
+    preprocessing = settings.vision_input_preprocessing
+    assert preprocessing.grid == (2, 1, 2) and preprocessing.tile_step_size == 1.0
     encoder = PrimusEncoder.from_pretrained(checkpoint)
-    blocks, offsets = preprocess_multiblock_input(
-        sitk.DICOMOrient(sitk.ReadImage(tmp_path / "in/valid_fixed/y_1.nii.gz"), "LPS"),
-        sitk.DICOMOrient(sitk.ReadImage(tmp_path / "masks/valid_fixed/y_1.nii.gz"), "LPS"),
-        **job.settings.vision_input_preprocessing.preprocessing_kwargs(encoder.patch_size),
-        grid=(2, 1, 2),
+    kwargs = preprocessing.preprocessing_kwargs(encoder.patch_size)
+    dataset = NiftiEncoderInputDataset(
+        tmp_path / "in/valid_fixed",
+        [tmp_path / "in/valid_fixed/y_1.nii.gz"],
+        settings.vision_input_orientation,
+        tmp_path / "masks/valid_fixed",
+        kwargs,
+        strict_masks=True,
+        preprocess=inference_nifti.multiblock_preprocess(preprocessing, kwargs),
     )
     with torch.no_grad():
-        expected = merge_block_embeddings(encoder(blocks), offsets, encoder.patch_size, (2, 1, 2))
+        (expected,) = inference_nifti.encode_samples(
+            encoder, [dataset[0]], preprocessing, encoder.patch_size, device="cpu"
+        )
     saved = blosc2.load_array(str(tmp_path / "out/valid_fixed/y_1_embedding.bl2"))
     assert saved.shape == (24, 8, 4, 8)
     torch.testing.assert_close(torch.from_numpy(saved), expected)

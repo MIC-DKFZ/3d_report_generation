@@ -8,6 +8,8 @@ blocks, with smaller steps into overlapping blocks, whose embeddings are merged 
 weights.
 """
 
+from typing import Callable
+
 import SimpleITK as sitk
 import torch
 
@@ -52,6 +54,24 @@ def preprocess_multiblock_input(
     offsets = block_offsets(input_shape, grid, tile_step_size)
     data = preprocess_encoder_input(image, mask, input_shape=window, **preprocessing_kwargs)[0]
     return tile_window(data, input_shape, offsets), offsets
+
+
+def multiblock_sample(image: sitk.Image, mask: sitk.Image | None, **kwargs) -> dict:
+    """The fields of a multi-block sample of 'NiftiEncoderInputDataset'."""
+    blocks, offsets = preprocess_multiblock_input(image, mask, **kwargs)
+    return {"encoder_input": blocks, "offsets": offsets}
+
+
+def encode_multiblock(
+    encode: Callable[[torch.Tensor], torch.Tensor],
+    sample: dict,
+    input_shape: Shape,
+    grid: Shape,
+) -> torch.Tensor:
+    """The merged embedding (C, gz·d, gy·h, gx·w) of a 'multiblock_sample', its blocks encoded
+    by 'encode' ((n, 1, *input_shape) → (n, C, d, h, w))."""
+    blocks = encode(sample["encoder_input"])
+    return merge_block_embeddings(blocks, sample["offsets"], input_shape, grid)
 
 
 def merge_block_embeddings(
