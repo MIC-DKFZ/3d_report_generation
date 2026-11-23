@@ -190,17 +190,22 @@ def center_crop_or_pad_3d(
     return out
 
 
+def spacing_zyx(image: sitk.Image) -> Tuple[float, float, float]:
+    """The spacing of 'image' in the (z, y, x) order of its array (SimpleITK reports (x, y, z))."""
+    return image.GetSpacing()[::-1]
+
+
 def crop_to_mask_roi(
-    data: np.ndarray, mask: np.ndarray, min_size_xyz: Optional[Tuple[int, int, int]]
+    data: np.ndarray, mask: np.ndarray, min_size_zyx: Optional[Tuple[int, int, int]]
 ) -> np.ndarray:
     """
-    Crop (c, z, y, x) data to the mask bounding box, expanded by 4% and, with 'min_size_xyz',
+    Crop (c, z, y, x) data to the mask bounding box, expanded by 4% and, with 'min_size_zyx',
     enlarged to at least that size where the image allows it.
     """
     box = get_mask_bounding_box(mask[0])
-    box = expand_bounding_box(box, data.shape[3], data.shape[2], data.shape[1], 0.04)
-    if min_size_xyz:
-        box = enforce_min_size(box, min_size_xyz, data.shape[1:])
+    box = expand_bounding_box(box, data.shape[1:], 0.04)
+    if min_size_zyx:
+        box = enforce_min_size(box, min_size_zyx, data.shape[1:])
     z0, z1, y0, y1, x0, x1 = box
     return data[:, z0:z1, y0:y1, x0:x1]
 
@@ -307,14 +312,10 @@ def preprocess_encoder_input(
                     f"The mask has shape {mask_data.shape[1:]}, the volume {data.shape[1:]}; "
                     "'resized_direct' needs masks on the grid of their volumes."
                 )
-            min_size_zyx = min_roi_voxels(
-                input_shape, image.GetSpacing()[::-1], target_spacing
-            )
-            data = crop_to_mask_roi(
-                data, mask_data, min_size_zyx[::-1] if enforce_min_bbox else None
-            )
+            min_size_zyx = min_roi_voxels(input_shape, spacing_zyx(image), target_spacing)
+            data = crop_to_mask_roi(data, mask_data, min_size_zyx if enforce_min_bbox else None)
         return fit_to_input_shape(data, normalization, processing_mode, input_shape)
-    spacing = image.GetSpacing()[::-1]
+    spacing = spacing_zyx(image)
     mask_data = None
     if mask is not None:
         mask_data = binarize_mask(
@@ -332,7 +333,7 @@ def preprocess_encoder_input(
             data,
             mask_data,
             spacing,
-            mask.GetSpacing()[::-1] if mask is not None else spacing,
+            spacing_zyx(mask) if mask is not None else spacing,
             target_spacing,
             input_shape if enforce_min_bbox and mask is not None else None,
             crop_to,
@@ -343,7 +344,7 @@ def preprocess_encoder_input(
     if mask_data is not None:
         if target_spacing is not None:
             mask_data = resample_to_spacing(
-                mask_data, mask.GetSpacing()[::-1], target_spacing, is_seg=True
+                mask_data, spacing_zyx(mask), target_spacing, is_seg=True
             )
         data = crop_to_mask_roi(data, mask_data, input_shape if enforce_min_bbox else None)
     return fit_to_input_shape(data, normalization, processing_mode, input_shape)

@@ -121,9 +121,9 @@ def resampled_roi(
         box = resampled_mask_bbox(mask[0], new_shape)
         if box is None:
             return None
-        box = expand_bounding_box(box, new_shape[2], new_shape[1], new_shape[0], 0.04)
+        box = expand_bounding_box(box, new_shape, 0.04)
         if min_size_zyx:
-            box = enforce_min_size(box, min_size_zyx[::-1], new_shape)
+            box = enforce_min_size(box, min_size_zyx, new_shape)
     window = []
     for i in range(3):
         a, b = box[2 * i], box[2 * i + 1]
