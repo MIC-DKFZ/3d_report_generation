@@ -68,8 +68,7 @@ export MERLIN_DATASET_JSONS="/path/to/dataset_jsons/MERLIN"
 Set each JSON variable to the `--output-dir` used for that dataset's generator: the
 folder that contains the `<dataset>_<version>_*.json` files.
 
-`--embedding` names the features as the configs do (`${VLM_EMBEDS}/<DATASET>_<embedding>`), and
-`--dataset` selects the dataset's layout and region of interest (ROI), including CT-RATE's split
+`--embedding` is one of the presets in the table below, and `--dataset` selects the dataset's layout and region of interest (ROI), including CT-RATE's split
 folders (`train_fixed` and `valid_fixed`, embedded into the same folders of the output);
 `--roi lungs` or `--roi foreground` replaces the papers' ROI. The ROI
 features need the [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) `total` masks
@@ -79,17 +78,15 @@ for Merlin, run TotalSegmentator on the volumes. The encoders are downloaded fro
 
 ```bash
 uv run python vlm/scripts/embeddings/generate_embeddings.py \
-  --embedding nnFoundationViT --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
-  --mask_dir /path/to/CT-RATE/dataset/ts_seg/ts_total \
-  --output_dir "${VLM_EMBEDS}/CTRATE_nnFoundationViT"
+  --embedding <embedding> --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
+  --mask_dir /path/to/CT-RATE/dataset/ts_seg/ts_total --output_base "${VLM_EMBEDS}"
 uv run python vlm/scripts/embeddings/generate_embeddings.py \
-  --embedding nnFoundationViT --dataset merlin \
-  --input_dir /path/to/merlin_data --mask_dir /path/to/totalsegmentator_masks \
-  --output_dir "${VLM_EMBEDS}/MERLIN_nnFoundationViT"
-uv run python vlm/scripts/embeddings/generate_embeddings.py \
-  --embedding Primus-1B_Whole --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
-  --output_dir "${VLM_EMBEDS}/CTRATE_Primus-1B_Whole"
+  --embedding <embedding> --dataset merlin --input_dir /path/to/merlin_data \
+  --mask_dir /path/to/totalsegmentator_masks --output_base "${VLM_EMBEDS}"
 ```
+
+The embeddings are saved in `${VLM_EMBEDS}/<DATASET>_<embedding>`, where the configs expect
+them. `Primus-1B_Whole` needs no `--mask_dir`.
 
 | Paper     | `--embedding` | Encoder | Input | CT-RATE | Merlin |
 |-----------| --- | --- | --- | --- | --- |
@@ -109,9 +106,8 @@ encoder inputs, encode them one by one and merge their embeddings into one grid.
 embeddings are skipped, so an interrupted run can be restarted. The script's docstring describes
 each step in detail; `--help` lists the options that change a preset (e.g. `--processing_mode`,
 `--grid`, `--orientation`, `--bf16`) and those for large runs (`--batch_size`, `--num_shards`, `--shard_id`;
-launched with `torchrun`, the volumes are split across its processes). With `--output_base`
-instead of `--output_dir`, the folder is named `<DATASET>_<embedding>` followed by the changed
-options.
+launched with `torchrun`, the volumes are split across its processes). Changed options are
+appended to the folder name; `--output_dir` instead of `--output_base` sets the folder itself.
 
 The settings are saved as `vision_input_preprocessing.yml` in the output folder. Training copies
 them into the run config, so that inference on new volumes
@@ -128,8 +124,7 @@ with:
 ```bash
 uv run python vlm/scripts/embeddings/generate_embeddings.py \
   --embedding nnFoundationViT_release --dataset ctrate --input_dir /path/to/CT-RATE/dataset \
-  --mask_dir /path/to/CT-RATE/dataset/ts_seg/ts_total \
-  --output_dir /path/to/embeddings
+  --mask_dir /path/to/CT-RATE/dataset/ts_seg/ts_total --output_base "${VLM_EMBEDS}"
 ```
 
 For Merlin, use `--dataset merlin` with its volumes and masks as above. The saved settings then

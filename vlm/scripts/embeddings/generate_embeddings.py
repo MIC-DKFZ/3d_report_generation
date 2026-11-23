@@ -53,8 +53,7 @@ The settings are saved once per embedding folder, as
 
     uv run python vlm/scripts/embeddings/generate_embeddings.py \\
         --embedding nnFoundationViT --dataset ctrate --input_dir /path/to/CT-RATE/dataset \\
-        --mask_dir /path/to/CT-RATE/dataset/ts_seg/ts_total \\
-        --output_dir "${VLM_EMBEDS}/CTRATE_nnFoundationViT"
+        --mask_dir /path/to/CT-RATE/dataset/ts_seg/ts_total --output_base "${VLM_EMBEDS}"
 """
 
 import argparse
